@@ -40,6 +40,20 @@ PROTEIN_FORCEFIELDS = {
     "ff19SB": "amber19-all.xml",
 }
 
+#: The tleap residue library a `.seq` peptide is built from, for each protein force field above.
+#: tleap only makes the COORDINATES and NAMES here -- the parameters still come from the resource
+#: in `PROTEIN_FORCEFIELDS` on the explicit route, and from tleap with the same leaprc on the
+#: implicit one -- but the library is chosen to match, so the atom names it writes are the names
+#: that force field's residue templates carry.
+SEQUENCE_LEAPRC = {
+    "ff14SB": "leaprc.protein.ff14SB",
+    "ff19SB": "leaprc.protein.ff19SB",
+}
+assert set(SEQUENCE_LEAPRC) == set(PROTEIN_FORCEFIELDS)
+
+#: Every `-i` suffix build-top reads, and the `solute.kind`s each may be built as.
+INPUT_SUFFIXES = (".pdb", ".seq", ".smi", ".sdf")
+
 BUILD_SCHEMA = Schema(
     "md_build.config",
     doc="Topology and System construction for `md-openmm build-top`.",
@@ -50,8 +64,9 @@ BUILD_SCHEMA = Schema(
                   doc="What the solute IS, which decides how it is parameterised and what "
                       "chemistry may be read from it. This is the authoritative "
                       "classification.\n"
-                      "  peptide       -- read -i as a peptide/protein PDB and parameterise it "
-                      "with the protein force field. Sage never touches it.\n"
+                      "  peptide       -- read -i as a peptide/protein .pdb, or as a .seq holding "
+                      "one line of residue names that tleap's `sequence` builds (extended), and "
+                      "parameterise it with the protein force field. Sage never touches it.\n"
                       "  ligand        -- read -i as a .smi or .sdf and parameterise the whole "
                       "molecule with the small-molecule force field. One residue, no peptide "
                       "chemistry is claimed or read. A .smi states the chemistry and the "
@@ -87,9 +102,16 @@ BUILD_SCHEMA = Schema(
                   doc="Partial-charge method for the small molecule. am1bcc is the validated "
                       "default and runs on CPU; it is the slowest part of a ligand build."),
             Field("residue_name", str, default=None, nullable=True,
-                  doc="Three-character residue name for a molecule read from .smi or .sdf. Left "
-                      "null, a deterministic name is assigned from the file and recorded, so the "
-                      "same input always produces the same residue identity."),
+                  doc="Three-character residue name for a molecule read from .smi or .sdf. It is "
+                      "APPLIED: the molecule's residue in built.pdb, built.solute.pdb and the "
+                      "topology carries it, and the prepared molecule is written beside the "
+                      "System as `<residue_name>.sdf`. Left null, a deterministic name is "
+                      "assigned from the file (the .smi name field, else the file stem) and "
+                      "recorded, so the same input always produces the same residue identity. "
+                      "Three letters or digits; a name that already means water, an ion or a "
+                      "protein residue is refused, because solvent selection and the omega "
+                      "classifier read residue names. Refused for kind: peptide, whose residues "
+                      "are named by the input."),
         ], doc="What the input is, and how it is parameterised."),
         Section("forcefield", [
             Field("protein", str, default="ff14SB", enum=tuple(PROTEIN_FORCEFIELDS),
@@ -301,6 +323,7 @@ def resolve_build_config(path: Path | None) -> dict[str, Any]:
     resolved["_explicit_keys"] = stated
     _check_pairings(resolved)
     _check_hmr_constraints(resolved)
+    _check_residue_name(resolved)
     resolved.pop("_explicit_keys")
     resolved["_stated"] = stated
     return resolved
@@ -441,16 +464,92 @@ def read_single_smiles(path: Path) -> tuple[str, str | None]:
     return records[0]
 
 
-def _assigned_residue_name(stated: str | None, name_field: str | None, source: Path) -> str:
-    """A deterministic residue identity, so the same input always yields the same name."""
+def reserved_residue_names() -> frozenset[str]:
+    """Residue names a molecule must not be given, because something already reads them.
+
+    `solute_atom_indices` decides what is solvent by residue name, so a molecule called `HOH` or
+    `NA` would silently vanish from the solute; the omega classifier decides residue evidence
+    against `PROTEIN_RESIDUES`, so a molecule called `ALA` or `ACE` would have its amides read as
+    a protein backbone's instead of from its bond orders.
+    """
+    from ..md.stage import SOLVENT_RESIDUES
+    from ..openmm.system import ION_RESIDUE_NAMES, PROTEIN_RESIDUES, WATER_RESIDUE_NAMES
+
+    return frozenset(name.upper() for name in (*SOLVENT_RESIDUES, *WATER_RESIDUE_NAMES,
+                                               *ION_RESIDUE_NAMES, *PROTEIN_RESIDUES))
+
+
+def _check_residue_name(resolved: dict[str, Any]) -> None:
+    """A stated `solute.residue_name` is applied as written, so it has to be one that can be."""
     import re
+
+    stated = resolved["solute"].get("residue_name")
+    if stated is None:
+        return
+    kind = str(resolved["solute"]["kind"])
+    if kind == "peptide":
+        raise ConfigError(
+            f"solute.residue_name = {stated!r} is set, but solute.kind is 'peptide': a peptide's "
+            f"residues are named by its .pdb or .seq input, so this name would be applied to "
+            f"nothing. Remove the key, or use kind: ligand / peptide-like for a molecule read "
+            f"from .smi or .sdf.")
+    text = str(stated)
+    if not re.fullmatch(r"[A-Za-z0-9]{3}", text):
+        raise ConfigError(
+            f"solute.residue_name = {stated!r} is not three letters or digits. It is written into "
+            f"the PDB residue-name column and used as the file name of the prepared molecule "
+            f"(`<residue_name>.sdf`), so it is applied exactly rather than trimmed or padded.")
+    if text.upper() in reserved_residue_names():
+        raise ConfigError(
+            f"solute.residue_name = {stated!r} already names water, an ion or a protein residue. "
+            f"Solvent selection and the omega classifier read residue names, so a molecule called "
+            f"{text.upper()} would be treated as one. Choose another name.")
+
+
+def _assigned_residue_name(stated: str | None, name_field: str | None, source: Path) -> str:
+    """A deterministic residue identity, so the same input always yields the same name.
+
+    A candidate that cleans to a reserved name (`hoh.sdf`, `ALA` as a SMILES name) is passed
+    over for the next one rather than applied: see `reserved_residue_names`. A STATED name has
+    already been validated, so it arrives here unchanged apart from case.
+    """
+    import re
+
+    reserved = reserved_residue_names()
     for candidate in (stated, name_field, source.stem):
         if not candidate:
             continue
         cleaned = re.sub(r"[^A-Za-z0-9]", "", str(candidate)).upper()[:3]
         if cleaned:
-            return cleaned.ljust(3, "X")
+            cleaned = cleaned.ljust(3, "X")
+            if cleaned not in reserved:
+                return cleaned
     return "LIG"
+
+
+def read_single_sequence(path: Path) -> list[str]:
+    """Exactly one record of whitespace-separated residue names, or a refusal saying what is wrong.
+
+    `#` comment lines and blank lines are allowed. Which names exist is tleap's to decide, not
+    this reader's: an unknown one is refused by tleap with its log.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ConfigError(f"-i {path}: is not a text file ({exc}); a .seq holds one line of "
+                          f"residue names, such as `ACE ALA NME`.") from exc
+    records = [line.split() for line in (raw.strip() for raw in text.splitlines())
+               if line and not line.startswith("#")]
+    if not records:
+        raise ConfigError(
+            f"-i {path}: contains no sequence record. Expected one non-comment line of "
+            f"whitespace-separated residue names, such as `ACE ALA NME`.")
+    if len(records) > 1:
+        raise ConfigError(
+            f"-i {path}: contains {len(records)} sequence records; this phase builds exactly one "
+            f"System from one chain, written on ONE line. Join the residues onto one line, or "
+            f"keep the record you mean to build.")
+    return records[0]
 
 
 def _resolution(config_path: Path | None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -491,11 +590,11 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     if not input_path.is_file():
         raise ConfigError(f"-i {input_path}: no such file")
     suffix = input_path.suffix.lower()
-    if suffix not in (".pdb", ".smi", ".sdf"):
+    if suffix not in INPUT_SUFFIXES:
         raise ConfigError(
-            f"-i {input_path}: expected a .pdb, .smi or .sdf FILE. `-i` names a file so that the "
-            f"input is unambiguous and can be hashed into the record; an inline structure or "
-            f"SMILES string is not accepted.")
+            f"-i {input_path}: expected a .pdb, .seq, .smi or .sdf FILE. `-i` names a file so "
+            f"that the input is unambiguous and can be hashed into the record; an inline "
+            f"structure, sequence or SMILES string is not accepted.")
 
     # RESOLVED FIRST, and once. Every check that can refuse runs before anything is created: the
     # output parents below, and then the log. A refusal must leave nothing behind, because a
@@ -509,9 +608,9 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     # "Input interpretation" section below reports what was decided rather than deciding it
     # again. These used to be checked down there, so every refusal of them created the output
     # directory first.
-    if peptide and suffix != ".pdb":
+    if peptide and suffix not in (".pdb", ".seq"):
         raise ConfigError(f"-i {input_path}: solute.kind is 'peptide', so the input must be "
-                          f"a .pdb file, not {suffix}")
+                          f"a .pdb or .seq file, not {suffix}")
     if not peptide and suffix not in (".smi", ".sdf"):
         raise ConfigError(f"-i {input_path}: solute.kind is {kind!r}, which is built from a "
                           f"molecular graph, so the input must be a .smi or .sdf file, not "
@@ -523,8 +622,35 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         from ..openmm.system import read_single_sdf_molecule
 
         read_single_sdf_molecule(input_path)
+    # A .SEQ'S SHAPE and a .SMI'S, likewise: one record each, refused before anything exists.
+    sequence = read_single_sequence(input_path) if suffix == ".seq" else None
+    smiles = name_field = residue_name = None
+    if suffix == ".smi":
+        smiles, name_field = read_single_smiles(input_path)
+    if not peptide:
+        residue_name = _assigned_residue_name(resolved["solute"]["residue_name"], name_field,
+                                              input_path)
 
-    existing = [p for p in (out_system, out_pdb) if p.exists()]
+    # THE PREPARED MOLECULE'S FILE, named for its residue: `<RESNAME>.sdf` beside the System.
+    out_solute = out_pdb.with_name(out_pdb.stem + ".solute.pdb")
+    out_sdf = out_system.parent / f"{residue_name}.sdf" if residue_name is not None else None
+    if out_sdf is not None and out_sdf in (out_system, out_pdb, out_log, out_solute):
+        raise ConfigError(
+            f"the prepared molecule is written to {out_sdf}, which is also named as another "
+            f"output of this build. Choose different -os/-op/-log names.")
+    # A `<system stem>.sdf` from a build before 0.5.4 is what the run-time preflight reads FIRST,
+    # so leaving one beside a new System would pair it with a molecule it was not built from --
+    # or turn a peptide build into a ligand one. Not replaced under --overwrite either: this
+    # build would not write that file, so nothing would replace it.
+    legacy_sdf = out_system.with_suffix(".sdf")
+    if legacy_sdf != out_sdf and legacy_sdf.exists():
+        raise ConfigError(
+            f"refusing to build beside {legacy_sdf}. That file is the molecule an earlier build "
+            f"wrote under the System's name, and the run-time preflight reads `<system "
+            f"stem>.sdf` before `<residue name>.sdf`, so it would be paired with the System this "
+            f"build writes. Move it aside (or build into a new directory) and run again.")
+
+    existing = [p for p in (out_system, out_pdb, *([out_sdf] if out_sdf else [])) if p.exists()]
     if existing and not overwrite:
         raise ConfigError(
             f"refusing to replace {', '.join(str(p) for p in existing)}. Pass --overwrite to "
@@ -535,6 +661,20 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     # the documented shape -- and the staging directory is created INSIDE the output directory so
     # that the final move is a rename within one filesystem. Both parents therefore have to exist
     # before anything else happens.
+    # THE SEQUENCE'S STRUCTURE, made before any output exists. tleap is the authority on which
+    # residue names are real, and its refusal is a statement about the input file -- so it has to
+    # arrive the way the other input refusals do, with nothing created. It runs in a private
+    # temporary directory, and the PDB it wrote is carried into staging below.
+    sequence_build = None
+    if sequence is not None:
+        from ..openmm.implicit import build_structure_from_sequence
+
+        leaprc = SEQUENCE_LEAPRC[str(resolved["forcefield"]["protein"])]
+        with tempfile.TemporaryDirectory(prefix="build-top-sequence-") as scratch:
+            made = build_structure_from_sequence(sequence, Path(scratch),
+                                                 protein_forcefield=leaprc)
+            sequence_build = {**made, "pdb_bytes": Path(made["pdb"]).read_bytes()}
+
     for target in (out_system, out_pdb, out_log):
         target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -563,19 +703,23 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             log.field(f"{section}.{key}", f"{value}   ({origin})")
 
     log.heading("Input interpretation")
-    smiles = residue_name = None
-    if peptide:
+    if peptide and sequence_build is not None:
+        log.field("interpreted as", "peptide sequence, built by tleap `sequence`")
+        log.field("sequence", " ".join(sequence))
+        log.field("residue library", sequence_build["protein_forcefield"])
+        # Said because it is the thing a reader would otherwise assume was chosen: nothing was.
+        log.field("conformation", "EXTENDED -- tleap's library geometry, not sampled and not "
+                                  "minimised; minimisation and equilibration start from it")
+        if sequence_build["built_residues"] != sequence:
+            log.field("residues written", " ".join(sequence_build["built_residues"]))
+        log.field("small-molecule FF", "not used (peptide-only input)")
+    elif peptide:
         log.field("interpreted as", "peptide/protein PDB")
         log.field("small-molecule FF", "not used (peptide-only input)")
     else:
         # The two molecular-graph inputs differ in exactly one thing: where the coordinates come
         # from. A `.smi` states the chemistry and the conformer is generated (ETKDGv3, then MMFF);
         # a `.sdf` carries both, and is used as given. Everything after this branch is shared.
-        name_field = None
-        if suffix == ".smi":
-            smiles, name_field = read_single_smiles(input_path)
-        residue_name = _assigned_residue_name(resolved["solute"]["residue_name"], name_field,
-                                              input_path)
         graph = "SMILES" if suffix == ".smi" else "SDF"
         log.field("interpreted as",
                   f"single-molecule {graph}" if kind == "ligand"
@@ -600,6 +744,9 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
     # `sys_resolved` came from `_resolution`, which records what RESOLVES; see there.
     cfg = _legacy_cfg(sys_resolved)
+    # THE RESIDUE NAME, handed to the one place that writes the prepared molecule. Both preparers
+    # read it, so the .smi and .sdf routes and both solvent routes carry it into the topology.
+    cfg["solute"]["residue_name"] = residue_name
 
     # A supported-but-unvalidated combination is allowed and never silent. Emitted on stderr so a
     # person watching sees it, and recorded structurally so a reader of the DATA sees it too --
@@ -615,8 +762,31 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         warnings=warnings,
         stated_keys={k: list(v) for k, v in stated.items()},
         interpretation={"route": route, "smiles": smiles, "residue_name": residue_name,
-                        "input_format": suffix.lstrip(".")},
+                        "input_format": suffix.lstrip("."),
+                        **({"sequence": list(sequence)} if sequence is not None else {})},
     )
+    if sequence_build is not None:
+        log.update(sequence={
+            "residues": list(sequence),
+            "residues_written": sequence_build["built_residues"],
+            "leaprc": sequence_build["protein_forcefield"],
+            "tleap_commands": sequence_build["tleap_commands"],
+            # Not retained whole: tleap's log names every file of this machine's AmberTools
+            # installation, and a record must not carry a machine path. Its lines that name no
+            # path -- the verdict, the warnings, the file it wrote -- are copied into this log
+            # under "Sequence (tleap)"; the digest identifies the whole text.
+            "tleap_log": {"name": "tleap.log", "sha256": sequence_build["tleap_log_sha256"],
+                          "bytes": len(sequence_build["tleap_log_text"].encode("utf-8")),
+                          "retained": "lines naming no path, under 'Sequence (tleap)'"},
+            "generated_pdb": {"name": "sequence.pdb", "sha256": sequence_build["pdb_sha256"]},
+            "conformation": sequence_build["conformation"],
+        })
+        log.heading("Sequence (tleap)")
+        for command in sequence_build["tleap_commands"]:
+            log(f"  > {command}")
+        for line in sequence_build["tleap_log_text"].splitlines():
+            if line.strip() and "/" not in line:
+                log(f"  | {line.strip()}")
     log.field("protein FF", sys_resolved["forcefield"].get("protein") or "not used")
     log.field("water FF", sys_resolved["forcefield"].get("water") or "not used")
 
@@ -627,7 +797,13 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         # letting the builder echo too prints every preparation line twice.
         builder_log = _BuilderLog(staging / "builder.log", echo=False)
         builder = _build_implicit if implicit else _build_explicit
-        record = builder(input_path, cfg, staging, route=route, log=builder_log)
+        structure_path = input_path
+        if sequence_build is not None:
+            # From here the sequence IS a PDB, and the build is the `.pdb` peptide route exactly.
+            structure_path = staging / "sequence" / "sequence.pdb"
+            structure_path.parent.mkdir(parents=True, exist_ok=True)
+            structure_path.write_bytes(sequence_build["pdb_bytes"])
+        record = builder(structure_path, cfg, staging, route=route, log=builder_log)
         for line in builder_log.lines:
             log(f"  {line}")
 
@@ -646,6 +822,19 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                 f"files are a pair and every downstream index depends on their order agreeing; "
                 f"neither output has been written.")
         log.field("particle agreement", f"{n_pdb} atoms == {n_sys} particles  OK")
+
+        if residue_name is not None:
+            # APPLIED, and checked on the file that is about to be placed rather than trusted from
+            # the preparer: a recorded name the topology does not carry is the defect this closes.
+            from ..md.stage import SOLVENT_RESIDUES
+
+            solute_names = sorted({r.name for r in pdb.topology.residues()
+                                   if r.name.strip().upper() not in SOLVENT_RESIDUES})
+            if solute_names != [residue_name]:
+                raise RuntimeError(
+                    f"the solute residue in the built topology is {solute_names}, not "
+                    f"[{residue_name!r}] as resolved; neither output has been written.")
+            log.field("solute residue", f"{residue_name}  OK")
 
         periodic = system.usesPeriodicBoundaryConditions()
         if implicit and periodic:
@@ -733,7 +922,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
         # --- atomic placement, only now that everything above passed ---------------------
         log.heading("Outputs")
-        # THE SDF, for a molecule built from SMILES. It was written into the staging directory,
+        # THE SDF, for a molecule built from SMILES or SDF. It was written into the staging directory,
         # used to assign charges and parameters, and then deleted with the staging directory --
         # so the bond orders it carries existed only for the duration of the build.
         #
@@ -744,10 +933,12 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         # peptide route refuses every candidate as unclassifiable, and the ligand route has
         # nothing to read.
         #
-        # Placed beside the System, with the System's stem, because that is what a later run has
-        # in hand: `-s built.xml` is given, and `built.sdf` is then discoverable without a second
-        # path to keep in step. A peptide build writes none, which is itself the signal that the
-        # ligand route does not apply.
+        # Placed beside the System and named for the solute's RESIDUE (`TYL.sdf`), which the
+        # topology beside it carries: a later run has `-s built.xml` in hand, reads the one
+        # non-solvent residue name from `built.pdb`, and finds the molecule without a second path
+        # to keep in step (`preflight._ligand_sdf_beside`). Until 0.5.4 it was `<system
+        # stem>.sdf`; that name is still read. A peptide build writes none, which is itself the
+        # signal that the ligand route does not apply.
         # THE SOLUTE TOPOLOGY, beside the full one.
         #
         # A solute-only trajectory -- `solute_prod<N>.nc`, and the per-state streams a ladder
@@ -769,12 +960,14 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         with staged_solute.open("w") as handle:
             app.PDBFile.writeFile(solute_pdb.topology, solute_pdb.positions, handle,
                                   keepIds=True)
-        out_solute = out_pdb.with_name(out_pdb.stem + ".solute.pdb")
-
         outputs = [(built_xml, out_system), (built_pdb, out_pdb),
                    (staged_solute, out_solute)]
         staged_sdf = staging / "structure" / "solute.sdf"
-        out_sdf = out_system.with_suffix(".sdf") if staged_sdf.is_file() else None
+        if (out_sdf is not None) != staged_sdf.is_file():
+            raise RuntimeError(
+                f"the {route} route {'did not prepare' if out_sdf is not None else 'prepared'} a "
+                f"molecule SDF, which it {'must' if out_sdf is not None else 'must not'}; "
+                f"refusing to report completion")
         if out_sdf is not None:
             outputs.append((staged_sdf, out_sdf))
         for source, target in outputs:
@@ -797,7 +990,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                            "topology_pdb": file_facts(out_pdb),
                            "solute_topology_pdb": file_facts(out_solute)}
         if out_sdf is not None:
-            written_outputs["solute_sdf"] = file_facts(out_sdf)
+            written_outputs["solute_sdf"] = {**file_facts(out_sdf), "residue_name": residue_name}
         log.update(outputs=written_outputs)
         log.complete()
         log.heading("Summary")

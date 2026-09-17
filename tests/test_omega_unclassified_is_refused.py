@@ -260,11 +260,12 @@ def test_saved_ladder_states_of_a_peptide_like_solute_exclude_its_omegas(tmp_pat
          "-os", "built.xml", "-op", "built.pdb", "-log", "built.log", "--config", "sys.config"],
         cwd=build, capture_output=True, text=True, timeout=3600)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
-    assert (build / "built.sdf").is_file(), "an explicit peptide-like build must retain its SDF"
+    # `<RESNAME>.sdf` since 0.5.4 (it was `built.sdf`); the .smi names the molecule CYC.
+    assert (build / "CYC.sdf").is_file(), "an explicit peptide-like build must retain its SDF"
 
     topology = PDBFile(str(build / "built.pdb")).topology
     classified = unscaled_torsions(topology, solute_atom_indices(topology),
-                                   ligand_sdf=build / "built.sdf")
+                                   ligand_sdf=build / "CYC.sdf")
     expected = {tuple(sorted(b)) for b in classified["unscaled_central_bonds"]}
     amides = [c for c in classified["central_bonds"] if c["class"] == "amide_omega"]
     assert len(amides) == 3, amides

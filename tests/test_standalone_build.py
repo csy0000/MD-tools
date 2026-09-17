@@ -42,6 +42,14 @@ CASES = {
     # Byte-equality is EASIER here than on the SMILES route rather than harder, because neither
     # side embeds or minimises -- both read the coordinates that are already in the file.
     "ligand-sdf-implicit": ("phenol.sdf", "solute:\n  kind: ligand\nsolvent:\n  model: GBn2\n"),
+    # THE RESIDUE NAME build-top applies (0.5.4). Every ligand case above carries the assigned
+    # one -- `phenol` cleans to PHE, a protein residue, so it is `LIG` -- and this one a stated
+    # name, so a rebuild that wrote RDKit's `UNL` would differ in the topology.
+    "ligand-named-implicit": ("phenol.smi", "solute:\n  kind: ligand\n  residue_name: PHN\n"
+                                            "solvent:\n  model: GBn2\n"),
+    # A .seq PEPTIDE (0.5.4): the rebuild runs the recorded tleap `sequence` commands first.
+    "peptide-seq-implicit": ("ALA.seq", "solvent:\n  model: GBn2\n"),
+    "peptide-seq-explicit-hmr": ("ALA.seq", "hydrogen_mass_repartitioning:\n  enabled: true\n"),
 }
 
 BLOCKER = (
@@ -88,6 +96,8 @@ def _built(case: str, root: Path) -> Path:
     work.mkdir()
     if structure.endswith(".pdb"):
         shutil.copy2(ALA, work / structure)
+    elif structure.endswith(".seq"):
+        (work / structure).write_text("# alanine dipeptide\nACE ALA NME\n", encoding="utf-8")
     elif structure.endswith(".sdf"):
         # The same molecule as the `.smi` cases, supplied as coordinates instead of as a string.
         # Seeded so the fixture itself is reproducible; build-top does not re-embed it.

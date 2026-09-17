@@ -10,7 +10,7 @@ md-openmm build-top -i INPUT [-os PATH] [-op PATH] [-log PATH] [--config PATH] [
 
 | flag | what it is | default |
 |---|---|---|
-| `-i` | the input structure: a `.pdb`, `.smi` or `.sdf` **file** | required |
+| `-i` | the input structure: a `.pdb`, `.seq`, `.smi` or `.sdf` **file** | required |
 | `-os` | the serialised OpenMM System | `./built.xml` |
 | `-op` | the final coordinates and topology | `./built.pdb` |
 | `-log` | the readable log, which carries the machine record | `./built.log` |
@@ -18,23 +18,24 @@ md-openmm build-top -i INPUT [-os PATH] [-op PATH] [-log PATH] [--config PATH] [
 | `--overwrite` | replace existing outputs instead of refusing | off |
 
 `-i` names a **file**, never an inline string: the input has to be unambiguous and hashable into
-the provenance record, so a SMILES typed on the command line is not accepted.
+the provenance record, so a SMILES or a sequence typed on the command line is not accepted.
 
-## Three inputs, and what separates them
+## Four inputs, and what separates them
 
 ```text
 .pdb   a peptide or protein, with residue names      parameterised by the protein force field
+.seq   a peptide, as one line of residue names       coordinates BUILT by tleap (extended chain)
 .smi   one molecule, as SMILES                       coordinates GENERATED (ETKDGv3 + MMFF)
 .sdf   one molecule, with coordinates                coordinates USED AS GIVEN
 ```
 
 The format is not a free choice: it follows `solute.kind`, which says what the solute *is*.
 
-| `solute.kind` | `.pdb` | `.smi` | `.sdf` |
-|---|:---:|:---:|:---:|
-| `peptide` (default) | ✅ | ❌ | ❌ |
-| `ligand` | ❌ | ✅ | ✅ |
-| `peptide-like` | ❌ | ✅ | ✅ |
+| `solute.kind` | `.pdb` | `.seq` | `.smi` | `.sdf` |
+|---|:---:|:---:|:---:|:---:|
+| `peptide` (default) | ✅ | ✅ | ❌ | ❌ |
+| `ligand` | ❌ | ❌ | ✅ | ✅ |
+| `peptide-like` | ❌ | ❌ | ✅ | ✅ |
 
 Anything else is refused by name, before any output directory is created.
 
@@ -47,6 +48,41 @@ force field never touches it.
 md-openmm build-top -i ALA.pdb \
     -os build/built.xml -op build/built.pdb -log build/built.log
 ```
+
+### A peptide, from a sequence
+
+`.seq` holds exactly **one** record: residue names separated by whitespace, as tleap's residue
+library spells them. `#` comment lines and blank lines are allowed; a second record is refused
+rather than joined or dropped.
+
+```bash
+printf '# alanine dipeptide\nACE ALA NME\n' > ALA.seq
+
+md-openmm build-top -i ALA.seq \
+    -os build/built.xml -op build/built.pdb -log build/built.log
+```
+
+AmberTools' tleap builds the chain with `sequence { ACE ALA NME }`, from the residue library that
+matches `forcefield.protein` (`leaprc.protein.ff14SB` for ff14SB, `leaprc.protein.ff19SB` for
+ff19SB), and writes it as a PDB. From that PDB on, the build is **exactly** the `.pdb` route —
+hydrogens, box, solvent, ions and System under explicit solvent, tleap and GBn2 under implicit —
+so every setting that applies to a `.pdb` peptide applies here. `tests/data/ALA.pdb` *is* tleap's
+output for this sequence, and the two builds give the same residues, atom names and masses.
+
+**The conformation is extended**: tleap places each residue with its library geometry, and nothing
+is sampled or minimised. The log says so, and minimisation and equilibration start from it.
+
+Which residue names exist is tleap's decision, not this command's. A name its library does not
+define is refused by tleap — before any output exists — and the end of tleap's log is shown:
+
+```text
+build-top: tleap refused the sequence { ACE XYZ NME } under leaprc.protein.ff14SB. ...
+    sequence: Illegal UNIT named: XYZ
+```
+
+Termini are what you write: `ACE ... NME` caps the chain, while an uncapped chain needs tleap's
+terminal units (`NALA ... CALA`). The record keeps the residues, the tleap commands, the digest of
+tleap's log and the digest of the PDB it wrote, under `sequence`.
 
 ### A small molecule, from SMILES
 
@@ -72,6 +108,15 @@ md-openmm build-top -i ethanol.smi --config ligand.config \
 ```
 
 A file holding several molecules is refused rather than silently built from its first line.
+
+The molecule is **one residue, and it is named**: `solute.residue_name` if the configuration states
+one, otherwise a name assigned deterministically from the `.smi` name field or the file stem —
+`ethanol` becomes `ETH`. That name is written into `built.pdb`, `built.solute.pdb` and the
+serialised topology, and it names the prepared molecule beside the System (`build/ETH.sdf`). A name
+that already means water, an ion or a protein residue (`HOH`, `NA`, `ALA`) is refused when stated
+and passed over when assigned, because solvent selection and the omega classifier read residue
+names; so is a stated name that is not three letters or digits, and any stated name under
+`kind: peptide`.
 
 ### A small molecule, from an SDF
 
@@ -123,19 +168,27 @@ build/  built.xml           the serialised OpenMM System -- the Hamiltonian
         built.pdb           the topology and final coordinates
         built.solute.pdb    the solute alone, for solute-only trajectories
         built.log           the readable log, ending in the machine record
-        built.sdf           the prepared molecule -- MOLECULAR INPUTS ONLY
+        <RESNAME>.sdf       the prepared molecule, e.g. ETH.sdf -- MOLECULAR INPUTS ONLY
 ```
 
 `built.pdb` and `built.xml` are a **pair**: the System's particle order matches the PDB exactly,
 and the build refuses to write either if they disagree, re-reading both after placing them.
 
-**`built.sdf` is written for a `.smi` or `.sdf` input and not for a peptide**, and its absence is
-itself the signal that the molecular route does not apply. It is not a copy of your input: it is
+**`<RESNAME>.sdf` is written for a `.smi` or `.sdf` input and not for a peptide**, and its absence
+is itself the signal that the molecular route does not apply. It is named for the residue the
+topology carries, and that name is also its molecule title. It is not a copy of your input: it is
 the prepared molecule, written by one writer for both routes. It is kept because bond orders are
-not recoverable from a topology, and three later consumers need them — the ligand route of the
+not recoverable from a topology, and four later consumers need them — the ligand route of the
 unscaled-torsion classifier (which of the molecule's bonds are aromatic or double), the
-peptide-like map, and `build-top --rest2-scaler`, which reads it when the molecule is the only
-non-standard residue.
+peptide-like map, `build-top --rest2-scaler`, and the run-time preflight, which finds it beside
+the System by reading the one non-solvent residue name from `<system stem>.pdb`. The record
+lists it under `outputs.solute_sdf`, with its digest and `residue_name`.
+
+**Before 0.5.4 this file was `built.sdf`** — `<system stem>.sdf` — and the residue was RDKit's
+`UNL` whatever the configuration said. The preflight still reads `<system stem>.sdf` first, so an
+older build directory keeps working unchanged. For the same reason `build-top` refuses to write a
+new System beside such a file, even under `--overwrite`: this build would not replace it, and it
+would be read in place of the molecule the new System was built from. Move it aside first.
 
 ## Scaled states: `--rest2-scaler`
 
@@ -166,7 +219,8 @@ and `-log` are refused in this mode, and `-s`/`-p`/`--check` without it. See
 ## Refusals
 
 **An input refused for its shape creates nothing at all** — not even the output directory. The
-suffix, the `solute.kind` × format rule and the SDF's shape are all checked before anything is
+suffix, the `solute.kind` × format rule, the shape of an SDF, a `.smi` or a `.seq`, a residue
+name that cannot be applied, and tleap's verdict on a sequence are all checked before anything is
 written, because a directory holding a `built.log` is indistinguishable from a build that was
 attempted and died halfway. These exit **2**.
 

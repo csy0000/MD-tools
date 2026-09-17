@@ -10,8 +10,9 @@ WHY THIS FILE EXISTS
 
 THE MATRIX IS THE POINT
 
-    Three suffixes and three kinds is nine cases, and they are not symmetric: `peptide` takes a
-    PDB and nothing else, while `ligand` and `peptide-like` take either molecular-graph input.
+    Four suffixes and three kinds is twelve cases, and they are not symmetric: `peptide` takes a
+    PDB or a residue sequence (`.seq`, built by tleap) and nothing else, while `ligand` and
+    `peptide-like` take either molecular-graph input.
     Stating all nine means a future fourth format has an obvious place to be declared, and means
     "accepted" is written down rather than inferred from the absence of a refusal.
 
@@ -92,6 +93,10 @@ def _input(work: Path, suffix: str, kind: str = "ligand") -> Path:
         target = work / "in.pdb"
         target.write_bytes(ALA.read_bytes())
         return target
+    if suffix == ".seq":
+        target = work / "in.seq"
+        target.write_text("ACE ALA NME\n", encoding="utf-8")
+        return target
     smiles = MOLECULE.get(kind, ETHANOL)
     if suffix == ".smi":
         target = work / "in.smi"
@@ -116,12 +121,15 @@ def _build(work: Path, structure: Path, kind: str):
 #: kinds are built from a molecular graph and take either of the two that carry one.
 MATRIX = {
     ("peptide", ".pdb"): True,
+    ("peptide", ".seq"): True,
     ("peptide", ".smi"): False,
     ("peptide", ".sdf"): False,
     ("ligand", ".pdb"): False,
+    ("ligand", ".seq"): False,
     ("ligand", ".smi"): True,
     ("ligand", ".sdf"): True,
     ("peptide-like", ".pdb"): False,
+    ("peptide-like", ".seq"): False,
     ("peptide-like", ".smi"): True,
     ("peptide-like", ".sdf"): True,
 }
@@ -191,11 +199,11 @@ def test_an_empty_sdf_is_refused_as_input_not_as_a_crash(tmp_path):
 
 
 def test_an_unknown_suffix_is_refused_by_the_format_gate(tmp_path):
-    """The outermost gate, and the one that names all three accepted formats."""
+    """The outermost gate, and the one that names all four accepted formats."""
     structure = _write_sdf(tmp_path / "in.mol2")
     done = _build(tmp_path, structure, "ligand")
     assert done.returncode == 2, done.stdout[-2000:] + done.stderr[-2000:]
-    assert ".pdb, .smi or .sdf" in done.stderr, done.stderr
+    assert ".pdb, .seq, .smi or .sdf" in done.stderr, done.stderr
     assert not (tmp_path / "out").exists()
 
 
@@ -204,8 +212,13 @@ def test_an_unknown_suffix_is_refused_by_the_format_gate(tmp_path):
 @pytest.mark.slow
 @pytest.mark.parametrize("solvent", ["GBn2", "TIP3P"])
 @pytest.mark.parametrize("suffix", [".smi", ".sdf"])
-def test_every_ligand_build_writes_built_sdf_beside_the_system(solvent, suffix, tmp_path):
+def test_every_ligand_build_writes_its_residue_named_sdf_beside_the_system(solvent, suffix,
+                                                                          tmp_path):
     """Bond orders are not recoverable from a topology, and three consumers need them.
+
+    MIGRATED in 0.5.4 from `..._writes_built_sdf_...`: the file is now `<RESNAME>.sdf`, named for
+    the residue the topology carries -- `MOL` from the .smi's name field, `INX` from the .sdf's
+    stem `in` -- and `built.sdf` is no longer written. The regression below is unchanged.
 
     THE EXPLICIT CASE IS THE REGRESSION. `initial_structure` wrote into the staging root on the
     explicit route and into `staging/structure` on the implicit one, while `build/top.py` copied
@@ -225,22 +238,29 @@ def test_every_ligand_build_writes_built_sdf_beside_the_system(solvent, suffix, 
                "-log", "out/built.log", "--config", str(config)],
         cwd=tmp_path, capture_output=True, text=True, timeout=1800)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
-    assert (tmp_path / "out" / "built.sdf").is_file(), (
-        f"a {solvent} ligand build from {suffix} wrote no built.sdf")
+    name = "MOL" if suffix == ".smi" else "INX"
+    assert (tmp_path / "out" / f"{name}.sdf").is_file(), (
+        f"a {solvent} ligand build from {suffix} wrote no {name}.sdf")
+    assert not (tmp_path / "out" / "built.sdf").exists()
 
     # It must be readable as what it claims to be, not merely present.
     from rdkit import Chem
 
-    mol = Chem.MolFromMolFile(str(tmp_path / "out" / "built.sdf"), removeHs=False)
+    mol = Chem.MolFromMolFile(str(tmp_path / "out" / f"{name}.sdf"), removeHs=False)
     assert mol is not None and mol.GetNumConformers() == 1
+    assert mol.GetProp("_Name") == name
 
 
 @pytest.mark.slow
-def test_a_peptide_build_writes_no_built_sdf(tmp_path):
-    """Its absence is the signal that the ligand route does not apply, so it is asserted too."""
-    done = _build(tmp_path, _input(tmp_path, ".pdb"), "peptide")
+@pytest.mark.parametrize("suffix", [".pdb", ".seq"])
+def test_a_peptide_build_writes_no_sdf(suffix, tmp_path):
+    """Its absence is the signal that the ligand route does not apply, so it is asserted too.
+
+    MIGRATED in 0.5.4: `built.sdf` is no longer the name a molecule would have, so ANY `.sdf`
+    beside the System is what must be absent -- and the .seq peptide input is covered too."""
+    done = _build(tmp_path, _input(tmp_path, suffix), "peptide")
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
-    assert not (tmp_path / "out" / "built.sdf").exists()
+    assert sorted(p.name for p in (tmp_path / "out").glob("*.sdf")) == []
 
 
 # --- the record says which input it was, and what that implied --------------------------------

@@ -219,7 +219,8 @@ def test_the_scaling_invariants_hold_over_the_corrected_system(trees, tau):
 
     system = _system(trees["like"])
     solute = list(range(system.getNumParticles()))
-    sdf = trees["like"] / "built.sdf"
+    # `<RESNAME>.sdf` since 0.5.4 (it was `built.sdf`); the .smi names the molecule CYC.
+    sdf = trees["like"] / "CYC.sdf"
     mapped = map_from_sdf(sdf)
 
     from openmm.app import PDBFile

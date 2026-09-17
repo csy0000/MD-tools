@@ -67,6 +67,7 @@ from typing import Optional
 __all__ = [
     "AMBER_TOPOLOGY_NAME",
     "build_amber_topology_via_tleap",
+    "build_structure_from_sequence",
     "build_implicit_bundle_inputs",
     "AMBER_COORDINATE_NAME",
     "build_implicit_system",
@@ -170,8 +171,9 @@ def gb_parameter_coverage(system, structure) -> dict:
 
     2. **mbondi3's corrections cannot reach a ligand.** `mbondi3` is `mbondi2` plus adjustments
        keyed on residue name -- GLU/ASP/GL4/AS4 carboxylate oxygens, ARG HH/HE hydrogens -- and on
-       the atom name `OXT`. A Sage-parameterised ligand is one `UNL` residue, so no adjustment can
-       match and mbondi3 is exactly mbondi2 for it. Claiming "mbondi3 radii" for such a solute is
+       the atom name `OXT`. A Sage-parameterised ligand is one residue with a made-up name (`UNL`,
+       or `solute.residue_name` when build-top applies it), so no adjustment can match and
+       mbondi3 is exactly mbondi2 for it. Claiming "mbondi3 radii" for such a solute is
        true about the call and misleading about the radii.
 
     The returned record is what `forcefield.json` publishes, and it is what the experimental label
@@ -512,6 +514,82 @@ def build_amber_topology_via_tleap(pdb_path: Path, out_dir: Path, *, radii: str 
         "tleap_commands": script.read_text(encoding="utf-8").splitlines(),
         "protein_forcefield": protein_forcefield,
         "radii_requested": radii,
+    }
+
+
+def build_structure_from_sequence(residues, out_dir: Path, *,
+                                  protein_forcefield: str = "leaprc.protein.ff14SB") -> dict:
+    """Write a peptide PDB from a residue sequence with tleap's `sequence { ... }`.
+
+    What `build-top -i X.seq` starts from. tleap builds the chain from its residue library in an
+    EXTENDED conformation -- library geometry, nothing sampled, nothing minimised -- and `savePdb`
+    writes it with tleap's own residue and atom names, which are the names the protein force
+    field's templates carry. From that PDB on, the build is exactly the `.pdb` peptide route.
+
+    tleap is the authority on which residue names exist: an unknown one is refused by tleap
+    ("Illegal UNIT named"), and that refusal is surfaced with its log rather than re-derived from
+    a second list here. Raises `ConfigError` for a sequence tleap will not build, because that is
+    a statement about the input file, and `RuntimeError` when tleap is not installed -- the same
+    refusal `build_amber_topology_via_tleap` makes.
+    """
+    import hashlib
+    import re
+    import shutil
+    import subprocess
+
+    from ..build.strict import ConfigError
+
+    if shutil.which("tleap") is None:
+        raise RuntimeError(
+            "tleap was not found on PATH. A peptide built from a .seq sequence is made with "
+            "tleap's `sequence` command (AmberTools); activate an environment that provides it.")
+
+    residues = [str(name) for name in residues]
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pdb = out_dir / "sequence.pdb"
+    script = out_dir / "sequence.leap"
+    log = out_dir / "tleap.log"
+    # Relative names, run from `out_dir`: the commands are recorded, and a machine path in them
+    # would put this build's temporary directory into the provenance.
+    commands = [
+        f"source {protein_forcefield}",
+        f"mol = sequence {{ {' '.join(residues)} }}",
+        f"savePdb mol {pdb.name}",
+        "quit",
+    ]
+    script.write_text("\n".join(commands) + "\n", encoding="utf-8")
+    result = subprocess.run(["tleap", "-f", script.name], capture_output=True, text=True,
+                            check=False, cwd=str(out_dir))
+    text = (result.stdout or "") + (result.stderr or "")
+    log.write_text(text, encoding="utf-8")
+    # tleap exits 0 after a fatal error, so the count it prints is the verdict, not the status.
+    errors = re.search(r"Exiting LEaP: Errors = (\d+)", text)
+    if (result.returncode != 0 or not pdb.is_file()
+            or errors is None or int(errors.group(1)) != 0):
+        lines = [line for line in text.splitlines() if line.strip()]
+        raise ConfigError(
+            f"tleap refused the sequence {{ {' '.join(residues)} }} under {protein_forcefield}. "
+            f"Each name must be a residue unit tleap's protein library defines (for example "
+            f"ACE ALA NME). The end of its log:\n    " + "\n    ".join(lines[-12:]))
+
+    built = []
+    for line in pdb.read_text(encoding="utf-8").splitlines():
+        if line.startswith(("ATOM", "HETATM")):
+            key = line[21:27]
+            if not built or built[-1][0] != key:
+                built.append((key, line[17:20].strip()))
+    return {
+        "pdb": pdb,
+        "pdb_sha256": hashlib.sha256(pdb.read_bytes()).hexdigest(),
+        "residues": residues,
+        "built_residues": [name for _, name in built],
+        "protein_forcefield": protein_forcefield,
+        "tleap_commands": commands,
+        "tleap_log": log,
+        "tleap_log_text": text,
+        "tleap_log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
+        "conformation": "extended: tleap `sequence` library geometry, nothing sampled or minimised",
     }
 
 

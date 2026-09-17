@@ -239,9 +239,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="Build one OpenMM System from one input structure. Writes a serialised "
                     "System, the matching PDB, and a readable log that carries a machine record.")
     top.add_argument("-i", "--input", default=None, metavar="INPUT",
-                     help="input structure: an existing .pdb (peptide), or a .smi or .sdf "
-                          "holding one molecule (.smi is embedded and minimised; .sdf supplies "
-                          "its own coordinates)")
+                     help="input structure: an existing .pdb or a .seq of residue names "
+                          "(peptide; tleap builds a .seq extended), or a .smi or .sdf holding "
+                          "one molecule (.smi is embedded and minimised; .sdf supplies its own "
+                          "coordinates)")
     top.add_argument("-os", "--out-system", default="./built.xml", metavar="PATH",
                      help="serialised OpenMM System (default: ./built.xml)")
     top.add_argument("-op", "--out-pdb", default="./built.pdb", metavar="PATH",

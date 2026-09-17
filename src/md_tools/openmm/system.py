@@ -26,6 +26,42 @@ ION_RESIDUE_NAMES = frozenset({"NA", "CL", "K", "MG", "CA", "ZN", "BR", "I", "LI
 # ---------------------------------------------------------------------------------------------
 # Step 1 -- initial structure from SMILES (ETKDGv3 + MMFF)
 # ---------------------------------------------------------------------------------------------
+def _stated_residue_name(cfg: dict) -> Optional[str]:
+    """The residue name build-top resolved for this molecule, or None for RDKit's own `UNL`."""
+    name = (cfg.get("solute") or {}).get("residue_name")
+    return str(name) if name else None
+
+
+def _name_molecule(mol, residue_name: Optional[str]):
+    """Give the prepared molecule its residue name, in the PDB records and as the SDF title.
+
+    `solute.residue_name` used to be resolved, recorded -- and applied to nothing, so the built
+    topology said `UNL` while the record said something else. It is applied HERE, on the one
+    molecule both preparers write, so both input routes and both solvent routes inherit it from
+    the same two files.
+
+    RDKit writes `UNL` and names the atoms by element and count when an atom carries no residue
+    information. Those default atom names are read back off RDKit's own PDB block and kept
+    exactly: only the residue name changes, so nothing downstream sees different atom names. The
+    small-molecule template generators match a residue by its bonded graph, not by its name.
+    """
+    if residue_name is None:
+        return mol
+    from rdkit import Chem
+
+    names = [line[12:16] for line in Chem.MolToPDBBlock(mol).splitlines()
+             if line.startswith(("HETATM", "ATOM"))]
+    if len(names) != mol.GetNumAtoms():
+        raise RuntimeError(
+            f"RDKit wrote {len(names)} atom records for a {mol.GetNumAtoms()}-atom molecule; the "
+            f"residue name {residue_name!r} cannot be applied atom by atom")
+    for atom, name in zip(mol.GetAtoms(), names):
+        atom.SetMonomerInfo(Chem.AtomPDBResidueInfo(
+            name, residueName=str(residue_name), residueNumber=1, isHeteroAtom=True))
+    mol.SetProp("_Name", str(residue_name))
+    return mol
+
+
 def initial_structure(smiles: str, out_dir: Path, cfg: dict) -> dict:
     """Embed *smiles* with ETKDGv3, MMFF-minimise, and write the lowest-energy conformer.
 
@@ -97,6 +133,8 @@ def initial_structure(smiles: str, out_dir: Path, cfg: dict) -> dict:
     keep = Chem.Mol(mol)
     keep.RemoveAllConformers()
     keep.AddConformer(mol.GetConformer(best["conformer_id"]), assignId=True)
+    residue_name = _stated_residue_name(cfg)
+    _name_molecule(keep, residue_name)
     Chem.MolToMolFile(keep, str(out_dir / "solute.sdf"))
     Chem.MolToPDBFile(keep, str(out_dir / "solute.pdb"))
 
@@ -107,6 +145,7 @@ def initial_structure(smiles: str, out_dir: Path, cfg: dict) -> dict:
         "selected_conformer": best,
         "all_conformers": records,
         "n_unconverged": sum(1 for r in records if not r["converged"]),
+        "residue_name": residue_name or "UNL",
         "solute_sdf": str(out_dir / "solute.sdf"),
         "solute_pdb": str(out_dir / "solute.pdb"),
     }
@@ -229,6 +268,8 @@ def initial_structure_from_sdf(sdf_path: Path, out_dir: Path, cfg: dict) -> dict
     # file from ONE writer. A copied SDF would carry whatever dialect its producer used, and the
     # first thing to disagree would be `map_from_sdf`, which re-reads this file for the peptide
     # chemistry.
+    residue_name = _stated_residue_name(cfg)
+    _name_molecule(mol, residue_name)
     Chem.MolToMolFile(mol, str(out_dir / "solute.sdf"))
     Chem.MolToPDBFile(mol, str(out_dir / "solute.pdb"))
 
@@ -247,6 +288,7 @@ def initial_structure_from_sdf(sdf_path: Path, out_dir: Path, cfg: dict) -> dict
         "selected_conformer": None,
         "all_conformers": [],
         "n_unconverged": 0,
+        "residue_name": residue_name or "UNL",
         "solute_sdf": str(out_dir / "solute.sdf"),
         "solute_pdb": str(out_dir / "solute.pdb"),
     }
@@ -1075,8 +1117,8 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
             unknown.append(dict(cand, ambiguous=(
                 f"nitrogen residue '{cand['nitrogen_residue']}' is not a known protein residue, "
                 f"so this omega has to be read from the molecule's bond orders -- and no SDF was "
-                f"supplied. `build-top` retains one beside the System (`built.sdf`) for a .smi or "
-                f".sdf input and writes none for a peptide; supply that SDF beside the System.")))
+                f"supplied. `build-top` retains one beside the System (`<RESNAME>.sdf`, named for "
+                f"the solute residue; `built.sdf` before 0.5.4) for a .smi or .sdf input and writes none for a peptide; supply that SDF beside the System.")))
             continue
         else:
             info = ring_info

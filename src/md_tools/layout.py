@@ -161,12 +161,17 @@ class DatasetLayout:
     # -- the files inside them ------------------------------------------------------------------
 
     def built(self, what: str = "xml") -> Path:
-        """`build/built.xml`, `built.pdb`, `built.solute.pdb`, `built.log`, `built.sdf`.
+        """`build/built.xml`, `built.pdb`, `built.solute.pdb`, `built.log`.
 
         The names are `build-top`'s own: `-os` defaults to `built.xml`, `-op` to `built.pdb` and
         `-log` to `built.log`, so the layout does not rename the tool's output. Which files exist
-        varies -- an implicit system has no `build-top.out`, a ligand system carries `built.sdf` --
-        so a caller asks for one rather than assuming a set.
+        varies -- an implicit system has no `build-top.out`, a ligand system carries its prepared
+        molecule -- so a caller asks for one rather than assuming a set.
+
+        That molecule is `<RESNAME>.sdf` (`build/TYL.sdf`), named for the solute residue, since
+        0.5.4, and `built.sdf` before it. `built("sdf")` still names the old spelling, and
+        `run.preflight._ligand_sdf_beside` is the one place that finds whichever exists; ask it,
+        not this method, for the molecule.
         """
         return self.build / (what if what.startswith("built") or "." in what
                              else f"built.{what}")

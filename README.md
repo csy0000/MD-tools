@@ -94,7 +94,8 @@ md-openmm data-register -idata ./cMD-run1 \
     -project_name ALA -data_name ALA-cMD -year 2026
 ```
 
-`build-top` takes a `.pdb` for a peptide, or a `.smi` or `.sdf` for a single small molecule — a
+`build-top` takes a `.pdb` or a `.seq` (one line of residue names, built extended by tleap) for a
+peptide, or a `.smi` or `.sdf` for a single small molecule — a
 `.smi` is embedded and MMFF-minimised, a `.sdf` supplies its own coordinates and they are used as
 given.
 

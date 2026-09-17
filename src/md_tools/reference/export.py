@@ -627,6 +627,13 @@ def standalone_settings(record: dict[str, Any], structure: Path, system: Path,
         # record predates the field, so an older bundle keeps rebuilding the way it always did.
         "input_format": str((record.get("interpretation") or {}).get("input_format")
                             or structure.suffix.lstrip(".").lower() or "smi"),
+        # The residue name build-top APPLIED to a .smi/.sdf molecule (null for a peptide, and for
+        # a record from before 0.5.4, whose molecule kept RDKit's `UNL`).
+        "residue_name": (record.get("interpretation") or {}).get("residue_name")
+                        if (record.get("outputs") or {}).get("solute_sdf", {}).get("residue_name")
+                        else None,
+        # A .seq input: the residues and the tleap commands that made its PDB.
+        "sequence": record.get("sequence"),
         "builder": {key: cfg[key] for key in ("run", "structure", "protonation", "forcefield",
                                               "solvation", "system_build")},
         "implicit": ({"model": "GBn2", "radii": "mbondi3", "remove_cm_motion": True,
@@ -694,6 +701,12 @@ def _origin_text(structure: Path, settings: dict[str, Any], leap: dict[str, Any]
                 f"{seed} embeds {etkdg['n_conformers']} conformers, each is minimised with "
                 f"{mmff['variant']}, and the lowest in energy is kept. Hydrogens and protonation "
                 f"are exactly as the SMILES writes them.")
+    if settings.get("sequence"):
+        made = settings["sequence"]
+        return (f"`{structure.name}` holds a residue sequence, `{' '.join(made['residues'])}`, "
+                f"not coordinates. build-top made the peptide with AmberTools' tleap "
+                f"(`{made['leaprc']}`, `sequence {{ ... }}`), in the EXTENDED conformation tleap's "
+                f"library gives, and `build_system.py` runs the same tleap commands.")
     if leap is not None:
         return (f"`{structure.name}` is exactly what AmberTools' tleap writes for the sequence "
                 f"`{{ {' '.join(leap['sequence'])} }}` -- every atom name, residue and coordinate, "
@@ -927,7 +940,13 @@ def write_user_inputs(plan: dict[str, Any], out_dir: Path) -> dict[str, Any]:
         rows.append("| `build_system.py` | build-top's steps without md-tools; checks its result "
                     "against the files here |")
     leap = leap_sequence_origin(structure) if settings["route"] == "peptide" else None
-    if leap is not None:
+    if settings.get("sequence"):
+        manifest["structure_origin"] = {
+            "made_by": "tleap sequence, from the .seq; build_system.py repeats it",
+            "leaprc": settings["sequence"]["leaprc"],
+            "sequence": settings["sequence"]["residues"],
+            "tleap_commands": settings["sequence"]["tleap_commands"]}
+    elif leap is not None:
         (target / "structure.leap").write_text(leap["script"], encoding="utf-8")
         manifest["structure_origin"] = {
             "file": "input/structure.leap", "sha256": _digest(target / "structure.leap"),

@@ -50,9 +50,10 @@ intervals, the ladder. It never opens `built.xml`: the timestep is resolved at r
 masses actually serialised there, because a configuration that claims HMR is a request and the
 System is the fact.
 
-`build-top` accepts a `.pdb` for a peptide, or a `.smi` or `.sdf` for a single small molecule. A
-`.smi` is embedded with ETKDGv3 and MMFF-minimised; a `.sdf` supplies its own coordinates and they
-are used **as given**, so a docked or crystallographic pose survives.
+`build-top` accepts a `.pdb` or a `.seq` (one line of residue names, built by tleap) for a peptide,
+or a `.smi` or `.sdf` for a single small molecule. A `.smi` is embedded with ETKDGv3 and
+MMFF-minimised; a `.sdf` supplies its own coordinates and they are used **as given**, so a docked
+or crystallographic pose survives.
 
 Where the files land, and what is shared between runs on one system, is
 [the run layout](run-layout.md).

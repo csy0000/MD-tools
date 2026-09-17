@@ -9,9 +9,10 @@ tleap -- and nothing from md-tools, so it runs in `openmm-env` without the `md-o
 Every step below is one step of `build-top`, in its order, with its seeds:
 
     peptide, explicit   PDB -> hydrogens at pH (seeded) -> box -> water and ions (seeded) -> System
+                        or a .seq -> tleap `sequence` (extended) -> PDB -> the same steps
     ligand,  explicit   SMILES -> 3D (ETKDGv3 + MMFF, seeded) -> charges -> box -> solvent -> System
                         or SDF -> coordinates as given -> charges -> box -> solvent -> System
-    peptide, implicit   PDB -> tleap (mbondi3 radii) -> ParmEd GBn2 System
+    peptide, implicit   PDB (or a .seq, through tleap `sequence`) -> tleap (mbondi3 radii) -> ParmEd GBn2 System
     ligand,  implicit   SMILES -> 3D -> charges -> OpenFF System -> Amber files -> ParmEd GBn2 System
                         or SDF -> coordinates as given -> charges -> ... -> ParmEd GBn2 System
 
@@ -87,6 +88,62 @@ class seeded_global_random:
 
 
 # ---------------------------------------------------------------------------------------------
+# Step: a peptide PDB from a residue sequence, with tleap.
+# ---------------------------------------------------------------------------------------------
+def structure_from_sequence(path: Path, work: Path, sequence: dict) -> Path:
+    """tleap's `sequence { ... }`, with the library build-top used, written as a PDB.
+
+    The residues are read from the `.seq` itself and must be the ones build-top recorded; the
+    leaprc is the recorded one. tleap places library geometry, so there is nothing to seed.
+    """
+    records = [line.split() for line in (raw.strip() for raw in
+                                         path.read_text(encoding="utf-8").splitlines())
+               if line and not line.startswith("#")]
+    if len(records) != 1:
+        raise SystemExit(f"{path}: expected exactly one sequence record, found {len(records)}")
+    if records[0] != list(sequence["residues"]):
+        raise SystemExit(f"{path}: holds {records[0]}, but build-top recorded "
+                         f"{sequence['residues']}")
+    if shutil.which("tleap") is None:
+        raise SystemExit("tleap (AmberTools) is not on PATH; activate openmm-env")
+    work.mkdir(parents=True, exist_ok=True)
+    script = work / "sequence.leap"
+    script.write_text("\n".join(sequence["tleap_commands"]) + "\n", encoding="utf-8")
+    result = subprocess.run(["tleap", "-f", script.name], capture_output=True, text=True,
+                            cwd=str(work))
+    (work / "tleap.log").write_text(result.stdout + result.stderr, encoding="utf-8")
+    pdb = work / "sequence.pdb"
+    if result.returncode != 0 or not pdb.is_file():
+        raise SystemExit(f"tleap failed; see {work / 'tleap.log'}")
+    say("structure", f"{path.name}: tleap sequence {{ {' '.join(records[0])} }} with "
+                     f"{sequence['leaprc']} (extended conformation)")
+    return pdb
+
+
+def peptide_structure(settings: dict, work: Path) -> Path:
+    """The peptide PDB build-top parameterised: the supplied file, or the one tleap made."""
+    structure = HERE / settings["structure_file"]
+    if str(settings.get("input_format", "pdb")).lower() == "seq":
+        return structure_from_sequence(structure, work / "sequence", settings["sequence"])
+    return structure
+
+
+def name_molecule(mol, residue_name):
+    """Apply build-top's `solute.residue_name`: RDKit's own atom names kept, only the residue renamed."""
+    if not residue_name:
+        return mol
+    from rdkit import Chem
+
+    names = [line[12:16] for line in Chem.MolToPDBBlock(mol).splitlines()
+             if line.startswith(("HETATM", "ATOM"))]
+    for atom, name in zip(mol.GetAtoms(), names):
+        atom.SetMonomerInfo(Chem.AtomPDBResidueInfo(
+            name, residueName=str(residue_name), residueNumber=1, isHeteroAtom=True))
+    mol.SetProp("_Name", str(residue_name))
+    return mol
+
+
+# ---------------------------------------------------------------------------------------------
 # Step: a 3D structure from a SMILES string.
 # ---------------------------------------------------------------------------------------------
 def read_smiles(path: Path) -> str:
@@ -97,7 +154,7 @@ def read_smiles(path: Path) -> str:
     return records[0]
 
 
-def structure_from_sdf(path: Path, work: Path) -> tuple[Path, Path]:
+def structure_from_sdf(path: Path, work: Path, residue_name=None) -> tuple[Path, Path]:
     """`(solute.sdf, solute.pdb)` from a supplied SDF, whose coordinates are used AS GIVEN.
 
     The counterpart of `structure_from_smiles`, and deliberately the shorter one: build-top did
@@ -116,6 +173,7 @@ def structure_from_sdf(path: Path, work: Path) -> tuple[Path, Path]:
         raise SystemExit(f"{path}: carries no conformer, so it supplies no coordinates")
     Chem.AssignStereochemistryFrom3D(mol)
     say("structure", f"{path.name}: coordinates used as given (no embedding, no minimisation)")
+    name_molecule(mol, residue_name)
     Chem.MolToMolFile(mol, str(work / "solute.sdf"))
     Chem.MolToPDBFile(mol, str(work / "solute.pdb"))
     return work / "solute.sdf", work / "solute.pdb"
@@ -129,12 +187,14 @@ def solute_structure(settings: dict, work: Path) -> tuple[Path, Path]:
     molecule, or nothing at all.
     """
     structure = HERE / settings["structure_file"]
+    residue_name = settings.get("residue_name")
     if str(settings.get("input_format", "smi")).lower() == "sdf":
-        return structure_from_sdf(structure, work)
-    return structure_from_smiles(read_smiles(structure), work, settings["builder"])
+        return structure_from_sdf(structure, work, residue_name)
+    return structure_from_smiles(read_smiles(structure), work, settings["builder"], residue_name)
 
 
-def structure_from_smiles(smiles: str, work: Path, builder: dict) -> tuple[Path, Path]:
+def structure_from_smiles(smiles: str, work: Path, builder: dict,
+                          residue_name=None) -> tuple[Path, Path]:
     """Embed with ETKDGv3, MMFF-minimise every conformer, keep the lowest in energy.
 
     Returns `(solute.sdf, solute.pdb)`. The SDF carries the bond orders and formal charges the
@@ -177,6 +237,7 @@ def structure_from_smiles(smiles: str, work: Path, builder: dict) -> tuple[Path,
     keep = Chem.Mol(mol)
     keep.RemoveAllConformers()
     keep.AddConformer(mol.GetConformer(best), assignId=True)
+    name_molecule(keep, residue_name)
     Chem.MolToMolFile(keep, str(work / "solute.sdf"))
     Chem.MolToPDBFile(keep, str(work / "solute.pdb"))
     return work / "solute.sdf", work / "solute.pdb"
@@ -437,13 +498,12 @@ def explicit_system(solvated: Path, builder: dict, ligand_sdf: Path | None, liga
 
 def build_explicit(settings: dict, work: Path) -> tuple[object, Path]:
     builder = settings["builder"]
-    structure = HERE / settings["structure_file"]
     ligand_sdf = None
     if settings["route"] == "ligand":
         ligand_sdf, source = solute_structure(settings, work / "structure")
     else:
         source = work / "input.pdb"
-        shutil.copy2(structure, source)
+        shutil.copy2(peptide_structure(settings, work), source)
     ligand_only = settings["route"] == "ligand"
     protonated = protonate(source, work, builder, ligand_sdf,
                            from_smiles=settings["route"] == "ligand")
@@ -531,7 +591,7 @@ def build_implicit(settings: dict, work: Path) -> tuple[object, Path]:
     from openmm import app
 
     if settings["route"] == "peptide":
-        prmtop, rst7, leap_pdb = tleap_files(HERE / settings["structure_file"], work,
+        prmtop, rst7, leap_pdb = tleap_files(peptide_structure(settings, work), work,
                                              settings["builder"], settings["implicit"]["radii"])
     else:
         prmtop, rst7, leap_pdb = ligand_amber_files(settings, work)
