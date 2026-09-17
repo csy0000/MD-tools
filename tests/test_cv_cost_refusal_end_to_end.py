@@ -280,6 +280,12 @@ def ais_project(tmp_path_factory):
 
     frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
+
+    # V1: the saved scaled state at tau = 0.5 of the same built System -- the AIS end state the
+    # paths switch to. The refusals under test are about CV cost records, not about the pair.
+    from .conftest import make_scaled_state
+
+    make_scaled_state(root, tau=0.5, method="AIS")
     return root
 
 
@@ -287,6 +293,8 @@ def _run_ais(root: Path, destination: Path, *extra, environment=None):
     return subprocess.run(
         [sys.executable, str(root / "AIS-run1" / "AIS.py"),
          "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
+         "-p2", str(root / "build" / "built.pdb"),
+         "-s2", str(root / "build" / "AIS" / "system_state0.xml"),
          "-source-traj", str(root / "source.dcd"),
          "-odir", str(destination), "--cpu", *extra],
         cwd=root / "AIS-run1", capture_output=True, text=True, timeout=1800,

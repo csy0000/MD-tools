@@ -204,6 +204,11 @@ CUDA_SITES = {
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
 #: named exemption rather than an omission -- and the reason is checkable by reading the callsite.
 NON_CUDA_CONTEXT_SITES = {
+    "build/md.py::_generated_cv_text":
+        "reads the bond graph for `collective_variables.generate` off the SERIALISED built System "
+        "-- `HarmonicBondForce.getBondParameters` and `System.getConstraintParameters` are System "
+        "accessors on the host -- and the atom names off built.pdb. It creates no Context and asks "
+        "no device for anything; it writes a cv.yaml at build time, before any run exists.",
     "md/stage.py::_EnergyDecompositionProbe.__init__":
         "deserialises a COPY of the System and assigns each force its own group, so the probe can "
         "ask for them separately later. `XmlSerializer` round trip and `setForceGroup` only -- no "

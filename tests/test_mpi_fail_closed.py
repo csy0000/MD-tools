@@ -47,11 +47,17 @@ def _inputs(protocol):
     A REST2 ladder reads -s ONLY from its group file (0.5.4): each line names one saved scaled
     state, `build/REST2/system_state<i>.xml`, and continues from `-c eq/eq_3.xml`. `-s` beside it
     is refused by name, so passing it here would test that refusal instead of the MPI behaviour.
-    AIS still takes the one System on the command line.
+    AIS takes both end states on the command line: V0 as -s and V1 as -s2/-p2 (the saved tau-0.5
+    state, a parameter-only edit of the same particles), or it refuses by name before MPI is
+    reached -- which would test that refusal instead.
     """
     if protocol == "REST2":
         return ["--groupfile", "remd_groupfile.1"]
-    return ["-s", "../build/built.xml"]
+    return ["-s", "../build/built.xml", *AIS_V1]
+
+
+#: V1 for every AIS launch here, built into `build/AIS/` by the `projects` fixture.
+AIS_V1 = ["-p2", "../build/built.pdb", "-s2", "../build/AIS/system_state0.xml"]
 
 
 def _launch_directory(projects, protocol, tmp_path):
@@ -128,6 +134,11 @@ def projects(tmp_path_factory):
     # the frame count and every test using this fixture stopped BEFORE the runtime behaviour it
     # was written for -- passing on the return code while never reaching the phase under test.
     mdtraj.join([frames] * 128).save_dcd(str(root / "source.dcd"))
+
+    # V1 for the AIS launches: the saved scaled state at tau = 0.5 of the same built System.
+    from .conftest import make_scaled_state
+
+    make_scaled_state(root, tau=0.5, method="AIS")
 
     # ...and only now the runs, each into its own `<method>-run<N>`.
     for protocol in ("REST2", "AIS"):
@@ -454,8 +465,8 @@ def test_a_rank_local_failure_after_preflight_stops_the_whole_ais_run(failing_ra
 
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(project / "AIS.py"),
-         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-source-traj", "../source.dcd",
-         "-odir", str(destination)],
+         "-p", "../build/built.pdb", "-s", "../build/built.xml", *AIS_V1,
+         "-source-traj", "../source.dcd", "-odir", str(destination)],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(**{FAIL_PHASE: f"AIS: opening the rank reports:{failing_rank}"}))
     message = done.stdout + done.stderr

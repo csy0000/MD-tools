@@ -557,25 +557,10 @@ def test_example_4_switching_paths_from_a_fixed_tau_ensemble(system):
     _md_openmm(built, "build-md", "-odir", "./AIS-run1", "--config", "AIS.config")
 
     # `../input/AIS.in`: the input is SHARED at the dataset root, not inside the run.
-    # V0: the scaled System the hot run integrated, built by the same function and selection a
-    # fixed-tau stage uses. V1: the physical System.
-    from openmm import XmlSerializer
-    from openmm.app import PDBFile
-
-    from md_tools.md.stage import solute_atom_indices
-    from md_tools.openmm.system import classify_omega_bonds
-    from md_tools.rest2 import build_scaled_system
-
-    topology = PDBFile(str(built / "build" / "built.pdb")).topology
-    solute = solute_atom_indices(topology)
-    omega = classify_omega_bonds(topology, solute)
-    excluded = [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
-    physical = XmlSerializer.deserialize((built / "build" / "built.xml").read_text())
-    (built / "build" / "V0_tau0p5.xml").write_text(
-        XmlSerializer.serialize(build_scaled_system(physical, solute, 0.5, excluded)))
-
+    # V0: the SAVED scaled state the hot run integrated as it is, build/cMD/system_state0.xml.
+    # V1: the physical System.
     _md_openmm(built / "AIS-run1", "md-run", "-i", "../input/AIS.in",
-               "-p", "../build/built.pdb", "-s", "../build/V0_tau0p5.xml",
+               "-p", "../build/built.pdb", "-s", "../build/cMD/system_state0.xml",
                "-p2", "../build/built.pdb", "-s2", "../build/built.xml",
                "-source-traj", str(source), "-odir", "./out", "-log", "AIS.log", "--cpu",
                timeout=3600)
