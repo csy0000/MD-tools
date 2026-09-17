@@ -294,7 +294,7 @@ def build_parser() -> argparse.ArgumentParser:
     # `-p` and `-c` collide with nothing above only by accident today, and forwarding the argv
     # verbatim keeps that an accident that cannot start mattering.
     run = sub.add_parser(
-        "md-run", help="run a stage, a REST2/rREST2 ladder or AIS paths from an Amber-like input",
+        "md-run", help="run a stage, a REST2 ladder or AIS paths from an Amber-like input",
         add_help=False, prefix_chars="\0",
         description="Run what an Amber-like .in file describes. See `md-openmm md-run -h`.")
     run.add_argument("md_run_argv", nargs=argparse.REMAINDER,

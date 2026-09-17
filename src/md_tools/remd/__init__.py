@@ -2,12 +2,9 @@
 
 Generic on purpose. `REMDRunner` coordinates replicas, schedules events, places devices and owns
 the storage; the *decision* about which replicas swap is a rule object it is given. REST2 supplies
-`NeighborExchangeRule`; rREST2 supplies that plus
-:class:`~md_tools.remd.reservoir.ReservoirRefreshRule`, and is otherwise the same ladder.
-
-That separation is the point. rREST2 is not a copied driver with a reservoir bolted on -- it is
-`REST2Scaler` + `REMDRunner` + `NeighborExchangeRule` + `ReservoirRefreshRule`, composed. A future
-reservoir method reuses the same rule rather than forking the driver again.
+`NeighborExchangeRule`. A method whose transitions differ is a new rule file passed with
+`--exchange-rule`, not a forked driver. (rREST2, which added a reservoir refresh rule, is archived
+as of 0.5.4: see `archive/rREST2/`.)
 
 The Hamiltonian scaling is NOT here. It lives in `md_tools.rest2`, because three of the four
 protocols that scale never exchange.

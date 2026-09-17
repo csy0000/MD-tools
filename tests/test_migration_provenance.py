@@ -56,7 +56,7 @@ def _rows(reporter, count, first=0):
         reporter.write_exchange(
             index, step=(index + 1) * 500, time_ps=(index + 1) * 1.0, state_to_walker=[0, 1],
             proposed=ZERO, accepted=ZERO, u=np.full((2, 2), float(index)),
-            u_evaluated=np.ones((2, 2), dtype=np.int8), reservoir=None)
+            u_evaluated=np.ones((2, 2), dtype=np.int8))
 
 
 def _modern(path, rows=3):

@@ -21,9 +21,6 @@ SCHEMA_VERSION = 1
 ENGINE = "openmm"
 ENGINE_VERSION = "8.6.0"
 
-#: rREST2 is REST2 whose top rung is refreshed from a Boltzmann reservoir. It is a REST2
-#: ladder plus a transition rule, not a separate sampling method, and it reuses the REST2
-#: block for everything about the ladder itself.
 SOLVENTS = ("TIP3P", "OPC", "GBn2")
 
 #: What `--solvent` selects when nothing is asked for. TIP3P is the method-development default:

@@ -97,7 +97,7 @@ def configuration_digest(configurations):
     """A compact digest of every walker's phase-space sample, for cross-rank agreement.
 
     Positions AND velocities AND boxes: a digest over positions alone would agree happily in
-    exactly the case this exists to catch -- a reservoir refresh whose velocity was lost.
+    exactly the case this exists to catch -- an installed configuration whose velocity was lost.
     """
     digest = hashlib.sha256()
     for configuration in configurations:
@@ -150,7 +150,7 @@ class ReplicaRun:
 
     def __init__(self, *, protocol, files, base_system, topology, solute_indices,
                  excluded_bonds=(), platform=None, precision=None, rule_path=None,
-                 reservoir_declaration=None, identity_extra=None, explicit_cpu=False,
+                 identity_extra=None, explicit_cpu=False,
                  prepared=None):
         self.protocol = protocol
         self.files = files
@@ -164,7 +164,6 @@ class ReplicaRun:
         # `platform`, so the record can say a person chose it.
         self.explicit_cpu = bool(explicit_cpu)
         self.rule_path = rule_path
-        self.reservoir_declaration = reservoir_declaration
         self.identity_extra = dict(identity_extra or {})
         #: The `LadderPreflight` this run was validated by. Its platform, device and machine
         #: settings are CONSUMED; nothing here re-resolves them. See `_build_platform`.
@@ -193,7 +192,6 @@ class ReplicaRun:
         self.cv_states = None
         #: Test-seam bookkeeping: how many times each armed boundary has been crossed.
         self._fault_crossings = {}
-        self.reservoir = None
         self._audit = None
         self._run_context = {}
         self._acceleration = {}
@@ -264,9 +262,6 @@ class ReplicaRun:
                 # Stopped between two per-tau stages, collectively, before the ladder took a
                 # step: there is no checkpoint, and the record says so by name.
                 return self._record_per_tau_interruption(state, identity)
-            self._open_reservoir(systems)
-            if self.reservoir is not None:
-                self.reservoir.check_box_matches(state["configurations"][0].box)
             self._loop(state, rule, interruption)
             if state.get("interrupted"):
                 # A CLEAN, COLLECTIVELY REACHED interruption: every rank left `_loop` together via
@@ -473,7 +468,7 @@ class ReplicaRun:
 
         if self.coordinator.size > 1:
             # ANY unexpected exception in a plural launch -- during Context construction,
-            # propagation, energy evaluation, exchange, reservoir refresh, trajectory reporting,
+            # propagation, energy evaluation, exchange, trajectory reporting,
             # checkpointing, or manifest writing -- invokes the ONE shared communicator
             # fail/abort authority. It used to just `raise`: the exception unwound out of `run()`
             # untouched, and whatever called it converted it into a local integer status code with
@@ -490,49 +485,12 @@ class ReplicaRun:
     # -- setup ------------------------------------------------------------------------------------------
 
     def _load_rule(self):
-        """The transition rule this ladder runs under.
-
-        An explicit `--exchange-rule` always wins: a person who named a rule file gets that rule.
-
-        Otherwise the rule follows the PROTOCOL. A declared reservoir means rREST2, and rREST2 IS
-        conventional REST2 plus the Boltzmann refresh at the top rung -- so the refresh rule is
-        what the ladder must run. It used to fall through to the plain neighbouring rule here,
-        because only `--exchange-rule` ever selected the refresh rule and the generated project
-        passes `--reservoir` without it. The consequence was silent and total: the reservoir was
-        opened, validated, reported in the run header as "6 phase-space sample(s)" -- and never
-        drawn from once. Every rREST2 run was a REST2 run wearing rREST2's output names, and
-        nothing in the output said so, because "0 refreshes accepted" is also what a legitimately
-        rejecting reservoir would print.
-
-        The probability-one rule itself is untouched; this only decides which rule object runs.
-        """
+        """The transition rule this ladder runs under: an explicit `--exchange-rule`, or the
+        neighbouring-pair Metropolis rule REST2 is defined by."""
         if self.rule_path:
             return load_rule(self.rule_path)
-        if self.reservoir_declaration:
-            from .reservoir import ReservoirRefreshRule
-
-            rule = ReservoirRefreshRule()
-            return rule, builtin_rule_identity(rule)
         rule = NeighbouringExchangeRule()
         return rule, builtin_rule_identity(rule)
-
-    def _open_reservoir(self, systems):
-        if not self.reservoir_declaration:
-            return
-        from .reservoir import PreparedReservoir
-
-        # The reservoir refreshes the TOP rung, so the Hamiltonian it must match is the top rung's
-        # SCALED system -- not the unscaled reference. Comparing against the reference rejected
-        # every correctly prepared source, and would have accepted a source recorded at tau = 0,
-        # which is the pairing that actually breaks the probability-one rule.
-        self.reservoir = PreparedReservoir.open(
-            self.reservoir_declaration, protocol=self.protocol,
-            topology_path=self.files.topology, periodic=self._periodic,
-            system=systems[-1], solute_indices=self.solute_indices,
-            excluded_bonds=self.excluded_bonds, coordinator=self.coordinator)
-        print(f"# reservoir          : {self.reservoir.n_frames} phase-space sample(s), "
-              f"velocity_policy={self.reservoir.velocity_policy}")
-        sys.stdout.flush()
 
     def _build_platform(self):
         """CONSUME the platform the preflight resolved. Do not resolve a second one.
@@ -1654,26 +1612,16 @@ class ReplicaRun:
             observing = ("cv" in events and self.cv_states is not None
                          and self.coordinator.is_root)
             mapping_before = list(state["state_to_walker"]) if observing else None
-            # THE CONFIGURATIONS THEMSELVES, not merely the mapping.
-            #
-            # `_exchange` permutes `state_to_walker`, which a saved mapping is enough to undo. But
-            # under rREST2 it also calls `_apply_reservoir`, which REPLACES an entry in
-            # `state["configurations"]` outright -- the refreshed walker's coordinates become the
-            # reservoir sample. Evaluating the CV from that list afterwards produced a row
-            # labelled "pre-exchange" whose value was measured on a configuration the run never
-            # propagated at that state: it came out of the reservoir file.
-            #
-            # A deep copy, so no later exchange or refresh can mutate the positions or box this
-            # row is computed from. `Configuration.copy()` is the existing primitive and copies
+            # THE CONFIGURATIONS THEMSELVES, not merely the mapping: a deep copy, so nothing the
+            # exchange installs can mutate the positions or box this row is computed from. `Configuration.copy()` is the existing primitive and copies
             # velocities too, which a torsion does not need -- clarity over saving one array on a
             # path that runs once per CV observation, not once per step.
             configurations_before = ([configuration.copy()
                                       for configuration in state["configurations"]]
                                      if observing else None)
 
-            reservoir_event = None
             if "exchange" in events:
-                reservoir_event = self._exchange(state, rule, target, schedule)
+                self._exchange(state, rule, target, schedule)
 
             if observing:
                 self._fail_at("before-cv-row")
@@ -1689,17 +1637,10 @@ class ReplicaRun:
                 # Empty is the honest answer there. It says "no frame in this file holds what this
                 # row measured", which is true, and it is never -1.
                 forthcoming = int(state["frame_index"]) + 1
-                # A REFRESHED state names no frame either, even though its walker index did not
-                # change. The frame about to be written holds the reservoir sample; this row holds
-                # the configuration the state actually propagated. Same rule as an accepted swap
-                # -- no frame in that file holds what this row measured -- reached by a second
-                # route, because the mapping alone cannot see a reservoir replacement.
-                refreshed = {int(reservoir_event[0])} if reservoir_event else set()
                 named = [
                     (forthcoming
                      if ("whole" in events
-                         and mapping_before[index] == state["state_to_walker"][index]
-                         and index not in refreshed)
+                         and mapping_before[index] == state["state_to_walker"][index])
                      else None)
                     for index in range(self.protocol.n_states)]
                 self.cv_states.observe(
@@ -1787,11 +1728,10 @@ class ReplicaRun:
                 iteration=state["exchange_index"], segment=state["step"], protocol=self.protocol,
                 state_to_walker=state["state_to_walker"],
                 reduced_potential=lambda i, w: matrix[i][w],
-                rng=state["rng"], reservoir=self.reservoir, rule_state=state["rule_state"],
+                rng=state["rng"], rule_state=state["rule_state"],
                 exchange_index=state["exchange_index"])
             outcome = rule.propose(context)
             payload = {"proposals": outcome.proposals, "swaps": outcome.swaps,
-                       "reservoir_refresh": outcome.reservoir_refresh,
                        "rule_state": outcome.rule_state, "diagnostics": outcome.diagnostics}
         payload = self.coordinator.bcast(payload)
 
@@ -1808,10 +1748,6 @@ class ReplicaRun:
             mapping[state_i], mapping[state_j] = mapping[state_j], mapping[state_i]
         state["rule_state"] = payload["rule_state"] or state["rule_state"]
 
-        reservoir_event = None
-        if payload["reservoir_refresh"] is not None:
-            reservoir_event = self._apply_reservoir(state, payload["reservoir_refresh"])
-
         self._install_owned(state)
         self.coordinator.agree(configuration_digest(state["configurations"]),
                                what="the configurations after this exchange")
@@ -1824,74 +1760,7 @@ class ReplicaRun:
                 # it happened to be true, but a claim that cannot be wrong also cannot catch a
                 # day when it stops being true. `u_evaluated` means "1 where u was actually
                 # computed", so it is derived from the matrix itself.
-                u=matrix, u_evaluated=np.isfinite(matrix).astype(np.int8),
-                reservoir=reservoir_event)
-        return reservoir_event
-
-    def _apply_reservoir(self, state, refresh):
-        """Install one prepared phase-space sample into the top state. Single authority, no stale
-        broadcast.
-
-        Every rank reads the SAME sample from the SAME prepared file using the index rank 0 chose,
-        so nothing large travels over MPI and no rank's copy can be stale. The rank owning the
-        state installs it into its Context; every rank updates the walker-indexed list identically;
-        and the caller then verifies a digest across ranks.
-
-        This replaces a flow that installed the sample on the owning rank and then overwrote the
-        list with rank 0's copy -- discarding the new velocity whenever the top rung was not rank
-        0's.
-        """
-        state_index = int(refresh["state"])
-        frame_index = int(refresh["frame"])
-        walker = state["state_to_walker"][state_index]
-        current = state["configurations"][walker]
-
-        positions, velocities, box, source_step, _source_time = self.reservoir.sample(frame_index)
-
-        if self.reservoir.velocity_policy == "stored":
-            # The recorded momentum, installed unchanged. This is what the probability-one rule is
-            # stated for: a phase-space sample is a point in phase space.
-            installed_velocities = np.asarray(velocities, dtype=float)
-        else:
-            # `maxwell` was asked for explicitly. Drawn on every rank from the same recorded seed
-            # via the owning rank, below.
-            installed_velocities = None
-
-        if self._periodic and box is None:
-            raise DriverError(
-                "the reservoir sample carries no box but this is an explicit-solvent run; a "
-                "configuration without its box is at an undefined density.")
-        # The ladder's basis is kept: the lattices were proven equal before propagation, so this is
-        # physically identical and stops the stored box flickering between equivalent bases.
-        keep_box = current.box
-
-        if installed_velocities is None:
-            # Maxwell: the owning rank draws, then shares the drawn momenta so every rank holds the
-            # same sample. Nothing else is broadcast.
-            drawn = None
-            if state_index in self.owned:
-                self.engine.set_configuration(
-                    state_index, Configuration(positions, current.velocities, keep_box))
-                self.engine.set_velocities_to_temperature(
-                    state_index, int(refresh["velocity_seed"]))
-                drawn = self.engine.get_configuration(state_index).velocities
-            if self.coordinator.size > 1:
-                for piece in self.coordinator.allgather(drawn):
-                    if piece is not None:
-                        drawn = piece
-                        break
-            installed_velocities = np.asarray(drawn, dtype=float)
-
-        replacement = Configuration(positions, installed_velocities, keep_box)
-        state["configurations"][walker] = replacement
-        if state_index in self.owned:
-            self.engine.set_configuration(state_index, replacement)
-        # The seed is recorded only when it was actually used. Under `stored` nothing was drawn,
-        # and writing the rule's unused seed there would suggest a draw that never happened.
-        drawn_from = (int(refresh["velocity_seed"])
-                      if self.reservoir.velocity_policy == "maxwell" else -1)
-        return (state_index, frame_index, int(source_step),
-                1 if refresh.get("accepted", True) else 0, drawn_from)
+                u=matrix, u_evaluated=np.isfinite(matrix).astype(np.int8))
 
     def _write_rem_log(self):
         """Regenerate `rem.log` in full from committed exchange rows, and replace it atomically.
@@ -2115,11 +1984,8 @@ class ReplicaRun:
         from .statistics import (completion_report, lifetime_statistics,
                                         mapping_is_permutation_every_iteration)
         accepted, proposed = self.reporter.statistics()
-        events = self.reporter.reservoir_events()
         mapping = self.reporter.mapping()
-        stats = lifetime_statistics(
-            accepted, proposed, tau=self.protocol.tau, reservoir_events=events,
-            reservoir_velocity_seeds=self.reporter.reservoir_velocity_seeds())
+        stats = lifetime_statistics(accepted, proposed, tau=self.protocol.tau)
         # The permutation check is storage integrity, not analysis: every committed row must be
         # a bijection state->walker, and a row that is not means the mapping was corrupted.
         permuted, offending_rows = mapping_is_permutation_every_iteration(
@@ -2202,8 +2068,6 @@ class ReplicaRun:
 
         if state.get("extends"):
             record["extends"] = self._extension_provenance(state, report)
-        if self.reservoir is not None:
-            record["reservoir"] = self.reservoir.describe()
         storage.write_atomic(self.files.restart,
                              json.dumps(record, indent=2, default=str) + "\n")
         # The completed sidecar carries the history too. It is one of the sources a later

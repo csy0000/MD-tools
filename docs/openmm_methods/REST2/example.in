@@ -51,11 +51,10 @@
 &cntrl
   !
   ! cMD is plain molecular dynamics. REST2 adds a replica-exchange ladder in which only the
-  ! solute's Hamiltonian is scaled. rREST2 adds a Boltzmann reservoir refresh of the hottest
-  ! rung. AIS runs non-equilibrium switching paths from an EXISTING equilibrium source
-  ! ensemble -- it has no minimisation or equilibration chain of its own, because its input is
-  ! a trajectory you have already produced.
-  ! one of: cMD, REST2, rREST2, AIS, umbrella
+  ! solute's Hamiltonian is scaled. AIS runs non-equilibrium switching paths from an EXISTING
+  ! equilibrium source ensemble -- it has no minimisation or equilibration chain of its own,
+  ! because its input is a trajectory you have already produced.
+  ! one of: cMD, REST2, AIS, umbrella
   protocol                  = REST2,
   !
   ! Must match the System `build-top` produced. Under implicit solvent there is no box and no
@@ -92,16 +91,14 @@
   !
   ! Fixed REST2 scaling for a cMD run. 0.0 (the default) is the unmodified physical
   ! Hamiltonian. A non-zero value runs cMD at ONE rung of the REST2 ladder -- the same scaling
-  ! the ladder applies, held fixed -- which is how a Boltzmann reservoir for rREST2 is
-  ! generated, and how a hot ensemble is produced without running an exchange. A scaled run is
-  ! NVT by construction: it must sample the top rung's fixed-volume ensemble, so a barostat
-  ! would sample the wrong distribution and is refused.
+  ! the ladder applies, held fixed -- which is how a hot ensemble is produced without running
+  ! an exchange. A scaled run is NVT by construction: it must sample the top rung's
+  ! fixed-volume ensemble, so a barostat would sample the wrong distribution and is refused.
   ! minimum: 0.0
   tau                       = 0.0,
   !
   ! Write a phase-space stream (positions, VELOCITIES and box) every N steps. 0 disables it. A
-  ! reservoir needs complete samples including velocities, which a trajectory does not carry,
-  ! so this is what a reservoir source is generated with.
+  ! complete sample needs velocities, which a trajectory does not carry.
   ! unit: steps; minimum: 0
   phase_space_printout      = 0,
   !
@@ -132,7 +129,7 @@
   ! How many SEGMENTS the production run is written as. 1 is a single `prod1` segment.
   ! It SPLITS the production total rather than multiplying it: each segment gets
   ! `production_steps / number_of_segments`, and a value that does not divide exactly is
-  ! refused. On a REST2/rREST2 ladder the split is of `number_of_exchanges`, so an exchange
+  ! refused. On a REST2 ladder the split is of `number_of_exchanges`, so an exchange
   ! never straddles a boundary. Each segment writes its own files, so segments cannot
   ! overwrite one another.
   ! minimum: 1
@@ -205,7 +202,7 @@
   equilibration_steps         = 0,
   !
   ! Run the equilibration stages on EVERY RUNG, under that rung's own tau, instead of once at
-  ! tau = 0. REST2 and rREST2 only; off by default. When true the tau = 0 chain stops at
+  ! tau = 0. REST2 only; off by default. When true the tau = 0 chain stops at
   ! minimisation (implicit) or after its NPT stages (explicit, which fix the shared box), and
   ! every rung then runs eq_nvt_posres, eq_nvt_posres_2 and eq_nvt_free at fixed volume, then
   ! equilibration_steps, then the first exchange.
@@ -223,18 +220,4 @@
   ! Report acceptance for each neighbouring pair. A single averaged acceptance hides a ladder
   ! with one impassable gap.
   neighbour_acceptance_report = true,
-  !
-  ! rREST2 only. Refresh the hottest rung from a pre-generated Boltzmann reservoir instead of
-  ! propagating it.
-  reservoir_enabled           = false,
-  !
-  ! How often the hottest rung is refreshed from the reservoir, in exchange attempts.
-  ! minimum: 1
-  refresh_interval_exchanges  = 1,
-  !
-  ! Where a refreshed configuration's velocities come from. `resample` draws them from the
-  ! Maxwell-Boltzmann distribution at the run temperature; `inherit` keeps the reservoir's
-  ! own. Recorded explicitly because it is a provenance question, not a tuning knob.
-  ! one of: resample, inherit
-  reservoir_velocities        = resample,
 /

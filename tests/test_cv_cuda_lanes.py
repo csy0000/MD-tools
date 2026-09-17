@@ -118,7 +118,7 @@ def _generate(root: Path, name: str, document: dict, *extra):
 
         make_scaled_state(system, tau=tau)
     (system / f"{name}.config").write_text(yaml.safe_dump(document), encoding="utf-8")
-    if document.get("protocol") in ("REST2", "rREST2"):
+    if document.get("protocol") == "REST2":
         # A ladder integrates SAVED scaled states (0.5.4); `build-md` refuses without them.
         from .conftest import make_states_for
 
@@ -129,7 +129,7 @@ def _generate(root: Path, name: str, document: dict, *extra):
         cwd=system, capture_output=True, text=True, timeout=900)
     assert done.returncode == 0, done.stdout + done.stderr
     run = system / f"{name}-run1"
-    if document.get("protocol") in ("REST2", "rREST2") and (system / "initial_state.xml").is_file():
+    if document.get("protocol") == "REST2" and (system / "initial_state.xml").is_file():
         # WHERE EVERY GROUP LINE CONTINUES FROM, `-c eq/eq_3.xml` beside the group file: a ladder
         # reads its coordinates only from its group file, so the CUDA-made starting state goes
         # there instead of onto the command line.
@@ -296,11 +296,11 @@ def test_fixed_tau_phase_space_and_cv_resume_on_cuda(cmd_project, tmp_path):
     assert [int(r["step"]) for r in _rows(series)] == EXPECTED
 
 
-# --- 3 and 4: REST2 and rREST2 on CUDA --------------------------------------------------------
+# --- 3: REST2 on CUDA --------------------------------------------------------
 
-def _ladder_config(root: Path, *, reservoir=False, states=3):
+def _ladder_config(root: Path, *, states=3):
     document = {
-        "protocol": "rREST2" if reservoir else "REST2", "solvent": "implicit",
+        "protocol": "REST2", "solvent": "implicit",
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 0,
                    "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
                    "production_steps": 0},
@@ -311,9 +311,6 @@ def _ladder_config(root: Path, *, reservoir=False, states=3):
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
         "dynamics": {"seed": 20260904},
     }
-    if reservoir:
-        document["reservoir"] = {"enabled": True, "path": "../reservoir.nc",
-                                 "refresh_interval_exchanges": 1, "velocities": "inherit"}
     return document
 
 
@@ -380,55 +377,6 @@ def test_rest2_cv_runs_on_cuda_fresh_and_resumed(ladder_project, tmp_path):
     _run_ladder(scripts, resumed, "REST2", "--resume")
     for index in range(3):
         assert [int(r["step"]) for r in _rows(resumed / f"cv_state{index}.csv")] == EXPECTED
-
-
-def test_rrest2_cv_on_cuda_holds_the_pre_refresh_configuration(ladder_project, tmp_path):
-    """The scientific regression, on a device: the row must not hold the reservoir sample."""
-    from md_tools.md.phase_space import PhaseSpaceReader
-    from md_tools.remd import storage
-
-    # Reuse the CPU file's reservoir builder: one definition of what a distinguishable
-    # reservoir is, so the two lanes cannot drift apart about it.
-    from tests.test_rrest2_pre_refresh_cv import _reservoir
-    from md_tools.cv import torsion_degrees
-
-    _reservoir(ladder_project)
-    scripts = _generate(ladder_project, "rREST2",
-                        _ladder_config(ladder_project, reservoir=True))
-    destination = _ladder_directory(scripts, tmp_path, "rrest2")
-    _run_ladder(scripts, destination, "rREST2")
-
-    manifest = json.loads((destination / "restart.json").read_text(encoding="utf-8"))
-    assert (manifest.get("execution") or {}).get("platform") == "CUDA", manifest.get("execution")
-
-    reporter = storage.ReplicaReporter(destination / "rREST2.nc", mode="r")
-    try:
-        events = reporter.reservoir_events()
-    finally:
-        reporter.close()
-    accepted = [(i, int(r[0]), int(r[1])) for i, r in enumerate(events)
-                if int(r[3]) == 1 and int(r[0]) >= 0]
-    assert accepted, "no reservoir refresh was accepted on CUDA"
-
-    with PhaseSpaceReader(ladder_project / "reservoir.nc") as reader:
-        samples = {frame: torsion_degrees(reader.frame(frame)[0], QUARTET)
-                   for _e, _s, frame in accepted}
-
-    checked = 0
-    for exchange_index, state_index, frame in accepted:
-        step = (exchange_index + 1) * 10
-        rows = {int(r["step"]): r for r in _rows(destination / f"cv_state{state_index}.csv")}
-        if step not in rows:
-            continue
-        reported = float(rows[step]["phi"])
-        difference = abs((reported - samples[frame] + 180.0) % 360.0 - 180.0)
-        assert difference > 1.0, (
-            f"state {state_index} step {step} on CUDA reports {reported}, and the reservoir "
-            f"sample has {samples[frame]}: the row holds the post-refresh coordinate")
-        assert rows[step]["trajectory_frame_index"] == "", (
-            "a refreshed state named a frame holding the reservoir sample")
-        checked += 1
-    assert checked, "no refreshed state had a CV row at its refresh step"
 
 
 # --- 5: AIS on CUDA with the three-group decomposition ----------------------------------------
@@ -608,36 +556,6 @@ def test_rest2_cv_survives_two_interruptions_on_cuda(ladder_project, tmp_path):
         (resumed / "restart.json").read_text(encoding="utf-8"))["collective_variables"]["cost"]
     assert cost["cumulative"]["cv_evaluations"] == 3 * len(EXPECTED) * N_CV
     assert cost["segment"]["cv_observations"] < cost["cumulative"]["cv_observations"]
-
-
-def test_rrest2_cv_survives_two_interruptions_on_cuda(ladder_project, tmp_path):
-    """rREST2 twice resumed on a device: a refresh REPLACES a walker mid-run.
-
-    The one ladder path where a continuation has to reproduce not just its own dynamics but the
-    reservoir draws that displaced them, and it had no resume coverage on CUDA at all.
-    """
-    from tests.test_rrest2_pre_refresh_cv import _reservoir
-
-    _reservoir(ladder_project)
-    scripts = _generate(ladder_project, "rREST2twice",
-                        _ladder_config(ladder_project, reservoir=True))
-    reference, resumed = _ladder_twice(scripts, "rREST2", tmp_path)
-    _assert_ladder_matches(reference, resumed)
-
-    from md_tools.remd import storage
-
-    def _draws(directory):
-        reporter = storage.ReplicaReporter(directory / "rREST2.nc", mode="r")
-        try:
-            return [(int(r[0]), int(r[1])) for r in reporter.reservoir_events()
-                    if int(r[3]) == 1 and int(r[0]) >= 0]
-        finally:
-            reporter.close()
-
-    want, got = _draws(reference), _draws(resumed)
-    assert want, "no reservoir refresh was accepted, so nothing about refresh was exercised"
-    assert got == want, (
-        "the resumed run drew different reservoir frames: the refresh stream was not restored")
 
 
 def test_ais_cv_survives_two_interruptions_on_cuda(ais_project, tmp_path):

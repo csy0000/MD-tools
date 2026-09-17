@@ -5,7 +5,7 @@ ONE model, CONSUMED by every authoritative entry point:
     md_tools.run.main.md_run_main          the CLI dispatcher
     md_tools.md.stage.stage_main           generated stage scripts
     md_tools.build.md.build_scripts        the whole chain, at generation time
-    md_tools.remd.generated.replica_main   generated REST2.py and rREST2.py
+    md_tools.remd.generated.replica_main   generated REST2.py
     md_tools.ais.run.ais_main              generated AIS.py
 
 That list is the reason this module exists. The guards began life inside `md-run`, which made them
@@ -500,13 +500,13 @@ class StagePreflight(ExecutionPreflight):
     seed: int = 0
     restrained: bool = False
     #: The molecular Hamiltonian's identity, taken BEFORE the restraint and barostat are added,
-    #: for a phase-space stream a reservoir will later be built from.
+    #: for the phase-space stream it records.
     hamiltonian_identity: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class LadderPreflight(ExecutionPreflight):
-    """A REST2 or rREST2 ladder: one process per thermodynamic state."""
+    """A REST2 ladder: one process per thermodynamic state."""
 
     replicas: int = 0
     #: How every energy-bearing force was classified, and the scaled System built from it. Both
@@ -532,14 +532,6 @@ class LadderPreflight(ExecutionPreflight):
     #: biased by: `_protocol.py` names the definition file, and the resolved torsions -- which
     #: four atoms, which centre, which force constant -- exist only here. Empty unless declared.
     ladder_restraints: tuple = ()
-    #: rREST2 only. The exact `reservoir.yaml` text rank 0 will publish, built and validated
-    #: BEFORE `-odir` exists -- see `preflight_ladder`. Carried here so the source is opened once,
-    #: by the preflight, rather than reopened after output creation to rediscover the same facts.
-    reservoir_declaration: str | None = None
-    #: sha256 of `reservoir_declaration`, so every rank can verify it reads the bytes rank 0 wrote.
-    reservoir_digest: str | None = None
-    #: What the source phase-space file actually proved: its path, frame count and time window.
-    reservoir_source: dict[str, Any] | None = None
     #: The validated collective-variable definition, parsed before any output exists so a
     #: malformed cv.yaml refuses the run rather than failing at the first observation.
     cv_definition: Any = None
@@ -696,7 +688,7 @@ def _common(*, topology, system, outputs, inputs, cpu, device, number_of_groups,
         # particle comparison then comes from the loaded pair rather than a second parse.
         # NO SYSTEM TO LOAD OR TO COMPARE AGAINST on a grouped launch.
         #
-        # A REST2/rREST2 ladder driven by a group file names one System PER LINE -- each rung's
+        # A REST2 ladder driven by a group file names one System PER LINE -- each rung's
         # own pre-scaled Hamiltonian -- so there is no single `-s` for this launch, and
         # `remd.executor` validates those paths where it reads them. Passing `None` down here
         # would have `check_topology_matches_system` call `PDBFile(str(None))` and report a
@@ -927,7 +919,7 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
 
         # Taken BEFORE the restraint and barostat: they are properties of how this stage is run,
         # not terms of the energy the ensemble is defined by. An identity taken after them claims
-        # a CustomExternalForce the ladder rung a reservoir refreshes does not have.
+        # a CustomExternalForce the scaled rung's own ensemble does not have.
         hamiltonian_identity = identity_record(
             system, tau=tau, temperature_k=float(stage["temperature_K"]),
             ensemble=stage.get("ensemble"), solute_indices=solute, excluded_bonds=excluded,
@@ -1087,7 +1079,7 @@ def reject_plural_launch(coordination, *, what: str) -> None:
         f"the same stage and write the same trajectory, state table and checkpoint -- producing "
         f"one set of files interleaved from {coordination.size} independent simulations, with "
         f"nothing in them saying so.\n"
-        f"  Run it in one process, or use a protocol that coordinates: REST2/rREST2 place one "
+        f"  Run it in one process, or use a protocol that coordinates: REST2 place one "
         f"rank per thermodynamic state, and AIS distributes paths by `paths_for_rank`.")
 
 
@@ -1102,7 +1094,7 @@ def _reject_flags_outside_their_protocol(*, protocol_name, number_of_groups=None
     """
     if number_of_groups is not None:
         raise PreflightError(
-            f"-ng is a REST2/rREST2 flag and {protocol_name} has no replicas to group. It was "
+            f"-ng is a REST2 flag and {protocol_name} has no replicas to group. It was "
             f"accepted and ignored; refusing it instead, because a run launched under "
             f"`mpirun -n {number_of_groups}` with -ng silently ignored is N processes writing "
             f"over one set of files.")
@@ -1142,8 +1134,8 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                      number_of_groups=None, cpu=False, device=None, machine_config=None,
                      protocol="this ladder", pending_parent=None, timestep_fs=None,
                      ensemble=None, tau=0.0, source_trajectory=None,
-                     reservoir=False, ladder=None, out_dir=None) -> LadderPreflight:
-    """A REST2 or rREST2 ladder. `-ng`, the configured state count and the world must agree.
+                     ladder=None, out_dir=None) -> LadderPreflight:
+    """A REST2 ladder. `-ng`, the configured state count and the world must agree.
 
     Since 0.5.4 a ladder reads `-s` ONLY from its group file, and every line must name a saved
     scaled state (`md-openmm build-top --rest2-scaler`). Refused here, in the shared runtime guard,
@@ -1151,15 +1143,15 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
     """
     if system is not None:
         raise PreflightError(
-            f"{protocol}: -s {system} was given. A REST2/rREST2 ladder reads -s only from its "
+            f"{protocol}: -s {system} was given. A REST2 ladder reads -s only from its "
             f"group file (0.5.4): each line names one saved scaled state, "
             f"build/REST2/system_state<n>.xml. Pass --groupfile and no -s.")
     if not groupfile:
         raise PreflightError(
-            f"{protocol}: no group file was given. A REST2/rREST2 ladder reads -s only from its "
+            f"{protocol}: no group file was given. A REST2 ladder reads -s only from its "
             f"group file (0.5.4); `build-md` writes remd_groupfile.<segment>.")
     if source_trajectory is not None:
-        _reject_flags_outside_their_protocol(protocol_name="a REST2/rREST2 ladder",
+        _reject_flags_outside_their_protocol(protocol_name="a REST2 ladder",
                                              source_trajectory=source_trajectory)
 
     inputs: dict[str, Any] = dict(_continuation_inputs(coordinates, pending_parent,
@@ -1220,7 +1212,6 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
     inventory = _ladder_inventory(protocol=protocol, replicas=int(replicas), output=output,
                                   log=log, trajectory=trajectory, restart=restart,
                                   checkpoint=checkpoint, groupfile=groupfile,
-                                  reservoir=bool(reservoir),
                                   per_tau=bool((ladder or {}).get("per_tau_equilibration")))
 
     coordination, machine, acceleration, index, detail, particles, loaded = _common(
@@ -1370,63 +1361,6 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
 
         collectively(coordination, _per_tau, what="the per-tau equilibration plan")
 
-    # -- the rREST2 reservoir, validated HERE ---------------------------------------------------
-    #
-    # It used to be built at helper-publication time, after `out.mkdir()`: a reservoir that did
-    # not exist, held no frames, or could not be read as phase space was discovered with the run
-    # directory already created. Worse, the same source was then opened AGAIN by the driver, after
-    # `_begin` had created the analysis file and the per-state trajectories, to rediscover facts
-    # this step had already established -- two readings of one file, either of which could be the
-    # one that refuses.
-    #
-    # Everything predictable about the source is therefore settled before a single byte of output
-    # exists, and the exact text rank 0 will publish is carried out of here with its digest.
-    declaration = digest = source_facts = None
-    if reservoir and ladder is not None:
-        def _declare():
-            from ..remd.generated import reservoir_declaration_text
-
-            try:
-                return reservoir_declaration_text(ladder, Path(out_dir) if out_dir else Path("."))
-            except SystemExit as refusal:
-                raise PreflightError(f"{protocol}: {refusal}") from None
-
-        # Collectively: a reservoir every rank can see is a different failure from one only some
-        # ranks can, and a plural launch must refuse as a whole rather than have rank 3 alone walk
-        # into a barrier the others already left.
-        declaration = collectively(coordination, _declare, what="the rREST2 reservoir")
-        digest = hashlib.sha256(declaration.encode("utf-8")).hexdigest()
-        source_facts = (yaml.safe_load(declaration) or {}).get("source")
-
-        # And the DEEPER checks, still read-only, still before any output: that the source records
-        # the same Hamiltonian as the top rung this ladder will refresh, holds the velocities the
-        # policy needs, and describes this molecule. Those used to run only from the driver's
-        # `_prepare`, after `_begin` had created the analysis file and the per-state
-        # trajectories -- so a source recorded at another tau failed a ladder that had already
-        # written output. `_prepare` still checks them (it is what materialises the reservoir, and
-        # a check that runs only elsewhere can be bypassed); this is the same code called early.
-        if scaled is not None:
-            def _validate_source():
-                from ..remd.reservoir import ReservoirError, validate_source_read_only
-
-                try:
-                    return validate_source_read_only(
-                        yaml.safe_load(declaration),
-                        # The declaration records `phase_space` relative to the run directory's
-                        # PARENT, which is what `_prepare` resolves it against too.
-                        declaration_directory=(Path(out_dir).parent if out_dir else Path(".")),
-                        system=scaled, tau_max=float(tau),
-                        temperature_k=float(ladder["dynamics"]["temperature_K"]),
-                        solute_indices=solute_indices or (),
-                        excluded_bonds=excluded_bonds or (),
-                        periodic=bool(scaled.usesPeriodicBoundaryConditions()))
-                except ReservoirError as refusal:
-                    raise PreflightError(f"{protocol}: {refusal}") from None
-
-            source_facts = dict(source_facts or {},
-                                verified=collectively(coordination, _validate_source,
-                                                      what="the rREST2 reservoir source"))
-
     # -- the collective-variable definition ------------------------------------------------------
     #
     # Parsed HERE, before -odir exists. Left to the driver it would be read after the run
@@ -1503,8 +1437,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                            solute_indices=tuple(int(i) for i in (solute_indices or ())),
                            tau_list=rungs_tau, rung_systems=rung_systems,
                            excluded_bonds=tuple(tuple(int(a) for a in b) for b in excluded_bonds),
-                           reservoir_declaration=declaration, reservoir_digest=digest,
-                           reservoir_source=source_facts, cv_definition=cv_definition,
+                           cv_definition=cv_definition,
                            ladder_restraints=tuple(ladder_restraints),
                            notes={"solute_document": solute_record} if solute_record else {})
 
@@ -1606,7 +1539,7 @@ def _cv_interval_of(document) -> int:
 
 
 def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, checkpoint,
-                      groupfile, reservoir=False, per_tau=False) -> OutputInventory:
+                      groupfile, per_tau=False) -> OutputInventory:
     """A ladder's complete inventory: the run-level files AND every per-state and per-rank one.
 
     The per-state trajectories -- `solute_state<i>_prod<N>.nc`, and `whole_state<i>_prod<N>.nc`
@@ -1643,10 +1576,6 @@ def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, c
         # A group file the caller NAMED is an INPUT -- it is read, not written -- and listing it
         # among the outputs made it collide with itself.
         roles["group_file"] = directory / f"{protocol}.group"
-    if reservoir:
-        # Written by rank 0 and read by every rank a moment later; an rREST2 launch that found a
-        # stale one from another ladder would draw its probability-one transfers from it.
-        roles["reservoir_declaration"] = directory / "reservoir.yaml"
     roles["rem_log"] = directory / "rem.log"
     roles["provenance"] = directory / "machine.yaml"
     from ..remd.amber_trajectory import state_trajectory_name

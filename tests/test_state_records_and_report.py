@@ -86,7 +86,7 @@ def test_the_state_records_stay_out_of_the_scientific_identity():
 
 # --- section 8: the completion report -------------------------------------------------------------
 
-def _statistics(n_states=4, *, accepted=None, proposed=None, reservoir_events=None):
+def _statistics(n_states=4, *, accepted=None, proposed=None):
     """Lifetime statistics from an explicit neighbour-only proposal history."""
     n_exchanges = 10
     a = np.zeros((n_exchanges, n_states, n_states), dtype=np.int64)
@@ -99,7 +99,7 @@ def _statistics(n_states=4, *, accepted=None, proposed=None, reservoir_events=No
                 a[row, i, j] = a[row, j, i] = 1
     return statistics.lifetime_statistics(
         accepted if accepted is not None else a, proposed if proposed is not None else p,
-        tau=TAUS[:n_states], reservoir_events=reservoir_events)
+        tau=TAUS[:n_states])
 
 
 def test_the_report_lists_every_neighbouring_pair_once():
@@ -148,19 +148,6 @@ def test_the_basis_states_the_committed_exchange_range():
     assert "0-9" in report["basis"] and "committed" in report["basis"]
 
 
-def test_a_reservoir_refresh_is_reported_separately_and_never_folded_into_the_pairs():
-    """rREST2: a refresh replaces a configuration rather than swapping two of them."""
-    events = np.full((10, 4), -1, dtype=np.int64)
-    events[3] = [3, 4, 2000, 1]
-    events[7] = [3, 9, 6000, 0]
-    stats = _statistics(reservoir_events=events)
-    plain = statistics.completion_report(_statistics())
-    report = statistics.completion_report(stats)
-    assert report["reservoir"]["attempts"] == 2 and report["reservoir"]["accepted"] == 1
-    assert report["reservoir"]["states_refreshed"] == [3]
-    assert report["overall"] == plain["overall"]
-    assert report["by_neighbouring_pair"] == plain["by_neighbouring_pair"]
-
-
 def test_a_run_without_a_reservoir_reports_no_reservoir_block():
+    """rREST2's refresh block is archived (0.5.4); no ladder report carries one."""
     assert "reservoir" not in statistics.completion_report(_statistics())

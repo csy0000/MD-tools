@@ -1,4 +1,7 @@
-"""The owned replica-exchange runtime: one executor, group files, rules, reservoirs, storage.
+"""The owned replica-exchange runtime: one executor, group files, rules, storage.
+
+rREST2 is archived (0.5.4); its reservoir and refresh-rule cases moved to
+archive/rREST2/tests/test_own_replica_exchange.py.
 
 PLATFORM_POLICY_EXEMPTION: these are parsing, arithmetic and storage contract tests. The few that
 propagate use a 22-particle vacuum peptide for a handful of steps to exercise bookkeeping, not to
@@ -28,7 +31,6 @@ from md_tools.remd import executor as replica_executor
 from md_tools.remd import statistics as statistics
 from md_tools.remd import storage as storage
 from md_tools.remd import validate as validate
-from md_tools.remd import reservoir as rrest2_reservoir
 from md_tools.remd import source_ensemble as source_ensemble
 from md_tools.remd.engine import Configuration, exchange_log_acceptance   # noqa: E402
 from md_tools.remd.protocol import ProtocolError, REST2Protocol           # noqa: E402
@@ -156,7 +158,7 @@ def _files(**overrides):
 
 
 def _arguments(**overrides):
-    base = dict(groupfile=None, number_of_groups=None, exchange_rule=None, reservoir=None,
+    base = dict(groupfile=None, number_of_groups=None, exchange_rule=None,
                 resume=False, extend=0, force=False, verify_only=False)
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -182,8 +184,6 @@ def test_ng_must_equal_the_number_of_group_lines():
 def test_grouped_only_flags_are_refused_in_single_mode():
     problems = replica_executor.validate(_files(input="a.py"), _arguments(exchange_rule="r.py"))
     assert any("--exchange-rule applies to a coordinated run" in p for p in problems)
-    problems = replica_executor.validate(_files(input="a.py"), _arguments(reservoir="r.yaml"))
-    assert any("--reservoir applies to a coordinated run" in p for p in problems)
 
 
 def test_a_grouped_run_requires_the_analysis_storage():
@@ -260,8 +260,7 @@ def test_the_log_acceptance_matches_the_analytical_criterion():
 class _Context:
     """The minimum an exchange rule may see, with a fixed reduced-potential matrix."""
 
-    def __init__(self, matrix, *, n_states, seed, exchange_index=0, reservoir=None,
-                 rule_state=None):
+    def __init__(self, matrix, *, n_states, seed, exchange_index=0, rule_state=None):
         self.matrix = np.asarray(matrix, dtype=float)
         self._n = n_states
         self.iteration = 1
@@ -269,7 +268,6 @@ class _Context:
         self.exchange_index = exchange_index
         self.state_to_walker = list(range(n_states))
         self.rng = np.random.default_rng(seed)
-        self.reservoir = reservoir
         self.rule_state = dict(rule_state or {})
         self.protocol = SimpleNamespace(n_states=n_states)
 
@@ -332,12 +330,20 @@ def test_a_missing_exchange_rule_file_is_refused(tmp_path):
 
 
 def test_a_loaded_rule_records_its_file_digest(tmp_path):
+    """MIGRATED: this loaded rREST2's `rrest2_exchange.py`, archived in 0.5.4. The subject is the
+    generic `--exchange-rule` loader, so it now loads a minimal rule file of its own."""
     path = tmp_path / "rule.py"
-    shutil.copy2(TEMPLATES / "rrest2_exchange.py", path)
+    path.write_text(
+        "from md_tools.remd.rules import NeighbouringExchangeRule\n\n\n"
+        "class FileRule(NeighbouringExchangeRule):\n"
+        "    def describe(self):\n"
+        "        return dict(super().describe(), name='file-rule', order='test')\n\n\n"
+        "rule = FileRule()\n", encoding="utf-8")
     rule, identity = exchange_rules.load_rule(path)
-    assert identity["name"] == "rrest2-boltzmann"
+    assert identity["name"] == "file-rule"
     assert len(identity["sha256"]) == 64
-    assert identity["describe"]["refresh_order"] == "after_neighbouring_sweep"
+    assert identity["file"] == "rule.py"
+    assert identity["describe"]["order"] == "test"
 
 
 # --- the protocol -------------------------------------------------------------------------------
@@ -386,10 +392,10 @@ def test_no_runtime_module_rescales_velocities_on_exchange():
         code = "\n".join(line for line in source.splitlines()
                          if not line.strip().startswith("#"))
         assert "setVelocitiesToTemperature" not in code or name == "engine.py", name
-    # The one place it appears is the reservoir path, where a DCD supplies no velocities at all.
+    # The driver draws no momenta at all now. Its one call was in rREST2's Maxwell refresh
+    # (`_apply_reservoir`), archived with the method in 0.5.4.
     driver = (TEMPLATES / "driver.py").read_text()
-    assert "set_velocities_to_temperature" in driver
-    assert driver.index("set_velocities_to_temperature") > driver.index("_apply_reservoir")
+    assert "set_velocities_to_temperature" not in driver
 
 
 # --- statistics and views -------------------------------------------------------------------------
@@ -420,18 +426,6 @@ def test_lifetime_statistics_sum_the_whole_history():
     # Separate schedules mean every stored row IS an attempt: no zero rows stand for skipped
     # propagation, and nothing is inferred from a stride.
     assert stats["exchanges_committed"] == 5
-
-
-def test_a_reservoir_refresh_is_never_counted_as_an_exchange():
-    accepted = np.zeros((3, 2, 2), dtype=np.int64)
-    proposed = np.zeros((3, 2, 2), dtype=np.int64)
-    # columns: state, frame, source step, outcome (-1 = no refresh at that row)
-    events = np.array([[-1, -1, -1, -1], [1, 4, 2000, 1], [-1, -1, -1, -1]])
-    stats = statistics.lifetime_statistics(accepted, proposed, tau=[0.0, 0.5],
-                                           reservoir_events=events)
-    assert stats["total_proposed"] == 0
-    assert stats["reservoir"]["attempts"] == 1 and stats["reservoir"]["accepted"] == 1
-    assert "NOT a swap" in stats["reservoir"]["note"]
 
 
 def test_round_trip_counting_is_not_offered_here():
@@ -585,8 +579,11 @@ def test_the_window_is_inclusive_at_both_ends():
     assert len(set(selected)) == 3
 
 
-def test_ais_and_rrest2_select_the_same_frames_for_the_same_request_and_seed():
-    """One implementation, so two callers asking the same question get the same answer."""
+def test_two_equal_requests_select_the_same_frames_for_the_same_seed():
+    """One implementation, so two callers asking the same question get the same answer.
+
+    The second caller was rREST2's reservoir, archived in 0.5.4; the determinism is still what
+    makes an AIS selection reproducible."""
     times = [1.0 + index for index in range(50)]
     evidence = {"frame_interval_ps": 1.0, "source": "test"}
     shared = dict(project=Path("."), prepared_topology=Path("t.pdb"), trajectory="x.dcd",
@@ -594,10 +591,10 @@ def test_ais_and_rrest2_select_the_same_frames_for_the_same_request_and_seed():
                   required_tau=0.5)
     ais = source_ensemble.SourceRequest(**shared, purpose="shared",
                                         selection_purpose=("shared", "selection"))
-    rrest2 = source_ensemble.SourceRequest(**shared, purpose="shared",
+    other = source_ensemble.SourceRequest(**shared, purpose="shared",
                                            selection_purpose=("shared", "selection"))
     first, _ = source_ensemble.select_source_frames(ais, times, evidence)
-    second, _ = source_ensemble.select_source_frames(rrest2, times, evidence)
+    second, _ = source_ensemble.select_source_frames(other, times, evidence)
     assert first == second
 
 
@@ -638,110 +635,6 @@ def test_two_box_representations_of_one_lattice_compare_equal():
                                                          [-1.55, -1.55, 2.2]]))
 
 
-# --- the reservoir ---------------------------------------------------------------------------------
-
-def _declaration(tmp_path, **overrides):
-    document = {
-        "format": rrest2_reservoir.DECLARATION_FORMAT,
-        "weighting": "boltzmann", "ensemble": "NVT", "prepared_directory": "reservoir",
-        "refresh_interval_exchanges": 2, "random_seed": 1,
-        "velocity_policy": "stored",
-        "source": {"phase_space": "src/cmd.phase_space.nc", "start_time_ps": 0.0,
-                   "end_time_ps": 10.0, "frames": 5},
-    }
-    document.update(overrides)
-    path = tmp_path / "reservoir.yaml"
-    path.write_text(yaml.safe_dump(document))
-    return path
-
-
-def _protocol():
-    return REST2Protocol(tau=[0.0, 0.25, 0.5], temperature_k=300.0, timestep_fs=2.0,
-                         exchange_interval_ps=2.0, number_of_exchanges=2)
-
-
-def test_a_non_boltzmann_reservoir_is_refused_by_the_v1_rule(tmp_path):
-    path = _declaration(tmp_path, weighting="clustered")
-    with pytest.raises(rrest2_reservoir.ReservoirError) as raised:
-        rrest2_reservoir.PreparedReservoir.open(path, protocol=_protocol(),
-                                                topology_path=tmp_path / "t.pdb", periodic=False,
-                                                system=openmm.System())
-    message = str(raised.value)
-    assert "not implemented" in message and "separately derived acceptance rule" in message
-
-
-def test_an_npt_reservoir_is_refused(tmp_path):
-    path = _declaration(tmp_path, ensemble="NPT")
-    with pytest.raises(rrest2_reservoir.ReservoirError, match="distribution of volumes"):
-        rrest2_reservoir.PreparedReservoir.open(path, protocol=_protocol(),
-                                                topology_path=tmp_path / "t.pdb", periodic=False,
-                                                system=openmm.System())
-
-
-def test_solute_only_insertion_is_refused(tmp_path):
-    path = _declaration(tmp_path, solute_only=True)
-    with pytest.raises(rrest2_reservoir.ReservoirError, match="solute into an unrelated solvent"):
-        rrest2_reservoir.PreparedReservoir.open(path, protocol=_protocol(),
-                                                topology_path=tmp_path / "t.pdb", periodic=False,
-                                                system=openmm.System())
-
-
-def test_a_declaration_of_the_wrong_format_is_refused(tmp_path):
-    path = _declaration(tmp_path, format="something-else/v9")
-    with pytest.raises(rrest2_reservoir.ReservoirError, match="is 'something-else/v9'"):
-        rrest2_reservoir.PreparedReservoir.open(path, protocol=_protocol(),
-                                                topology_path=tmp_path / "t.pdb", periodic=False,
-                                                system=openmm.System())
-
-
-def test_the_rrest2_rule_refreshes_only_the_top_state():
-    rule = exchange_rules.load_rule(TEMPLATES / "rrest2_exchange.py")[0]
-    reservoir = SimpleNamespace(declaration={"refresh_interval_exchanges": 1}, n_frames=4)
-    matrix = np.zeros((4, 4))
-    state = {}
-    seen = []
-    for attempt in range(4):
-        context = _Context(matrix, n_states=4, seed=5, exchange_index=attempt,
-                           reservoir=reservoir, rule_state=state)
-        outcome = rule.propose(context)
-        state = outcome.rule_state
-        if outcome.reservoir_refresh:
-            seen.append(outcome.reservoir_refresh["state"])
-    assert seen and set(seen) == {3}, "a refresh must only ever touch the hottest state"
-
-
-def test_the_rrest2_refresh_interval_is_honoured():
-    rule = exchange_rules.load_rule(TEMPLATES / "rrest2_exchange.py")[0]
-    reservoir = SimpleNamespace(declaration={"refresh_interval_exchanges": 3}, n_frames=4)
-    state, refreshes = {}, 0
-    for attempt in range(9):
-        outcome = rule.propose(_Context(np.zeros((3, 3)), n_states=3, seed=2,
-                                        exchange_index=attempt, reservoir=reservoir,
-                                        rule_state=state))
-        state = outcome.rule_state
-        refreshes += outcome.reservoir_refresh is not None
-    assert refreshes == 3, "an interval of 3 over 9 exchanges must refresh three times"
-
-
-def test_the_refresh_order_is_recorded_not_left_to_scheduling():
-    rule, identity = exchange_rules.load_rule(TEMPLATES / "rrest2_exchange.py")
-    assert identity["describe"]["refresh_order"] == "after_neighbouring_sweep"
-    source = (TEMPLATES / "rrest2_exchange.py").read_text()
-    # The constant moved with the rule into `md_tools.remd.reservoir`; the plug-in file
-    # is now only the worked example of the --exchange-rule contract.
-    from md_tools.remd import reservoir as _reservoir
-
-    assert "REFRESH_ORDER" in Path(_reservoir.__file__).read_text(encoding="utf-8")
-
-
-def test_a_refresh_carries_a_recorded_velocity_seed():
-    """A DCD has no velocities, so momenta are redrawn -- reproducibly."""
-    rule = exchange_rules.load_rule(TEMPLATES / "rrest2_exchange.py")[0]
-    reservoir = SimpleNamespace(declaration={"refresh_interval_exchanges": 1}, n_frames=4)
-    first = rule.propose(_Context(np.zeros((3, 3)), n_states=3, seed=11, reservoir=reservoir))
-    second = rule.propose(_Context(np.zeros((3, 3)), n_states=3, seed=11, reservoir=reservoir))
-    assert first.reservoir_refresh["velocity_seed"] == second.reservoir_refresh["velocity_seed"]
-    assert first.reservoir_refresh["frame"] == second.reservoir_refresh["frame"]
 
 
 # --- storage and validation -----------------------------------------------------------------------
@@ -899,15 +792,11 @@ def test_the_run_state_sidecar_sits_beside_the_storage():
     assert storage.run_state_path("/a/b/run.nc").name == "run.runstate.json"
 
 
-
-
 def _ladder(protocol="REST2", platform=None, states=4, tau_max=0.5):
     """A ladder description of the shape `build-md` writes into a generated script."""
     return {"protocol": protocol, "solvent": "explicit", "n_states": states,
             "tau_max": tau_max, "exchange_interval_steps": 1000, "number_of_exchanges": 10,
             "state_trajectory": True, "rem_log": True, "neighbour_acceptance_report": True,
-            "reservoir": {"enabled": False, "path": None, "velocities": "resample",
-                          "refresh_interval_exchanges": 1},
             "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "pressure_bar": 1.0,
                          "friction_per_ps": 1.0, "barostat_interval_steps": 25,
                          "restraint_kcal_per_mol_A2": 1.0, "seed": 1, "platform": platform,
@@ -924,7 +813,7 @@ def test_generated_replica_inputs_contain_no_concrete_path():
 
     from md_tools.remd.generated import protocol_file_text
 
-    for protocol in ("REST2", "rREST2"):
+    for protocol in ("REST2",):
         text = protocol_file_text(_ladder(protocol=protocol))
         _ast.parse(text)
         body = text.split('"""')[2]

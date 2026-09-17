@@ -3,8 +3,8 @@
 
 A transition rule receives a bounded view of the ladder and returns explicit proposals and
 decisions. It never propagates, never opens storage, never touches MPI and never parses a command
-line. That is the whole point: a later method -- a non-Boltzmann reservoir, a kinetic reservoir --
-becomes a new rule file and changes nothing in the executor.
+line. That is the whole point: a later method becomes a new rule file and changes nothing in the
+executor.
 
 This is a CONTRACT, not a framework. There is no registry, no plugin discovery, no dependency
 injection and no method database. `--exchange-rule FILE.py` loads one file by location and takes
@@ -16,8 +16,10 @@ from pathlib import Path
 
 import numpy as np
 
-#: Bumped when the meaning of what a rule receives or returns changes.
-RULE_INTERFACE_VERSION = "md-tools-exchange-rule/v1"
+#: Bumped when the meaning of what a rule receives or returns changes. v2 (0.5.4): the context no
+#: longer carries `reservoir` and the outcome no longer accepts `reservoir_refresh` -- rREST2's
+#: refresh, archived with it.
+RULE_INTERFACE_VERSION = "md-tools-exchange-rule/v2"
 
 
 class ExchangeRuleError(ValueError):
@@ -34,7 +36,7 @@ class ExchangeContext:
     """
 
     def __init__(self, *, iteration, segment, protocol, state_to_walker, reduced_potential,
-                 rng, reservoir=None, rule_state=None, exchange_index=0):
+                 rng, rule_state=None, exchange_index=0):
         self.iteration = int(iteration)
         self.segment = int(segment)
         #: How many exchange attempts have happened, this one included and counted from 0. The
@@ -50,7 +52,6 @@ class ExchangeContext:
         #: A dedicated numpy Generator. A rule must draw from this and from nothing else, so a
         #: run repeats exactly under a recorded seed.
         self.rng = rng
-        self.reservoir = reservoir
         self.rule_state = dict(rule_state or {})
 
     @property
@@ -72,17 +73,14 @@ class ExchangeOutcome:
     """What a rule decided. Swaps are stated as state-index pairs, not as walker moves.
 
     `swaps` are applied in order by the driver; each exchanges the configurations occupying the two
-    named states. `reservoir_refresh` is an optional replacement of one state's configuration from
-    a prepared reservoir, which is not a swap and is recorded separately so it can never be
-    mistaken for one.
+    named states.
     """
 
-    def __init__(self, *, proposals=(), swaps=(), reservoir_refresh=None, rule_state=None,
+    def __init__(self, *, proposals=(), swaps=(), rule_state=None,
                  diagnostics=None):
         #: (state_i, state_j, log_alpha, accepted) for every pair actually considered.
         self.proposals = [tuple(p) for p in proposals]
         self.swaps = [tuple(int(x) for x in pair) for pair in swaps]
-        self.reservoir_refresh = reservoir_refresh
         self.rule_state = dict(rule_state or {})
         self.diagnostics = dict(diagnostics or {})
 

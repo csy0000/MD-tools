@@ -90,8 +90,8 @@ def md_run_parser() -> argparse.ArgumentParser:
                         help="topology and reference coordinates, built.pdb (Amber's -p prmtop)")
     # NOT `required=True`, and the reason is a ladder rather than a convenience.
     #
-    # EXACTLY ONE of `-s` and `-groupfile` is given, and that is checked below by name. A REST2 or
-    # rREST2 ladder's rungs are scaled and serialised at BUILD time -- `remd<n>/build_state<n>.xml`
+    # EXACTLY ONE of `-s` and `-groupfile` is given, and that is checked below by name. A REST2
+    # ladder's rungs are scaled and serialised at BUILD time -- `remd<n>/build_state<n>.xml`
     # -- so each line of the group file names its own pre-scaled System and there is no single
     # System for the launch to carry. One `-s` there would be one Hamiltonian claimed for every
     # rung, which is the error the per-rung files exist to prevent.
@@ -131,11 +131,11 @@ def md_run_parser() -> argparse.ArgumentParser:
                              "(default: here)")
     parser.add_argument("-ng", "--number-of-groups", dest="number_of_groups", type=int,
                         default=None, metavar="N",
-                        help="how many replicas this launch coordinates, for REST2/rREST2. "
+                        help="how many replicas this launch coordinates, for REST2. "
                              "Checked against the configured state count and the MPI world size; "
                              "it never resizes the ladder")
     parser.add_argument("-groupfile", "--groupfile", default=None, metavar="FILE",
-                        help="for REST2/rREST2: an Amber-style group file, one group per line. "
+                        help="for REST2: an Amber-style group file, one group per line. "
                              "Rarely needed -- an ordinary homogeneous ladder shares one topology "
                              "and one System, and restating the same two paths N times is a way "
                              "to get one of them wrong")
@@ -336,7 +336,7 @@ def _check_file_roles(args) -> None:
     # They are two ways of saying which Hamiltonian each replica integrates, and they cannot both
     # be right. `-s` is ONE serialised System for the whole launch, which is what a stage, an AIS
     # campaign and a homogeneous ladder have. A group file names one System PER LINE, which is
-    # what a REST2/rREST2 ladder has now that the rungs are scaled and serialised at build time
+    # what a REST2 ladder has now that the rungs are scaled and serialised at build time
     # (`remd<n>/build_state<n>.xml`): there is no single System for `-s` to carry, and supplying
     # one would claim a single Hamiltonian for every rung -- the precise error the per-rung files
     # exist to prevent.
@@ -356,7 +356,7 @@ def _check_file_roles(args) -> None:
         raise SystemExit(
             "neither -s nor -groupfile was given, so nothing says which System to integrate.\n"
             "  Pass -s built.xml for a stage, an AIS campaign or a homogeneous ladder; pass "
-            "-groupfile for a REST2/rREST2 ladder, whose lines name each rung's own pre-scaled "
+            "-groupfile for a REST2 ladder, whose lines name each rung's own pre-scaled "
             "System.")
 
     # `-o` and `-log` are two artefacts for two readers. One file cannot be both, so an actual
@@ -404,16 +404,16 @@ def md_run_main(argv: list[str] | None = None) -> int:
     resolved = run_input.resolved
     protocol = resolved["protocol"]
     replicas = (int(resolved["rest2"]["number_of_replicas"])
-                if protocol in ("REST2", "rREST2") else None)
+                if protocol == "REST2" else None)
     # A LADDER READS -s ONLY FROM ITS GROUP FILE (0.5.4). Refused by name here, before -odir or
     # resolved.config exist; the runtime (`replica_main`, `preflight_ladder`) refuses it again for
     # the generated scripts that call it directly.
-    if protocol in ("REST2", "rREST2") and run_input.stage is None:
+    if protocol == "REST2" and run_input.stage is None:
         if args.system:
-            print(f"md-run: -s {args.system} was given. a REST2/rREST2 ladder reads -s only from its group file (0.5.4): each line names one saved scaled state, build/REST2/system_state<n>.xml, written by `md-openmm build-top --rest2-scaler`. Pass --groupfile -- `build-md` writes remd_groupfile.<segment> -- and no -s.", file=sys.stderr)
+            print(f"md-run: -s {args.system} was given. a REST2 ladder reads -s only from its group file (0.5.4): each line names one saved scaled state, build/REST2/system_state<n>.xml, written by `md-openmm build-top --rest2-scaler`. Pass --groupfile -- `build-md` writes remd_groupfile.<segment> -- and no -s.", file=sys.stderr)
             return 2
         if not args.groupfile:
-            print("md-run: no -groupfile was given. a REST2/rREST2 ladder reads -s only from its group file (0.5.4): each line names one saved scaled state, build/REST2/system_state<n>.xml, written by `md-openmm build-top --rest2-scaler`. Pass --groupfile -- `build-md` writes remd_groupfile.<segment> -- and no -s.", file=sys.stderr)
+            print("md-run: no -groupfile was given. a REST2 ladder reads -s only from its group file (0.5.4): each line names one saved scaled state, build/REST2/system_state<n>.xml, written by `md-openmm build-top --rest2-scaler`. Pass --groupfile -- `build-md` writes remd_groupfile.<segment> -- and no -s.", file=sys.stderr)
             return 2
     source = args.source_traj or (resolved["ais_source"]["trajectory"]
                                   if protocol == "AIS" else None)
@@ -433,7 +433,7 @@ def md_run_main(argv: list[str] | None = None) -> int:
                 number_of_groups=args.number_of_groups,
                 output=args.output, log=args.log, cpu=bool(args.cpu),
                 device=int(args.device) if args.device is not None else None)
-        elif protocol in ("REST2", "rREST2") and run_input.stage is None:
+        elif protocol == "REST2" and run_input.stage is None:
             checked = preflight_ladder(
                 topology=args.topology, system=args.system, replicas=replicas,
                 coordinates=args.coordinates, groupfile=args.groupfile,
@@ -464,7 +464,7 @@ def md_run_main(argv: list[str] | None = None) -> int:
         # command giving two contradictory instructions, and no way forward but `--overwrite`,
         # which throws away the finished stages. The same partition as the dispatch below.
         goes_to_stage_main = (run_input.stage is not None
-                              or protocol not in ("REST2", "rREST2", "AIS"))
+                              or protocol not in ("REST2", "AIS"))
         if checked is not None and checked.inventory is not None and not goes_to_stage_main:
             check_existing_outputs(checked.inventory, overwrite=bool(args.overwrite),
                                    resume=bool(args.resume) or bool(args.check),
@@ -512,7 +512,7 @@ def md_run_main(argv: list[str] | None = None) -> int:
     # `min.in` to the replica executor, which had no coordinates and refused.
     if run_input.stage is not None:
         return _run_stages(args, resolved, run_input.stage, config_path)
-    if protocol in ("REST2", "rREST2"):
+    if protocol == "REST2":
         return _run_ladder(args, resolved, protocol, config_path)
     if protocol == "AIS":
         return _run_ais(args, resolved, config_path)
@@ -584,7 +584,7 @@ def _run_stages(args, resolved: dict[str, Any], stage: str | None, config_path: 
 
 
 def _run_ladder(args, resolved: dict[str, Any], protocol: str, config_path: Path) -> int:
-    """A REST2 or rREST2 ladder: one process per state, `-ng` checked against both."""
+    """A REST2 ladder: one process per state, `-ng` checked against both."""
     from ..remd.generated import ladder_from_resolved, replica_main
 
     ladder = ladder_from_resolved(resolved, protocol)

@@ -1,8 +1,8 @@
 # cMD — conventional molecular dynamics
 
 Ordinary MD: one system, one Hamiltonian, one trajectory. It is also the method that produces the
-*source ensembles* the other protocols consume — a fixed-τ cMD run at the ladder's top rung is how
-an rREST2 reservoir and an AIS source are generated.
+*source ensembles* the other protocols consume — a fixed-τ cMD run is how an AIS source is
+generated.
 
 
 ## The two example files beside this README
@@ -128,8 +128,8 @@ after a child consumed it is caught rather than becoming false ancestry.
 |---|---|---|
 | `stages.production_steps` | 2500000 | the length of the run. An integer step count, always |
 | `dynamics.timestep_fs` | `auto` | `auto` reads the built System's masses: 2 fs ordinary, 4 fs if HMR is present |
-| `dynamics.tau` | 0.0 | > 0 runs at one fixed rung of the REST2 ladder, which is how a reservoir or AIS source is made. A scaled run is NVT by construction |
-| `dynamics.phase_space_printout` | 0 | > 0 writes positions **and velocities**; required to generate an rREST2 reservoir |
+| `dynamics.tau` | 0.0 | > 0 runs at one fixed rung of the REST2 ladder, which is how an AIS source is made. It integrates the saved state `build/cMD/system_state0.xml` from `md-openmm build-top --rest2-scaler`. A scaled run is NVT by construction |
+| `dynamics.phase_space_printout` | 0 | > 0 writes positions **and velocities** of a scaled run: complete phase-space samples |
 | `reporting.crd_printout_solute` | 1000 | solute trajectory interval, in steps |
 
 ## Reporting and registration

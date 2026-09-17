@@ -666,7 +666,7 @@ protocols today**:
 
 | protocol | constraint tolerance |
 |---|---|
-| REST2 / rREST2 ladders | **1e-8**, set explicitly (`REST2Protocol.constraint_tolerance`) |
+| REST2 ladders | **1e-8**, set explicitly (`REST2Protocol.constraint_tolerance`) |
 | cMD stages, AIS paths | **1e-5**, OpenMM's integrator default |
 
 Stated rather than quietly reconciled. The ladder is tighter because an exchange compares reduced
@@ -766,7 +766,7 @@ masses. Under `auto` the decision is deferred to the moment the System is loaded
 | explicit > 3 fs | repartitioned | honoured |
 | explicit > 3 fs | ordinary hydrogens | **refused, before anything integrates** |
 
-The same rule serves cMD, REST2, rREST2 and AIS, and every log records the resolved value together
+The same rule serves cMD, REST2 and AIS, and every log records the resolved value together
 with its basis — `ordinary_masses`, `hmr_masses` or `explicit` — and the heaviest hydrogen mass the
 decision was made from. A number without its basis cannot be audited: 2 fs chosen by `auto` on an
 ordinary System and 2 fs written by hand on a repartitioned one are different decisions.

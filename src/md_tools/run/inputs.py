@@ -91,10 +91,6 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "state_trajectory": "rest2.state_trajectory",
         "rem_log": "rest2.rem_log",
         "neighbour_acceptance_report": "rest2.neighbour_acceptance_report",
-        "reservoir_enabled": "reservoir.enabled",
-        "reservoir_path": "reservoir.path",
-        "refresh_interval_exchanges": "reservoir.refresh_interval_exchanges",
-        "reservoir_velocities": "reservoir.velocities",
     },
     "AIS": {
         "number_of_paths": "ais.number_of_paths",
@@ -175,6 +171,12 @@ class RunInput:
     stage: str | None
     resolved: dict[str, Any]
     sections: tuple[str, ...]
+
+
+#: `&remd` keys of the ARCHIVED rREST2 reservoir. Refused by name rather than as unknown keys, so
+#: an old input is told where the method went instead of offered a near-miss spelling.
+ARCHIVED_REMD_KEYS = frozenset({"reservoir_enabled", "reservoir_path",
+                                "refresh_interval_exchanges", "reservoir_velocities"})
 
 
 def _coerce(section: str, key: str, raw: str, *, where: str) -> Any:
@@ -284,6 +286,11 @@ def parse_run_input(path: str | Path, *, source_trajectory: str | None = None,
         if not assignment:
             raise ConfigError(f"{where}: {stripped.strip()!r} is not `key = value`.")
         key, raw = assignment.group(1), assignment.group(2)
+        if current == "remd" and key in ARCHIVED_REMD_KEYS:
+            from ..build.md import RREST2_ARCHIVED
+
+            raise ConfigError(f"{where}: {key} configured rREST2's reservoir refresh. "
+                              f"{RREST2_ARCHIVED}")
         if key not in SECTION_KEYS[current]:
             raise ConfigError(f"{where}: unknown key {key!r} in &{current}.{_suggest(current, key)}")
         if key in values[current]:

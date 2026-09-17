@@ -3,7 +3,7 @@
 
 Called as a function by `md_tools.remd.generated`, not as a command: MD-tools
 installs exactly one executable, `md-openmm`, and this is reached through the
-`REST2.py` / `rREST2.py` that `md-openmm build-md` generates.
+`REST2.py` that `md-openmm build-md` generates.
 
 Amber has `pmemd -i in -p prmtop -c rst -o out -x nc -r rst` for a single system and
 `pmemd.MPI -ng N -groupfile groups` for a coordinated set of them. This is the same idea with the
@@ -16,11 +16,6 @@ same executable:
               -o REST2/rest2.out -x REST2/rest2.nc -r REST2/restart.json \\
               --checkpoint REST2/rest2_checkpoint.nc
 
-    mpiexec -n 6 python rREST2.py -p built.pdb -s built.xml \\
-              --exchange-rule rREST2/rrest2_exchange.py --reservoir rREST2/reservoir.yaml \\
-              -o rREST2/rrest2.out -x rREST2/rrest2.nc -r rREST2/restart.json \\
-              --checkpoint rREST2/rrest2_checkpoint.nc
-
 There is no second executable. A method is a protocol file plus, when the transitions differ, an
 exchange-rule file -- not a new command, a new flag namespace and a new set of help text to keep
 consistent with this one.
@@ -28,7 +23,7 @@ consistent with this one.
 WHAT THIS PROGRAM DECIDES
     Paths, group parsing, mode validation, MPI coordination, output refusal, and which protocol
     and rule files to load. Nothing scientific: no force field, no ladder, no temperature, no step
-    count, no reservoir policy. Those are visible in the Python protocol it runs.
+    count. Those are visible in the Python protocol it runs.
 
 THE GROUP FILE
     Plain text, one group per line, parsed with `shlex`. It is NEVER evaluated by a shell: a
@@ -85,7 +80,7 @@ GROUP_FIELDS = {
 
 #: Flags that describe the coordinated RUN and therefore may not appear on a group line.
 RUN_LEVEL_FLAGS = {"-o", "--output", "-x", "--trajectory", "-r", "--restart", "--checkpoint",
-                   "-ng", "--groupfile", "--exchange-rule", "--reservoir"}
+                   "-ng", "--groupfile", "--exchange-rule"}
 
 #: Written by the protocol, never by this program, and only once its outputs exist.
 COMPLETION_MARKER = "run_status: completed"
@@ -364,8 +359,6 @@ def _parse(argv):
     parser.add_argument("--exchange-rule", dest="exchange_rule", default=None,
                         help="a Python file defining the transition rule; the built-in "
                              "neighbouring REST2 rule is used when omitted")
-    parser.add_argument("--reservoir", dest="reservoir", default=None,
-                        help="a prepared reservoir manifest, for rules that need one")
     parser.add_argument("--resume", action="store_true",
                         help="GROUPED ONLY: continue a coordinated run that stopped short of its "
                              "budget, in place")
@@ -446,7 +439,6 @@ def validate(files, arguments, *, rank=0, groups=None):
             "and no preflight, and nothing would have checked the platform, the ensemble or the "
             "outputs. `md-openmm md-run` and the generated `run.sh` both pass one")
         for flag, value in (("--exchange-rule", arguments.exchange_rule),
-                            ("--reservoir", arguments.reservoir),
                             ("--rem", getattr(files, "rem", None))):
             if value:
                 problems.append(f"{flag} applies to a coordinated run and needs --groupfile")
@@ -722,8 +714,6 @@ def run_grouped(files, arguments, groups, *, prepared=None):
         else:
             solute_indices = list(range(base_system.getNumParticles()))
 
-    # The reservoir is opened by the driver, which owns the MPI coordinator: preparation happens
-    # once, on rank 0, behind a barrier, and every rank then reads the same prepared file.
     run = ReplicaRun(
         protocol=protocol,
         # `.get`, not `[...]`: an extension's group file carries no `-c`, because `--extend-from`
@@ -739,7 +729,6 @@ def run_grouped(files, arguments, groups, *, prepared=None):
         base_system=base_system, topology=topology,
         solute_indices=solute_indices, excluded_bonds=excluded_bonds,
         rule_path=arguments.exchange_rule,
-        reservoir_declaration=arguments.reservoir,
         platform=getattr(protocol, "platform", None),
         # `--cpu` reaches the driver through the protocol file's `platform` field, which is the
         # only channel a generated protocol has. The platform itself comes from machine.openmm;
@@ -861,13 +850,6 @@ def _print_grouped_summary(record, protocol):
         steps = int(record.get("steps_completed") or 0)
         if steps:
             print(f"#   per step              {elapsed / steps * 1000.0:.4f} ms")
-    if "reservoir" in report:
-        r, stats_r = report["reservoir"], stats["reservoir"]
-        print(f"# reservoir refreshes   : {r['accepted']}/{r['attempts']} at state(s) "
-              f"{r['states_refreshed']}, {stats_r['distinct_frames_used']} distinct sample(s) "
-              f"from source step(s) {stats_r['source_steps_used'][:6]}")
-        print(f"#   velocity policy      : "
-              f"{record.get('reservoir', {}).get('velocity_policy')}")
     print("# ---------------------------------------------------------------------------")
 
 
@@ -1033,8 +1015,6 @@ def _announce(arguments, files, groups, rank, size):
     print(f"# mpi                : rank {rank}/{size}")
     print(f"# exchange rule      : "
           f"{Path(arguments.exchange_rule).name if arguments.exchange_rule else 'built-in neighbouring'}")
-    print(f"# reservoir          : "
-          f"{Path(arguments.reservoir).name if arguments.reservoir else 'none'}")
     print(f"# analysis storage   : {Path(files.trajectory).name}")
     print(f"# checkpoint         : "
           f"{Path(files.checkpoint).name if files.checkpoint else 'none'}")

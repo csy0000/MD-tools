@@ -21,7 +21,7 @@ from md_tools.build.strict import ConfigError
 DOCS = Path(__file__).resolve().parents[1] / "docs"
 METHODS = DOCS / "openmm_methods"
 REGISTER = DOCS / "data_register"
-PROTOCOLS = ("cMD", "REST2", "rREST2", "AIS")
+PROTOCOLS = ("cMD", "REST2", "AIS")  # rREST2 is archived (0.5.4)
 
 
 # --- the method examples --------------------------------------------------------------------
@@ -44,7 +44,6 @@ def test_each_documented_example_resolves_and_selects_its_protocol(protocol):
 _REQUIRED = {
     "cMD": "",
     "REST2": "",
-    "rREST2": "reservoir:\n  enabled: true\n  path: reservoir.nc\n",
     "AIS": "ais_source:\n  trajectory: source.nc\n",
     "umbrella": ("umbrella:\n  file: windows.yaml\n"
                  "collective_variables:\n  file: cv.yaml\n  interval_steps: 1000\n"),
@@ -208,7 +207,7 @@ def test_no_internal_documentation_link_is_dangling():
 
 
 def test_the_retired_replica_exchange_page_is_gone_and_not_referenced():
-    """Its content moved into the REST2 and rREST2 pages; two authorities is the failure."""
+    """Its content moved into the method pages; two authorities is the failure."""
     assert not (DOCS / "replica-exchange.md").exists()
     for page in sorted(DOCS.rglob("*.md")) + [DOCS.parent / "README.md"]:
         if page.parts[-2:] == ("release-notes", "v0.5.0.md"):

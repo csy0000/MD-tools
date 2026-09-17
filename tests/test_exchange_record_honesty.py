@@ -34,7 +34,7 @@ def test_the_flag_is_derived_from_the_matrix_rather_than_hardcoded():
     statements, or it polices its own documentation.
     """
     source = inspect.getsource(driver_module)
-    exchange = source[source.index("def _exchange"):source.index("def _apply_reservoir")]
+    exchange = source[source.index("def _exchange"):source.index("def _write_rem_log")]
     statements = "\n".join(line for line in exchange.splitlines()
                            if not line.lstrip().startswith("#"))
 

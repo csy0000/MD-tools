@@ -1,4 +1,7 @@
-"""The corrections this branch makes to the owned REST2/rREST2 runtime.
+"""The corrections this branch makes to the owned REST2 runtime.
+
+rREST2 is archived (0.5.4); its velocity-policy cases moved to
+archive/rREST2/tests/test_rest2_phase_space_corrections.py.
 
 Each test names the defect it pins. They are written so that they FAIL against the previous
 implementation: a passing run here is evidence the specific behaviour changed, not that the
@@ -226,30 +229,6 @@ def test_the_solute_stream_is_its_own_file_with_its_own_completion_marker(tmp_pa
     assert storage.solute_path(path).exists(), "the solute stream is a file of its own"
 
 
-# --- 4/5. stored velocity is the default; Maxwell is an explicit opt-in ------------------------
-
-def test_stored_is_the_default_velocity_policy():
-    """The probability-one acceptance assumes the recorded momentum is installed unchanged, so
-    redrawing must be a decision someone made, not what happens when nothing is said."""
-    from md_tools.remd import reservoir as rrest2_reservoir
-    assert rrest2_reservoir.DEFAULT_VELOCITY_POLICY == "stored"
-    assert set(rrest2_reservoir.VELOCITY_POLICIES) == {"stored", "maxwell"}
-
-
-def test_an_unknown_velocity_policy_is_refused_rather_than_defaulted(tmp_path):
-    from md_tools.remd import reservoir as rrest2_reservoir
-    declaration = tmp_path / "reservoir.yaml"
-    declaration.write_text(
-        "format: md-tools-reservoir-request/v2\nvelocity_policy: whatever\n"
-        "weighting: boltzmann\nensemble: NVT\nprepared_directory: reservoir\n"
-        "refresh_interval_exchanges: 1\nrandom_seed: 1\n"
-        "source:\n  phase_space: nowhere.nc\n  frames: 1\n", encoding="utf-8")
-    with pytest.raises(rrest2_reservoir.ReservoirError) as caught:
-        rrest2_reservoir.PreparedReservoir.open(
-            declaration, protocol=None, topology_path=None, periodic=False, system=None)
-    assert "whatever" in str(caught.value) and "stored" in str(caught.value)
-
-
 # --- 10. extension builds on the budget the run reached ----------------------------------------
 
 def test_extending_twice_adds_to_the_budget_each_time():
@@ -296,7 +275,6 @@ def test_a_marker_ahead_of_its_data_is_refused(tmp_path):
 # --- a stated platform must reach the runtime -------------------------------------------------
 
 
-
 def test_the_platform_is_not_part_of_the_scientific_identity():
     """Physics is what a continuation must agree with. Resuming on another machine's platform is
     legitimate, so the platform is carried but never compared."""
@@ -318,8 +296,6 @@ def test_the_generated_replica_protocol_states_its_platform():
     ladder = {"protocol": "REST2", "solvent": "implicit", "n_states": 2, "tau_max": 0.5,
               "exchange_interval_steps": 1000, "number_of_exchanges": 10,
               "state_trajectory": True, "rem_log": True, "neighbour_acceptance_report": True,
-              "reservoir": {"enabled": False, "path": None, "velocities": "resample",
-                            "refresh_interval_exchanges": 1},
               "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "pressure_bar": 1.0,
                            "friction_per_ps": 1.0, "barostat_interval_steps": 25,
                            "restraint_kcal_per_mol_A2": 1.0, "seed": 1, "platform": "CPU",

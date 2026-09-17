@@ -64,7 +64,6 @@ include = ["md_tools*"]
 "share/md-tools/configs/md" = [
     "configs/md/cMD.config",
     "configs/md/REST2.config",
-    "configs/md/rREST2.config",
     "configs/md/AIS.config",
 ]
 

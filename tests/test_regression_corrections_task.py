@@ -227,7 +227,7 @@ def test_the_retired_dynamics_platform_key_is_rejected_with_a_migration_message(
 
 
 def test_no_shipped_protocol_configuration_states_a_platform():
-    for name in ("cMD", "REST2", "rREST2", "AIS"):
+    for name in ("cMD", "REST2", "AIS"):
         text = (REPO / "configs" / "md" / f"{name}.config").read_text(encoding="utf-8")
         document = yaml.safe_load(text)
         assert "platform" not in (document.get("dynamics") or {}), name

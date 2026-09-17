@@ -31,9 +31,10 @@ import pytest
 
 from .conftest import REPO_ROOT
 
-METHODS = ("cMD", "REST2", "rREST2", "AIS", "umbrella")
+#: rREST2 is archived (0.5.4); its example files moved to archive/rREST2/docs/.
+METHODS = ("cMD", "REST2", "AIS", "umbrella")
 #: The production stage each method's `example.in` shows -- the one that does the sampling.
-PRODUCTION_STAGE = {"cMD": "cMD.in", "REST2": "REST2.in", "rREST2": "rREST2.in",
+PRODUCTION_STAGE = {"cMD": "cMD.in", "REST2": "REST2.in",
                     "AIS": "AIS.in", "umbrella": "umbrella.in"}
 
 

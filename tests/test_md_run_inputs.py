@@ -159,7 +159,7 @@ def test_a_semantic_error_is_reported_against_the_file_that_was_written():
 
 # --- the round-trip -------------------------------------------------------------------------
 
-@pytest.mark.parametrize("protocol", ["cMD", "REST2", "rREST2", "AIS"])
+@pytest.mark.parametrize("protocol", ["cMD", "REST2", "AIS"])
 def test_every_generated_input_resolves_to_the_resolved_config_beside_it(protocol, tmp_path):
     """The round trip, now across the split between a SHARED input and a PER-RUN resolution.
 
@@ -219,7 +219,7 @@ def test_an_input_names_the_stage_the_script_of_the_same_name_runs(tmp_path):
              "cMD": out / "cMD.py"}
     seen = set()
     for path in (tmp_path / "input").glob("*.in"):
-        if path.stem in ("AIS", "REST2", "rREST2"):
+        if path.stem in ("AIS", "REST2"):
             continue
         stage = parse_run_input(path).stage
         assert stage is not None, path.name
@@ -346,7 +346,7 @@ def test_the_input_language_can_express_every_field_of_the_resolved_model():
 
     reachable = {target for keys in SECTION_KEYS.values() for target in keys.values()
                  if not target.startswith("_")}
-    for protocol in ("cMD", "REST2", "rREST2", "AIS", "umbrella"):
+    for protocol in ("cMD", "REST2", "AIS", "umbrella"):
         resolved = resolve_md_config(REPO / "configs" / "md" / f"{protocol}.config")
         for name, block in resolved.items():
             if isinstance(block, dict):

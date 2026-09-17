@@ -5,7 +5,7 @@ registering MD datasets.
 
 One executable, `md-openmm`, and five commands. It builds a solvated, parameterised OpenMM system
 from a structure; generates readable entry points and Amber-like inputs for a chosen protocol —
-ordinary MD, REST2, rREST2, umbrella sampling or annealed importance sampling; runs them on CUDA,
+ordinary MD, REST2, umbrella sampling or annealed importance sampling; runs them on CUDA,
 under `mpirun` when the protocol is parallel; moves a finished run into managed storage as a
 verified, immutable dataset; and exports one as a bundle that runs on OpenMM alone, with nothing
 of this package in it.
@@ -122,7 +122,7 @@ A REST2 ladder, AIS, the flag table, the `.in` language and the MPI rules are in
 ```text
 configs/machine/user.config.example        identity, $MD_DATA and the machine's OpenMM defaults
 configs/sys/build-top.config               force fields, solvent, box, ions, constraints, HMR
-configs/md/{cMD,REST2,rREST2,AIS,umbrella}.config   protocol, stage lengths, reporting, CVs
+configs/md/{cMD,REST2,AIS,umbrella}.config   protocol, stage lengths, reporting, CVs
 ```
 
 Every file is YAML despite the `.config` suffix, unknown keys are refused with a suggestion, and

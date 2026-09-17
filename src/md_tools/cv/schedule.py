@@ -68,7 +68,7 @@ def observation_steps(total_steps: int, interval_steps: int, *, where: str = "th
 def check_divides(interval_steps: int, span: int, *, where: str, what: str) -> None:
     """`interval_steps` divides `span`, or an explanation of why that is required.
 
-    The REST2/rREST2 and AIS cadences are stated against something other than a stage length --
+    The REST2 and AIS cadences are stated against something other than a stage length --
     the exchange interval, the switching length -- but the requirement and the reason are the
     same, so they share the message rather than each inventing one.
     """

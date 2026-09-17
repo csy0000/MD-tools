@@ -28,7 +28,6 @@ from md_tools.run.inputs import SECTION_KEYS, parse_run_input
 BODIES = {
     "cMD": "protocol: cMD\n",
     "REST2": "protocol: REST2\n",
-    "rREST2": ("protocol: rREST2\nreservoir:\n  enabled: true\n  path: reservoir.nc\n"),
     "AIS": "protocol: AIS\nais_source:\n  trajectory: source.nc\n",
     "umbrella": ("protocol: umbrella\numbrella:\n  file: windows.yaml\n"
                  "collective_variables:\n  file: cv.yaml\n  interval_steps: 1000\n"),

@@ -54,8 +54,8 @@ micromamba create -y -p ~/software/md-stack/envs/openmm-env -f environment.yml
 ```
 
 That installs Python 3.12, OpenMM 8.6, OpenFF, AmberTools, ParmEd, RDKit, MDTraj, OpenMMTools and
-NetCDF4 — everything the five commands import — plus `mpi4py` and `openmpi` for multi-rank REST2,
-rREST2 and AIS, and a `cuda-version` pin.
+NetCDF4 — everything the five commands import — plus `mpi4py` and `openmpi` for multi-rank REST2
+and AIS, and a `cuda-version` pin.
 
 **One file, for every machine.** There used to be a second, CPU-only one for CI; they were merged
 because two descriptions of "the environment MD-tools is tested against" drifted apart. CI

@@ -1,4 +1,4 @@
-"""REST2 and rREST2 CV cost across TWO consecutive interruptions.
+"""REST2 CV cost across TWO consecutive interruptions.
 
 WHY TWO
 
@@ -68,17 +68,7 @@ collective_variables:
 
 from .conftest import ladder_group_file  # noqa: E402
 
-def _reservoir(root: Path, *, frames=6, tau_max=0.5):
-    """Reuse the pre-refresh test's builder so both files agree what a reservoir is."""
-    from tests.test_rrest2_pre_refresh_cv import _reservoir as build
-
-    build(root, frames=frames, tau_max=tau_max)
-
-
-@pytest.fixture(scope="module", params=[
-    "REST2",
-    pytest.param("rREST2", marks=pytest.mark.skip(
-        reason="rREST2 is archived for 0.5.4; removed with the archive"))])
+@pytest.fixture(scope="module", params=["REST2"])
 def project(request, tmp_path_factory):
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
@@ -107,10 +97,6 @@ def project(request, tmp_path_factory):
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": CV_EVERY},
         "dynamics": {"seed": 20260904},
     }
-    if protocol == "rREST2":
-        _reservoir(root)
-        document["reservoir"] = {"enabled": True, "path": "../reservoir.nc",
-                                 "refresh_interval_exchanges": 1, "velocities": "inherit"}
     (root / f"{protocol}.config").write_text(yaml.safe_dump(document), encoding="utf-8")
     # A ladder integrates SAVED scaled states (0.5.4): `build-md` refuses to generate one until
     # `build/REST2/` exists, as `md-openmm build-top --rest2-scaler` writes it.

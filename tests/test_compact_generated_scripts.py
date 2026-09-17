@@ -25,9 +25,6 @@ CONFIGS = {
     "cMD": {"protocol": "cMD", "solvent": "explicit", "stages": {"production_steps": 10}},
     "REST2": {"protocol": "REST2", "solvent": "explicit",
               "rest2": {"number_of_replicas": 2, "number_of_exchanges": 2}},
-    "rREST2": {"protocol": "rREST2", "solvent": "explicit",
-               "rest2": {"number_of_replicas": 2, "number_of_exchanges": 2},
-               "reservoir": {"enabled": True, "path": "./reservoir"}},
     "AIS": {"protocol": "AIS", "solvent": "explicit",
             "ais": {"number_of_paths": 2, "switching_steps": 20,
                     "observation_interval_steps": 10},
@@ -120,7 +117,7 @@ def test_no_generated_script_constructs_the_physics(generated):
     """No reporter, restraint, barostat, scaler or exchange rule is built in a generated file."""
     forbidden = ("CustomExternalForce", "MonteCarloBarostat", "LangevinMiddleIntegrator",
                  "Simulation(", "DCDReporter", "StateDataReporter", "TauSwitcher",
-                 "build_scaled_system", "NeighbouringExchangeRule", "ReservoirRefreshRule")
+                 "build_scaled_system", "NeighbouringExchangeRule")
     for name, directory in generated.items():
         for script in _scripts(directory):
             body = script.read_text(encoding="utf-8").split('"""', 2)[-1]

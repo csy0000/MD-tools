@@ -177,7 +177,7 @@ A world size that is neither 1 nor exactly the number of states is refused.
 ## Equilibrating every rung under its own tau
 
 By default the equilibration chain runs once, at τ = 0, and every rung starts from its end state.
-`rest2.equilibration_per_tau: true` (off by default, REST2 and rREST2 only) runs the
+`rest2.equilibration_per_tau: true` (off by default, REST2 only) runs the
 equilibration **on every rung, under that rung's own τ**, instead:
 
 | solvent | the τ = 0 chain (`run.sh`) | the ladder's `-c` | then, on every rung including τ = 0 |

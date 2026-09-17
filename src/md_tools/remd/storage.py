@@ -466,8 +466,13 @@ class ReplicaReporter:
         self.dataset.sync()
 
     def write_exchange(self, index, *, step, time_ps, state_to_walker, proposed, accepted, u,
-                       u_evaluated, reservoir=None):
-        """One committed exchange row. `last_exchange` is written last, deliberately."""
+                       u_evaluated):
+        """One committed exchange row. `last_exchange` is written last, deliberately.
+
+        The `reservoir_*` columns are part of the v2 file format and are still written, as -1:
+        they recorded rREST2's refreshes, and rREST2 is archived (0.5.4). Removing them would make
+        every existing v2 file a different format for no scientific gain.
+        """
         variables = self.dataset.variables
         variables["exchange_step"][index] = int(step)
         variables["exchange_time_ps"][index] = float(time_ps)
@@ -476,8 +481,7 @@ class ReplicaReporter:
         variables["accepted"][index, :, :] = np.asarray(accepted, dtype=np.int64)
         variables["u"][index, :, :] = np.asarray(u, dtype=float)
         variables["u_evaluated"][index, :, :] = np.asarray(u_evaluated, dtype=np.int8)
-        state, frame, source_step, outcome, velocity_seed = (
-            (-1, -1, -1, -1, -1) if reservoir is None else reservoir)
+        state, frame, source_step, outcome, velocity_seed = (-1, -1, -1, -1, -1)
         variables["reservoir_state"][index] = int(state)
         variables["reservoir_frame"][index] = int(frame)
         variables["reservoir_source_step"][index] = int(source_step)

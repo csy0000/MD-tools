@@ -604,7 +604,7 @@ def _add_refused_flags(parser, protocol_name: str) -> None:
     """
     parser.add_argument("-ng", "--number-of-groups", dest="number_of_groups", type=int,
                         default=None, metavar="N",
-                        help=f"refused for {protocol_name}: -ng groups replicas of a REST2/rREST2 "
+                        help=f"refused for {protocol_name}: -ng groups replicas of a REST2 "
                              f"ladder, and this has one process")
     parser.add_argument("-groupfile", "--groupfile", dest="groupfile", default=None,
                         metavar="FILE",
@@ -903,7 +903,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
               f"its committed checkpoint automatically -- that is the cMD contract, and "
               f"requiring a flag for it would mean a plain re-run silently discarded committed "
               f"work. Re-run the same command to continue, or pass --overwrite to start over. "
-              f"(--resume remains a REST2, rREST2 and AIS flag.)", file=sys.stderr)
+              f"(--resume remains a REST2 and AIS flag.)", file=sys.stderr)
         return 2
 
     if args.check:

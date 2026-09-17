@@ -1,4 +1,4 @@
-"""Drive a REST2 / rREST2 ladder from a generated script.
+"""Drive a REST2 ladder from a generated script.
 
 The science here is not new and is not re-derived. The Hamiltonian scaling, the exchange
 algorithm, the fixed state trajectories, the `rem.log` projection, the neighbouring-pair
@@ -99,64 +99,6 @@ protocol = REST2Protocol(
     precision=None,
 )
 '''
-
-
-def reservoir_declaration_text(ladder: dict[str, Any], out: Path) -> str:
-    """Turn the config's reservoir block into the declaration the runtime reads, AS TEXT.
-
-    It returns text and writes nothing. It used to write `reservoir.yaml` itself, and it was
-    called by EVERY rank -- so under `mpirun -n 8` eight processes truncated and rewrote one
-    file while other ranks were reading it. It goes through the same rank-0-writes,
-    everyone-verifies path as the other helpers now.
-
-    `reservoir.path` names a PHASE-SPACE file: complete samples with positions, velocities and
-    box, which is what the Boltzmann contract requires and what a plain trajectory cannot supply.
-    Such a file is produced by a fixed-tau cMD run at the ladder's top rung
-    (`dynamics.tau` with `dynamics.phase_space_printout`).
-
-    The frame count and time window are read FROM the file rather than restated in configuration,
-    so a declaration cannot claim a window the reservoir does not contain.
-    """
-    import yaml
-
-    from ..md.phase_space import PhaseSpaceReader
-    from ..remd.reservoir import DECLARATION_FORMAT
-
-    block = ladder["reservoir"]
-    source = Path(block["path"]).expanduser().resolve()
-    if not source.is_file():
-        raise SystemExit(
-            f"reservoir.path {source} does not exist. It must name a phase-space file holding "
-            f"complete samples (positions, velocities and box) generated at the ladder's top "
-            f"rung -- run a cMD with dynamics.tau set to the ladder's tau_max and "
-            f"dynamics.phase_space_printout set.")
-    reader = PhaseSpaceReader(str(source))
-    try:
-        frames = int(reader.n_frames)
-        times = [float(value) for value in reader.times()]     # `times` is a method, not a property
-    finally:
-        reader.close()
-    if frames < 1:
-        raise SystemExit(f"{source} holds no frames; there is nothing to refresh from.")
-
-    declaration = {
-        "format": DECLARATION_FORMAT,
-        "weighting": "boltzmann",
-        "ensemble": "NVT",
-        "prepared_directory": "reservoir",
-        # `stored` installs the recorded momentum, which is what makes the drawn sample a sample
-        # of the same distribution. `maxwell` redraws it and must be asked for deliberately.
-        "velocity_policy": "stored" if block.get("velocities") == "inherit" else "maxwell",
-        "refresh_interval_exchanges": int(block.get("refresh_interval_exchanges", 1)),
-        "random_seed": int(ladder["dynamics"]["seed"]),
-        "source": {
-            "phase_space": os.path.relpath(source, out.parent),
-            "start_time_ps": float(min(times)) if times else 0.0,
-            "end_time_ps": float(max(times)) if times else 0.0,
-            "frames": frames,
-        },
-    }
-    return yaml.safe_dump(declaration, sort_keys=False)
 
 
 def _per_tau_line(ladder: dict[str, Any]) -> str:
@@ -294,7 +236,7 @@ def replica_parser(description: str = "one coordinated replica-exchange ladder")
     # `remd.executor.resolve`'s grouped exemption could be reached, and `run.sh` -- the documented
     # way to run a ladder -- died on every rank with "the following arguments are required:
     # -s/--system". Relaxing it in `md-run` alone was not enough, because the generated
-    # `REST2.py` and `rREST2.py` call `replica_main` DIRECTLY: a refusal that lives only in the
+    # `REST2.py` calls `replica_main` DIRECTLY: a refusal that lives only in the
     # outer command is a property of that command rather than of the ladder.
     parser.add_argument("-s", "--system", default=None, metavar="XML",
                         help="REFUSED for a ladder: its states are named, one per line, in "
@@ -483,14 +425,14 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     # `-odir`, a helper, a log or the run state is touched (user, 2026-09-16, for 0.5.4). A ladder's
     # states are saved scaled files, one per group line; a single `-s` could only be scaled in
     # memory, which is the second derivation of the Hamiltonian 0.5.4 removes. Here as well as in
-    # `md-run` because this function IS the ladder's entry point: the generated `REST2.py` and
-    # `rREST2.py` call it directly.
+    # `md-run` because this function IS the ladder's entry point: the generated `REST2.py` calls
+    # it directly.
     if args.system:
-        print(f"{protocol_name}: -s {args.system} was given. a REST2/rREST2 ladder reads -s only from its group file (0.5.4): each line names one saved scaled state, build/REST2/system_state<n>.xml, written by `md-openmm build-top --rest2-scaler`. Pass --groupfile -- `build-md` writes remd_groupfile.<segment> -- and no -s. Nothing was written.",
+        print(f"{protocol_name}: -s {args.system} was given. a REST2 ladder reads -s only from its group file (0.5.4): each line names one saved scaled state, build/REST2/system_state<n>.xml, written by `md-openmm build-top --rest2-scaler`. Pass --groupfile -- `build-md` writes remd_groupfile.<segment> -- and no -s. Nothing was written.",
               file=sys.stderr)
         return 2
     if not args.groupfile:
-        print(f"{protocol_name}: no --groupfile was given. a REST2/rREST2 ladder reads -s only from its group file (0.5.4): each line names one saved scaled state, build/REST2/system_state<n>.xml, written by `md-openmm build-top --rest2-scaler`. Pass --groupfile -- `build-md` writes remd_groupfile.<segment> -- and no -s. Nothing was written.",
+        print(f"{protocol_name}: no --groupfile was given. a REST2 ladder reads -s only from its group file (0.5.4): each line names one saved scaled state, build/REST2/system_state<n>.xml, written by `md-openmm build-top --rest2-scaler`. Pass --groupfile -- `build-md` writes remd_groupfile.<segment> -- and no -s. Nothing was written.",
               file=sys.stderr)
         return 2
 
@@ -518,7 +460,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
         return 2
 
     # THE LAUNCH IS VALIDATED BEFORE `-odir` EXISTS. This runs here, in the shared runtime, and
-    # not only in `md-openmm md-run`, because the generated `REST2.py` and `rREST2.py` call this
+    # not only in `md-openmm md-run`, because the generated `REST2.py` calls this
     # function directly -- a guard that lives in the outer command is a property of that command
     # rather than of the ladder.
     #
@@ -547,13 +489,8 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
             # scaled-System construction, all before `solute.yaml`, `_protocol.py` or the group
             # file exists. An unclassifiable force used to surface with three files on disk.
             timestep_fs=ladder["dynamics"]["timestep_fs"],
-            # rREST2 writes `reservoir.yaml` into the run directory and every rank reads it a
-            # moment later. It was in no inventory, so a launch that found a stale one from
-            # another ladder would have drawn its probability-one transfers from it.
-            reservoir=bool(ladder.get("reservoir", {}).get("enabled")),
-            # The ladder description and the output directory, so the reservoir declaration is
-            # BUILT AND VALIDATED HERE -- before `-odir` exists. It used to be built at helper
-            # publication time, below, with the run directory already created.
+            # The ladder description and the output directory, so everything the launch will
+            # publish is BUILT AND VALIDATED HERE -- before `-odir` exists.
             ladder=ladder, out_dir=out,
             tau=float(ladder["tau_max"]))
     except PreflightError as refusal:
@@ -697,16 +634,6 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     solute_text = _yaml_text(checked.notes["solute_document"])
     protocol_text = protocol_file_text(ladder)
     helpers = {solute_yaml: solute_text, protocol_file: protocol_text}
-    reservoir_file = None
-    if ladder.get("reservoir", {}).get("enabled"):
-        # CONSUMED from the preflight, which built this text and validated the source before the
-        # run directory existed. It used to call `reservoir_declaration_text(ladder, out)` right
-        # here -- opening the phase-space file for the first time with `-odir` already created,
-        # so a reservoir that was missing, empty or unreadable was discovered too late to say
-        # nothing had been started. Rank 0 still publishes it alone and every rank verifies the
-        # bytes, which is what the digest below is for.
-        reservoir_file = out / "reservoir.yaml"
-        helpers[reservoir_file] = checked.reservoir_declaration
 
     if args.verify_only:
         from ..remd import executor as replica_executor
@@ -753,8 +680,8 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
                 # checkpoint tree, so the ladder can run the same one-transaction replacement
                 # the cMD stage path already runs over its own inventory.
                 #
-                # BEFORE the helpers are published: `solute.yaml`, `_protocol.py`, the group file
-                # and `reservoir.yaml` are owned outputs too, and replacing after writing them
+                # BEFORE the helpers are published: `solute.yaml` and `_protocol.py` are
+                # owned outputs too, and replacing after writing them
                 # would delete what this launch had just prepared.
                 from ..run.overwrite import replace_owned_inventory
 
@@ -806,8 +733,6 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     ]
     if ladder.get("rem_log", True):
         executor_argv += ["--rem", str(out / "rem.log")]
-    if reservoir_file is not None:
-        executor_argv += ["--reservoir", str(reservoir_file)]
     if args.resume:
         executor_argv.append("--resume")
     if args.verify_only:
@@ -978,7 +903,6 @@ def ladder_from_resolved(resolved: dict[str, Any], protocol: str) -> dict[str, A
         "state_trajectory": resolved["rest2"]["state_trajectory"],
         "rem_log": resolved["rest2"]["rem_log"],
         "neighbour_acceptance_report": resolved["rest2"]["neighbour_acceptance_report"],
-        "reservoir": dict(resolved["reservoir"]),
         "dynamics": dict(resolved["dynamics"]),
         "collective_variables": dict(resolved.get("collective_variables") or {}),
         # Torsion restraints, the SAME on every rung. Present only when declared, so a ladder
@@ -1006,7 +930,7 @@ def run_generated_remd(script: str | Path, *, protocol: str,
                        argv: list[str] | None = None) -> int:
     """Run the ladder described by the `resolved.config` beside this script.
 
-    The whole body of a generated REST2 or rREST2 file:
+    The whole body of a generated REST2 file:
 
         from md_tools.remd import run_generated_remd
         raise SystemExit(run_generated_remd(__file__, protocol="REST2"))

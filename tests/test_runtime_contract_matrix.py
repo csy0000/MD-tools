@@ -81,7 +81,7 @@ def test_a_flag_from_another_protocol_is_refused_by_name_before_any_output(
 
 # --- a continuation that is not there ------------------------------------------------------------
 
-@pytest.mark.parametrize("mode", ["split", "REST2", "rREST2"])
+@pytest.mark.parametrize("mode", ["split", "REST2"])
 def test_an_explicitly_named_missing_continuation_is_refused(mode, workspace, tmp_path,
                                                              good_config):
     """`-c` naming a file that does not exist used to be silently dropped.
@@ -769,7 +769,7 @@ def test_overwrite_replaces_the_ladder_outputs_the_executor_never_named(tmp_path
     inventory = _ladder_inventory(
         protocol="REST2", replicas=4, output=out / "REST2.out", log=out / "REST2.log",
         trajectory=out / "REST2.nc", restart=out / "restart.json",
-        checkpoint=out / "REST2.chk", groupfile=None, reservoir=False)
+        checkpoint=out / "REST2.chk", groupfile=None)
     for path in inventory.roles.values():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("previous run", encoding="utf-8")
@@ -973,7 +973,7 @@ def test_the_ladder_inventory_names_every_artefact_a_ladder_writes(tmp_path):
     """An output nothing names is an output nothing can check.
 
     A ladder writes far more than `-x`, `-r` and `-o`: a helper protocol, a solute selection, a
-    group file, a reservoir declaration, one report PER RANK, one trajectory per state, a
+    group file, one report PER RANK, one trajectory per state, a
     checkpoint generation tree, a rem log and a provenance record. Each one missing from the
     inventory is a file `--overwrite` leaves behind and existing-output checking cannot see -- so
     a two-state ladder run over a six-state one keeps four stale state trajectories and four
@@ -983,12 +983,12 @@ def test_the_ladder_inventory_names_every_artefact_a_ladder_writes(tmp_path):
 
     out = tmp_path / "REST2.out"
     inventory = _ladder_inventory(
-        protocol="rREST2", replicas=4, output=out, log=tmp_path / "REST2.log",
+        protocol="REST2", replicas=4, output=out, log=tmp_path / "REST2.log",
         trajectory=tmp_path / "REST2.nc", restart=tmp_path / "restart.json",
-        checkpoint=tmp_path / "REST2.chk", groupfile=None, reservoir=True)
+        checkpoint=tmp_path / "REST2.chk", groupfile=None)
     named = {path.name for path in inventory.roles.values()}
 
-    for required in ("reservoir.yaml", "solute.yaml", "_protocol.py", "rREST2.group",
+    for required in ("solute.yaml", "_protocol.py", "REST2.group",
                      "rem.log", "machine.yaml", "restart.json", "REST2.chk",
                      "REST2.checkpoints", "REST2.out", "REST2.log", "REST2.nc"):
         assert required in named, f"{required} is written and is in no inventory: {sorted(named)}"
@@ -1004,13 +1004,17 @@ def test_the_ladder_inventory_names_every_artefact_a_ladder_writes(tmp_path):
 
 
 def test_a_ladder_without_a_reservoir_does_not_claim_one(tmp_path):
-    """The other direction: naming a file the run never writes refuses a directory for nothing."""
+    """The other direction: naming a file the run never writes refuses a directory for nothing.
+
+    MIGRATED: no ladder writes a reservoir declaration since rREST2 was archived (0.5.4), so no
+    inventory may name `reservoir.yaml` at all."""
     from md_tools.run.preflight import _ladder_inventory
 
     inventory = _ladder_inventory(
         protocol="REST2", replicas=2, output=tmp_path / "REST2.out", log=None,
-        trajectory=None, restart=None, checkpoint=None, groupfile=None, reservoir=False)
+        trajectory=None, restart=None, checkpoint=None, groupfile=None)
     assert "reservoir_declaration" not in inventory.roles
+    assert "reservoir.yaml" not in {path.name for path in inventory.roles.values()}
 
 # --- the System and the group file are alternatives, never both ------------------------------------
 

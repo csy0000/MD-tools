@@ -119,7 +119,6 @@ nav:
           - Umbrella sampling: openmm_methods/umbrella/README.md
       - Enhanced sampling:
           - REST2: openmm_methods/REST2/README.md
-          - rREST2: openmm_methods/rREST2/README.md
           - AIS:
               - openmm_methods/AIS/README.md
               - Implementation: openmm_methods/AIS/AIS_implementation.md

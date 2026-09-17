@@ -57,7 +57,7 @@ def _make_legacy(path, rows=4, drop=(FIELD,)):
         reporter.write_exchange(
             index, step=(index + 1) * 500, time_ps=(index + 1) * 1.0, state_to_walker=[0, 1],
             proposed=ZERO, accepted=ZERO, u=np.full((2, 2), float(index)),
-            u_evaluated=np.ones((2, 2), dtype=np.int8), reservoir=None)
+            u_evaluated=np.ones((2, 2), dtype=np.int8))
     # A coherent run also has the frame streams, so `--verify-only` has something complete to
     # accept and the verification assertions below cannot pass for an unrelated reason.
     configurations = [Configuration(np.zeros((4, 3)), np.zeros((4, 3)), None) for _ in range(2)]
@@ -277,7 +277,7 @@ def test_a_current_file_gains_no_marker_no_event_and_no_history(tmp_path):
         identity={"n_states": 2}, metadata={})
     reporter.write_exchange(0, step=500, time_ps=1.0, state_to_walker=[0, 1], proposed=ZERO,
                             accepted=ZERO, u=np.zeros((2, 2)),
-                            u_evaluated=ZERO.astype(np.int8), reservoir=None)
+                            u_evaluated=ZERO.astype(np.int8))
     reporter.close()
 
     done = _migrate_in_subprocess(path, tmp_path=tmp_path)

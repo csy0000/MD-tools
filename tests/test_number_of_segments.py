@@ -49,7 +49,7 @@ def test_the_default_is_one_segment(tmp_path):
 def test_every_shipped_example_still_resolves_at_one_segment():
     """Adding a field must not change what any shipped configuration means."""
     root = Path(__file__).resolve().parents[1]
-    for name in ("cMD", "REST2", "rREST2", "AIS", "umbrella"):
+    for name in ("cMD", "REST2", "AIS", "umbrella"):
         for candidate in (root / "configs" / "md" / f"{name}.config",
                           root / "docs" / "openmm_methods" / name / "example.config"):
             if candidate.is_file():
@@ -97,11 +97,8 @@ def test_one_segment_of_a_zero_length_run_is_still_fine(tmp_path):
 
 # -- a ladder divides number_of_exchanges -------------------------------------------------------
 
-@pytest.mark.parametrize("protocol", ["REST2", "rREST2"])
-def test_a_ladder_divides_its_exchange_count_not_its_step_count(tmp_path, protocol):
-    body = f"protocol: {protocol}\nstages:\n  number_of_segments: 5\n"
-    if protocol == "rREST2":
-        body += "reservoir:\n  enabled: true\n  path: reservoir.nc\n"
+def test_a_ladder_divides_its_exchange_count_not_its_step_count(tmp_path):
+    body = "protocol: REST2\nstages:\n  number_of_segments: 5\n"
     resolved = _resolved(tmp_path, body)
     assert resolved["rest2"]["number_of_exchanges"] % 5 == 0
 

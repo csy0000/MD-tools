@@ -18,7 +18,7 @@ WHAT IS CHECKED, AND WHY EACH ONE
                                                      means the process is not in the world it
                                                      thinks it is in
     communicator size == -ng                         what was launched is what was asked for
-    -ng == replica count (REST2/rREST2)              one process per thermodynamic state
+    -ng == replica count (REST2)              one process per thermodynamic state
 
 All of it runs BEFORE any output directory, resolved configuration, log, Context or coordination
 file is created, so a launch that cannot work leaves nothing behind that could be mistaken for a

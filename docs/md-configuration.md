@@ -21,8 +21,7 @@ A key that a protocol does not read is refused rather than ignored, so this tabl
 | protocol | sections it reads |
 |---|---|
 | `cMD` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables` |
-| `REST2` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables`, `umbrella`, `rest2`, `reservoir` |
-| `rREST2` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables`, `umbrella`, `rest2`, `reservoir` |
+| `REST2` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables`, `umbrella`, `rest2` |
 | `AIS` | `top-level`, `dynamics`, `reporting`, `collective_variables`, `ais`, `ais_source` |
 | `umbrella` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables`, `umbrella` |
 
@@ -164,9 +163,9 @@ Resolved by `md-openmm build-md`. Unknown keys are refused by name rather than i
 
 #### `protocol`
 
-type: string · default: `cMD` · one of `cMD`, `REST2`, `rREST2`, `AIS`, `umbrella`
+type: string · default: `cMD` · one of `cMD`, `REST2`, `AIS`, `umbrella`
 
-cMD is plain molecular dynamics. REST2 adds a replica-exchange ladder in which only the solute's Hamiltonian is scaled. rREST2 adds a Boltzmann reservoir refresh of the hottest rung. AIS runs non-equilibrium switching paths from an EXISTING equilibrium source ensemble -- it has no minimisation or equilibration chain of its own, because its input is a trajectory you have already produced.
+cMD is plain molecular dynamics. REST2 adds a replica-exchange ladder in which only the solute's Hamiltonian is scaled. AIS runs non-equilibrium switching paths from an EXISTING equilibrium source ensemble -- it has no minimisation or equilibration chain of its own, because its input is a trajectory you have already produced.
 
 #### `solvent`
 
@@ -218,13 +217,13 @@ Positional restraint on solute heavy atoms during the restrained equilibration s
 
 type: number · default: `0.0` · minimum 0.0; maximum 0.95
 
-Fixed REST2 scaling for a cMD run. 0.0 (the default) is the unmodified physical Hamiltonian. A non-zero value runs cMD at ONE rung of the REST2 ladder -- the same scaling the ladder applies, held fixed -- which is how a Boltzmann reservoir for rREST2 is generated, and how a hot ensemble is produced without running an exchange. A scaled run is NVT by construction: it must sample the top rung's fixed-volume ensemble, so a barostat would sample the wrong distribution and is refused.
+Fixed REST2 scaling for a cMD run. 0.0 (the default) is the unmodified physical Hamiltonian. A non-zero value runs cMD at ONE rung of the REST2 ladder -- the same scaling the ladder applies, held fixed -- which is how a hot ensemble is produced without running an exchange. A scaled run is NVT by construction: it must sample the top rung's fixed-volume ensemble, so a barostat would sample the wrong distribution and is refused.
 
 #### `dynamics.phase_space_printout`
 
 type: integer · default: `0` · minimum 0; unit: steps
 
-Write a phase-space stream (positions, VELOCITIES and box) every N steps. 0 disables it. A reservoir needs complete samples including velocities, which a trajectory does not carry, so this is what a reservoir source is generated with.
+Write a phase-space stream (positions, VELOCITIES and box) every N steps. 0 disables it. A complete sample needs velocities, which a trajectory does not carry.
 
 #### `dynamics.seed`
 
@@ -270,7 +269,7 @@ Production length. 2,500,000 steps = 5 ns at 2 fs. This is the authoritative num
 
 type: integer · default: `1` · minimum 1
 
-How many SEGMENTS the production run is written as. 1, the default, is a single `prod1` segment and the historical behaviour. It SPLITS the production total rather than multiplying it: `production_steps` stays the whole run and each segment gets `production_steps / number_of_segments`, so raising this re-divides the same trajectory and never lengthens it. A value that does not divide exactly is refused with the arithmetic that would fix it, because a final short segment would make the last chunk incomparable with the others. On a REST2/rREST2 ladder there is no `production_steps`: production is `number_of_exchanges * exchange_interval_steps`, so the split is of `number_of_exchanges` and an exchange is never allowed to straddle two segments. Each segment writes its own files -- `solute_state<i>_prod<N>.nc`, `cv_state<i>_prod<N>.dat`, `restart_state<i>_prod<N>.json` -- so segments cannot overwrite one another. That was a real defect: every chunk of a five-chunk reference run wrote `_prod1`.
+How many SEGMENTS the production run is written as. 1, the default, is a single `prod1` segment and the historical behaviour. It SPLITS the production total rather than multiplying it: `production_steps` stays the whole run and each segment gets `production_steps / number_of_segments`, so raising this re-divides the same trajectory and never lengthens it. A value that does not divide exactly is refused with the arithmetic that would fix it, because a final short segment would make the last chunk incomparable with the others. On a REST2 ladder there is no `production_steps`: production is `number_of_exchanges * exchange_interval_steps`, so the split is of `number_of_exchanges` and an exchange is never allowed to straddle two segments. Each segment writes its own files -- `solute_state<i>_prod<N>.nc`, `cv_state<i>_prod<N>.dat`, `restart_state<i>_prod<N>.json` -- so segments cannot overwrite one another. That was a real defect: every chunk of a five-chunk reference run wrote `_prod1`.
 
 ### `reporting`
 
@@ -354,7 +353,7 @@ Relaxation run at EACH STATE'S OWN Hamiltonian before the first exchange attempt
 
 type: boolean · default: `false`
 
-Run the equilibration stages on EVERY RUNG, under that rung's own tau, instead of once at tau = 0. REST2 and rREST2 only; refused for any other protocol. Off by default. When true, the tau = 0 chain stops early: at minimisation under implicit solvent, and after its NPT stages under explicit solvent, which run once at tau = 0 to fix the box every rung then shares. Every rung -- tau = 0 included -- then runs eq_nvt_posres (restrained_nvt_steps), eq_nvt_posres_2 (restrained_npt_steps) and eq_nvt_free (unrestrained_npt_steps), all at fixed volume, from the ladder's starting state, each stage with its own seed per rung. The restraint is the stage chain's, on the same atoms at the same strength; the rung Systems the ladder propagates never carry it. Order: these stages, then `equilibration_steps`, then the first exchange. Neither is production. Stages of 0 steps are skipped, and all three at 0 is refused.
+Run the equilibration stages on EVERY RUNG, under that rung's own tau, instead of once at tau = 0. REST2 only; refused for any other protocol. Off by default. When true, the tau = 0 chain stops early: at minimisation under implicit solvent, and after its NPT stages under explicit solvent, which run once at tau = 0 to fix the box every rung then shares. Every rung -- tau = 0 included -- then runs eq_nvt_posres (restrained_nvt_steps), eq_nvt_posres_2 (restrained_npt_steps) and eq_nvt_free (unrestrained_npt_steps), all at fixed volume, from the ladder's starting state, each stage with its own seed per rung. The restraint is the stage chain's, on the same atoms at the same strength; the rung Systems the ladder propagates never carry it. Order: these stages, then `equilibration_steps`, then the first exchange. Neither is production. Stages of 0 steps are skipped, and all three at 0 is refused.
 
 #### `rest2.state_trajectory`
 
@@ -481,34 +480,6 @@ Umbrella sampling: restrain named collective variables and report them. Producin
 type: string or null · default: `null`
 
 Path to the restraint definition, resolved beside `resolved.config` -- the same rule `collective_variables.file` follows. A LIST of restraints does not fit a namelist `.in`, and inventing a packed-string encoding for one would make the most consequential line of an umbrella input the least readable. So the restraints live in their own YAML, referenced by path, exactly as the collective variables they name already do. Each entry names a CV from `collective_variables.file` and says how it is restrained -- see `md_tools.umbrella.load_umbrella_definition` for the schema and every way it is refused.
-
-### `reservoir`
-
-rREST2 reservoir. Ignored unless protocol is rREST2.
-
-#### `reservoir.enabled`
-
-type: boolean · default: `false`
-
-rREST2 only. Refresh the hottest rung from a pre-generated Boltzmann reservoir instead of propagating it.
-
-#### `reservoir.path`
-
-type: string or null · default: `null`
-
-Reservoir directory. Required when enabled.
-
-#### `reservoir.refresh_interval_exchanges`
-
-type: integer · default: `1` · minimum 1
-
-How often the hottest rung is refreshed from the reservoir, in exchange attempts.
-
-#### `reservoir.velocities`
-
-type: string · default: `resample` · one of `resample`, `inherit`
-
-Where a refreshed configuration's velocities come from. `resample` draws them from the Maxwell-Boltzmann distribution at the run temperature; `inherit` keeps the reservoir's own. Recorded explicitly because it is a provenance question, not a tuning knob.
 
 ## What a run writes
 

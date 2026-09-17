@@ -1,4 +1,4 @@
-"""Collective-variable series for a REST2/rREST2 ladder: one file per THERMODYNAMIC STATE.
+"""Collective-variable series for a REST2 ladder: one file per THERMODYNAMIC STATE.
 
 WHY PER STATE AND NOT PER WALKER
 

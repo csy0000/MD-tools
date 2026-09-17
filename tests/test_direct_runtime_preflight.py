@@ -1,7 +1,7 @@
 """The generated scripts refuse before touching the filesystem, exactly as `md-run` does.
 
 `md-openmm md-run` grew a shared preflight. The runtimes it calls did not have one, and the
-generated `min.py`, `md.py`, `REST2.py`, `rREST2.py` and `AIS.py` call those runtimes DIRECTLY --
+generated `min.py`, `md.py`, `REST2.py` and `AIS.py` call those runtimes DIRECTLY --
 so a generated project could create its output directory, its `.out`, its `.log`, `solute.yaml`,
 `_protocol.py` and a group file before discovering that the machine configuration was malformed or
 that CUDA could not open a Context.
@@ -131,11 +131,6 @@ def workspace(tmp_path_factory):
                   "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 5,
                             "number_of_exchanges": 2},
                   "reporting": reporting},
-        "rREST2": {"protocol": "rREST2", "solvent": "implicit", "stages": tiny,
-                   "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 5,
-                             "number_of_exchanges": 2},
-                   "reservoir": {"enabled": True, "path": "../reservoir.nc"},
-                   "reporting": reporting},
         "AIS": {"protocol": "AIS", "solvent": "implicit",
                 "ais": {"number_of_paths": 2, "switching_steps": 10,
                         "observation_interval_steps": 5},
@@ -166,53 +161,12 @@ def workspace(tmp_path_factory):
     frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
 
-    # A GENUINE PHASE-SPACE RESERVOIR, for exactly the reason the DCD above is genuine.
-    #
-    # The rREST2 declaration is now built and validated by the PREFLIGHT, before `-odir` exists,
-    # rather than at helper-publication time with the run directory already created. That means
-    # `--check` -- which is preflight and nothing else -- now opens this file, counts its frames
-    # and reads its time axis. A path that merely does not exist tested nothing once the check
-    # moved ahead of the output; it now correctly refuses.
-    from md_tools.md.phase_space import PhaseSpaceWriter
-    from md_tools.remd.generated import solute_document
-    from md_tools.rest2 import identity as hamiltonian_identity
-    from md_tools.run.preflight import check_scaling_plan, load_inputs
-
-    # The identity has to be the TOP RUNG's, because that is the distribution a refresh would
-    # draw from and the preflight now checks it. Built through the same helpers the ladder uses:
-    # restating it by hand would only prove the fixture and the checker agree about a dictionary.
-    loaded = load_inputs(str(root / "build" / "built.pdb"), str(root / "build" / "built.xml"))
-    document = solute_document(loaded.pdb.topology, loaded.system, route=None)
-    span = document.get("solute_atom_range")
-    if span and document.get("solute_atom_indices_are_contiguous", False):
-        indices = list(range(int(span[0]), int(span[1]) + 1))
-    else:
-        indices = list(range(int(document["n_solute_atoms"])))
-    excluded = [tuple(int(a) for a in pair)
-                for pair in (document.get("rest2") or {}).get("unscaled_central_bonds", [])]
-    _audit, top_rung = check_scaling_plan(loaded, solute_indices=indices,
-                                          excluded_bonds=excluded, tau=0.5, where="fixture")
-
-    positions = frames.xyz[0]
-    writer = PhaseSpaceWriter(
-        root / "reservoir.nc", n_atoms=positions.shape[0], periodic=False,
-        identity={"hamiltonian": hamiltonian_identity.identity_record(
-            top_rung, tau=0.5, temperature_k=300.0, ensemble="NVT",
-            solute_indices=indices, excluded_bonds=excluded)})
-    try:
-        for index in range(4):
-            writer.append(positions=positions, velocities=positions * 0.0, box=None,
-                          step=index * 5, time_ps=float(index))
-    finally:
-        writer.close()
-
     # THE STATE A LADDER'S GROUP FILE CONTINUES FROM. A ladder reads -s only from its group file
     # (0.5.4), and every line of the one `build-md` wrote names `-c eq/eq_3.xml`: without it each
     # launch below would be refused for the missing parent before reaching its own subject.
     from .conftest import write_starting_state
 
-    for name in ("REST2", "rREST2"):
-        write_starting_state(root, root / f"{name}-run1")
+    write_starting_state(root, root / "REST2-run1")
     return root
 
 
@@ -227,7 +181,6 @@ ENTRY = {
     # A ladder reads -s only from its group file (0.5.4), so it is launched with the one
     # `build-md` wrote rather than with -s.
     "REST2": ("REST2-run1/REST2.py", ["--groupfile", "remd_groupfile.1"]),
-    "rREST2": ("rREST2-run1/rREST2.py", ["--groupfile", "remd_groupfile.1"]),
     "AIS": ("AIS-run1/AIS.py", ["-source-traj", "../source.dcd"]),
 }
 MODES = sorted(ENTRY)
@@ -240,8 +193,8 @@ def _launch(workspace, mode, destination: Path, *extra, environment=None):
     shared `min/` -- which is what every generated `run.sh` types too.
     """
     script, needed = ENTRY[mode]
-    system = [] if mode in ("REST2", "rREST2") else ["-s", "../build/built.xml"]
-    if mode in ("REST2", "rREST2"):
+    system = [] if mode == "REST2" else ["-s", "../build/built.xml"]
+    if mode == "REST2":
         # INTO `destination`, not the run directory, so the group file's `-i` must name the
         # `_protocol.py` the ladder writes THERE; a mismatch is refused before anything else.
         needed = ["--groupfile", str(ladder_group_file(
@@ -311,7 +264,7 @@ def test_a_missing_input_stops_a_generated_script_before_any_output(mode, flag, 
                                                                     workspace, tmp_path):
     destination = tmp_path / "never"
     script, needed = ENTRY[mode]
-    ladder = mode in ("REST2", "rREST2")
+    ladder = mode == "REST2"
     if ladder:
         # A group file for a launch into `destination` (its `-i` must name the protocol written
         # there), and a ladder reads -s only from it (0.5.4): the missing System is on a line.
@@ -348,8 +301,8 @@ def test_a_topology_and_system_that_describe_different_particle_counts_are_refus
         "END\n", encoding="utf-8")
     destination = tmp_path / "never"
     script, needed = ENTRY[mode]
-    system = [] if mode in ("REST2", "rREST2") else ["-s", "../build/built.xml"]
-    if mode in ("REST2", "rREST2"):
+    system = [] if mode == "REST2" else ["-s", "../build/built.xml"]
+    if mode == "REST2":
         # INTO `destination`, not the run directory, so the group file's `-i` must name the
         # `_protocol.py` the ladder writes THERE; a mismatch is refused before anything else.
         needed = ["--groupfile", str(ladder_group_file(
@@ -390,7 +343,7 @@ def test_a_missing_ais_source_is_refused_before_output(workspace, tmp_path):
 
 # --- path collisions ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("mode", ["split", "REST2", "rREST2", "AIS"])
+@pytest.mark.parametrize("mode", ["split", "REST2", "AIS"])
 def test_two_output_flags_that_resolve_to_one_file_are_refused(mode, workspace, tmp_path):
     """`sub/../run.out` and `./run.out` are one file. String comparison misses it.
 
@@ -404,7 +357,7 @@ def test_two_output_flags_that_resolve_to_one_file_are_refused(mode, workspace, 
     assert _snapshot(destination) is None
 
 
-@pytest.mark.parametrize("mode", ["split", "REST2", "rREST2", "AIS"])
+@pytest.mark.parametrize("mode", ["split", "REST2", "AIS"])
 def test_an_output_that_would_overwrite_an_input_is_refused(mode, workspace, tmp_path):
     """Writing the log over `built.pdb` destroys the topology the run needs to read.
 

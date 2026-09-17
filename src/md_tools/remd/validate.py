@@ -274,10 +274,8 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
     # -- exchange accounting ---------------------------------------------------------------------------
     try:
         accepted, proposed = reporter.statistics()
-        events = reporter.reservoir_events()
         stats = statistics.lifetime_statistics(
-            accepted, proposed, tau=identity.get("tau") or list(range(n_states)),
-            reservoir_events=events)
+            accepted, proposed, tau=identity.get("tau") or list(range(n_states)))
         result.note("exchanges_committed", stats["exchanges_committed"])
         # The identity records what was ORIGINALLY requested, and `--extend` legitimately runs
         # past it: a run extended twice holds more rows than the protocol ever asked for. So the
@@ -300,8 +298,6 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
             result.fail(
                 f"the storage holds {stats['exchanges_committed']} exchange row(s), fewer than "
                 f"the {int(expected)} attempts the run was created to make")
-        if stats["reservoir"]:
-            result.note("reservoir_attempts", stats["reservoir"]["attempts"])
     except Exception as failure:
         result.fail(f"exchange statistics could not be read ({type(failure).__name__}: {failure})")
 

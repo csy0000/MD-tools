@@ -605,7 +605,7 @@ def test_the_build_top_example_resolves_to_the_model_defaults():
 
 
 @pytest.mark.parametrize("name, protocol", [
-    ("cMD.config", "cMD"), ("REST2.config", "REST2"), ("rREST2.config", "rREST2"),
+    ("cMD.config", "cMD"), ("REST2.config", "REST2"),
     ("AIS.config", "AIS"),
 ])
 def test_each_protocol_example_resolves_and_selects_its_protocol(name, protocol):
@@ -615,7 +615,7 @@ def test_each_protocol_example_resolves_and_selects_its_protocol(name, protocol)
     assert resolved["protocol"] == protocol
 
 
-@pytest.mark.parametrize("name", ["cMD.config", "REST2.config", "rREST2.config"])
+@pytest.mark.parametrize("name", ["cMD.config", "REST2.config"])
 def test_a_protocol_example_differs_from_the_defaults_only_where_it_says_so(name):
     """Everything an example states must either BE the default or be a documented protocol choice.
 
@@ -627,7 +627,7 @@ def test_a_protocol_example_differs_from_the_defaults_only_where_it_says_so(name
     resolved = resolve_md_config(example(f"md/{name}"))
     defaults = resolve_md_config(None)
     differing = {key for key in defaults
-                 if key not in ("protocol", "rest2", "reservoir") and resolved[key] != defaults[key]}
+                 if key not in ("protocol", "rest2") and resolved[key] != defaults[key]}
     assert not differing, (
         f"{name} changes {sorted(differing)} away from the model defaults without being a "
         f"protocol-specific section. Either it is documenting a value the code does not apply, or "

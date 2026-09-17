@@ -8,9 +8,8 @@ is [Running](../md-run.md).
 
 | method | ensemble | what it is for | page |
 |---|---|---|---|
-| [cMD](cMD/README.md) | NPT explicit, NVT implicit | ordinary molecular dynamics; also the fixed-τ source ensemble for AIS and for an rREST2 reservoir | `protocol: cMD` |
+| [cMD](cMD/README.md) | NPT explicit, NVT implicit | ordinary molecular dynamics; also the fixed-τ source ensemble for AIS | `protocol: cMD` |
 | [REST2](REST2/README.md) | NVT | replica exchange with solute tempering — Hamiltonian scaling at one physical temperature | `protocol: REST2` |
-| [rREST2](rREST2/README.md) | NVT | REST2 whose top rung is refreshed from a Boltzmann reservoir | `protocol: rREST2` |
 | [AIS](AIS/README.md) | fixed volume | annealed importance sampling: non-equilibrium switching paths and their work | `protocol: AIS` |
 | [umbrella](umbrella/README.md) | as cMD | biased sampling along torsion collective variables, one window per run | `protocol: umbrella` |
 
@@ -22,9 +21,11 @@ md-openmm build-md -odir ./<method>-run1 --config <method>.config
 
 ## What is shared
 
-**Scaling.** Fixed-τ cMD, REST2, rREST2 and AIS all scale the Hamiltonian through one
-implementation, `md_tools.rest2.REST2Scaler`. There is no second scaler, so a change to the scaling
-rules cannot reach one protocol and miss another. The rules themselves are in
+**Scaling.** Fixed-τ cMD, REST2 and AIS all scale the Hamiltonian through one implementation,
+and it runs in one place: `md-openmm build-top --rest2-scaler` writes every scaled state as a file
+(`build/<method>/system_state<i>.xml` with its `scaler.yaml`), and a run integrates those files as
+they are. There is no second scaler, so a change to the scaling rules cannot reach one protocol and
+miss another. The rules themselves are in
 [the REST2 page](REST2/README.md#what-is-scaled-and-what-is-not).
 
 **Lengths are integer step counts.** Every duration in a configuration is a number of steps. The
@@ -57,7 +58,10 @@ whole directory can be moved and it still runs.
 New to the repository: [cMD](cMD/README.md), then [the scientific defaults](../scientific-defaults.md).
 
 Choosing between enhanced-sampling methods: [REST2](REST2/README.md) →
-[rREST2](rREST2/README.md) → [AIS](AIS/README.md).
+[AIS](AIS/README.md).
+
+rREST2 (REST2 with a Boltzmann reservoir refresh) is archived as of 0.5.4: it is refused by name,
+and the git tag `rREST2-final` is the last commit where it runs.
 
 Registering what you produced: [data registration](../data_register/README.md).
 

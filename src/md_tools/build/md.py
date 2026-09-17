@@ -35,16 +35,25 @@ from .strict import ConfigError, Field, Schema, Section, load_yaml_strictly
 from ..openmm.timestep import ORDINARY_TIMESTEP_FS
 from ..openmm.system_defaults import DEFAULT_BAROSTAT_FREQUENCY_STEPS
 
-PROTOCOLS = ("cMD", "REST2", "rREST2", "AIS", "umbrella")
+PROTOCOLS = ("cMD", "REST2", "AIS", "umbrella")
+
+#: rREST2 -- REST2 plus a Boltzmann reservoir refresh of the top rung -- is ARCHIVED for 0.5.4
+#: (user, 2026-09-17). Its protocol name and its `reservoir` section are refused BY NAME, before
+#: the schema's generic unknown-value message could suggest a near miss, because the value has not
+#: been mistyped: the method was withdrawn, and the message says where it went.
+RREST2_ARCHIVED = (
+    "rREST2 is archived as of md-tools 0.5.4: the reservoir refresh is no longer a protocol "
+    "md-tools runs. Its implementation, example configuration, documentation and tests are in "
+    "archive/rREST2/ of the source repository, and the git tag rREST2-final is the last commit "
+    "where it runs. `protocol: REST2` is the same ladder without the refresh.")
 
 MD_SCHEMA = Schema(
-    "cMD.config / REST2.config / rREST2.config",
+    "cMD.config / REST2.config / AIS.config",
     doc="Protocol, stage lengths in steps, and reporting intervals for `md-openmm build-md`.",
     fields=[
         Field("protocol", str, default="cMD", enum=PROTOCOLS,
               doc="cMD is plain molecular dynamics. REST2 adds a replica-exchange ladder in which "
-                  "only the solute's Hamiltonian is scaled. rREST2 adds a Boltzmann reservoir "
-                  "refresh of the hottest rung. AIS runs non-equilibrium switching paths from an "
+                  "only the solute's Hamiltonian is scaled. AIS runs non-equilibrium switching paths from an "
                   "EXISTING equilibrium source ensemble -- it has no minimisation or "
                   "equilibration chain of its own, because its input is a trajectory you have "
                   "already produced."),
@@ -85,15 +94,13 @@ MD_SCHEMA = Schema(
                   doc="Fixed REST2 scaling for a cMD run. 0.0 (the default) is the unmodified "
                       "physical Hamiltonian. A non-zero value runs cMD at ONE rung of the REST2 "
                       "ladder -- the same scaling the ladder applies, held fixed -- which is how "
-                      "a Boltzmann reservoir for rREST2 is generated, and how a hot ensemble is "
-                      "produced without running an exchange. A scaled run is NVT by "
+                      "a hot ensemble is produced without running an exchange. A scaled run is NVT by "
                       "construction: it must sample the top rung's fixed-volume ensemble, so a "
                       "barostat would sample the wrong distribution and is refused."),
             Field("phase_space_printout", int, default=0, minimum=0, unit="steps",
                   doc="Write a phase-space stream (positions, VELOCITIES and box) every N steps. "
-                      "0 disables it. A reservoir needs complete samples including velocities, "
-                      "which a trajectory does not carry, so this is what a reservoir source is "
-                      "generated with."),
+                      "0 disables it. A complete sample needs velocities, which a trajectory "
+                      "does not carry."),
             Field("seed", int, default=1, minimum=0,
                   doc="Base random seed. Each stage derives its own from this plus the stage "
                       "name, so stages are independent and the whole chain is reproducible."),
@@ -122,7 +129,7 @@ MD_SCHEMA = Schema(
                       "same trajectory and never lengthens it. A value that does not divide "
                       "exactly is refused with the arithmetic that would fix it, because a final "
                       "short segment would make the last chunk incomparable with the others.\n"
-                      "  On a REST2/rREST2 ladder there is no `production_steps`: production is "
+                      "  On a REST2 ladder there is no `production_steps`: production is "
                       "`number_of_exchanges * exchange_interval_steps`, so the split is of "
                       "`number_of_exchanges` and an exchange is never allowed to straddle two "
                       "segments.\n"
@@ -192,7 +199,7 @@ MD_SCHEMA = Schema(
                       "Hamiltonian; only the number was unreachable from a configuration file."),
             Field("equilibration_per_tau", bool, default=False,
                   doc="Run the equilibration stages on EVERY RUNG, under that rung's own tau, "
-                      "instead of once at tau = 0. REST2 and rREST2 only; refused for any other "
+                      "instead of once at tau = 0. REST2 only; refused for any other "
                       "protocol. Off by default.\n"
                       "  When true, the tau = 0 chain stops early: at minimisation under implicit "
                       "solvent, and after its NPT stages under explicit solvent, which run once at "
@@ -335,22 +342,6 @@ MD_SCHEMA = Schema(
                "restraint resolves its `cv` name against that same file, so the quantity that is "
                "biased and the quantity that is reported are the same object by construction -- "
                "a run cannot restrain one torsion and report another."),
-
-        Section("reservoir", [
-            Field("enabled", bool, default=False,
-                  doc="rREST2 only. Refresh the hottest rung from a pre-generated Boltzmann "
-                      "reservoir instead of propagating it."),
-            Field("path", str, default=None, nullable=True,
-                  doc="Reservoir directory. Required when enabled."),
-            Field("refresh_interval_exchanges", int, default=1, minimum=1,
-                  doc="How often the hottest rung is refreshed from the reservoir, in exchange "
-                      "attempts."),
-            Field("velocities", str, default="resample", enum=("resample", "inherit"),
-                  doc="Where a refreshed configuration's velocities come from. `resample` draws "
-                      "them from the Maxwell-Boltzmann distribution at the run temperature; "
-                      "`inherit` keeps the reservoir's own. Recorded explicitly because it is a "
-                      "provenance question, not a tuning knob."),
-        ], doc="rREST2 reservoir. Ignored unless protocol is rREST2."),
     ],
 )
 
@@ -387,30 +378,22 @@ def _check_protocol(resolved: dict[str, Any]) -> None:
     elif resolved["ais_source"]["trajectory"]:
         raise ConfigError(
             f"ais_source.trajectory is set but protocol is {protocol}. A source ensemble is only "
-            f"consumed by AIS; cMD, REST2 and rREST2 generate their own starting state.")
-    if protocol == "rREST2" and not resolved["reservoir"]["enabled"]:
-        raise ConfigError("protocol is rREST2 but reservoir.enabled is false. rREST2 IS the "
-                          "reservoir variant; without one it is plain REST2.")
-    if resolved["reservoir"]["enabled"] and not resolved["reservoir"]["path"]:
-        raise ConfigError("reservoir.enabled is true but reservoir.path is null")
-    if resolved["reservoir"]["enabled"] and protocol != "rREST2":
-        raise ConfigError(f"reservoir.enabled is true but protocol is {protocol}. A reservoir "
-                          f"only has meaning for rREST2.")
+            f"consumed by AIS; cMD and REST2 generate their own starting state.")
     if resolved["dynamics"]["tau"] > 0.0 and resolved["protocol"] != "cMD":
         raise ConfigError(
             f"dynamics.tau is {resolved['dynamics']['tau']} but protocol is "
-            f"{resolved['protocol']}. A REST2 or rREST2 ladder sets its own tau per rung; a fixed "
+            f"{resolved['protocol']}. A REST2 ladder sets its own tau per rung; a fixed "
             f"tau belongs to a cMD run held at one rung.")
     if resolved["dynamics"]["phase_space_printout"] and resolved["dynamics"]["tau"] == 0.0:
         raise ConfigError(
             "dynamics.phase_space_printout is set but dynamics.tau is 0.0. A phase-space stream "
-            "exists to seed a reservoir at the ladder's TOP rung; writing one from the unscaled "
-            "Hamiltonian would produce a reservoir for a rung nothing runs at.")
+            "records complete samples of a SCALED rung's ensemble; from the unscaled Hamiltonian "
+            "it would sample a rung nothing runs at.")
     if (resolved.get("rest2") or {}).get("equilibration_per_tau"):
-        if protocol not in ("REST2", "rREST2"):
+        if protocol != "REST2":
             raise ConfigError(
                 f"rest2.equilibration_per_tau is true but protocol is {protocol}. It runs the "
-                f"equilibration stages on every rung of a REST2/rREST2 ladder under that rung's "
+                f"equilibration stages on every rung of a REST2 ladder under that rung's "
                 f"own tau; {protocol} has no ladder, so the setting would do nothing. Remove it, "
                 f"or set it to false.")
         if not per_tau_equilibration_stages(resolved):
@@ -452,7 +435,7 @@ def _check_segments(resolved: dict[str, Any]) -> None:
             f"campaign is already divided: ais.number_of_paths sets how many paths there are, "
             f"and each writes its own trajectory and resumes independently. Remove "
             f"number_of_segments, or set it to 1.")
-    if protocol in ("REST2", "rREST2"):
+    if protocol == "REST2":
         quantity, total = "rest2.number_of_exchanges", int(
             resolved["rest2"]["number_of_exchanges"])
         unit = "exchange attempt"
@@ -477,7 +460,7 @@ def _check_segments(resolved: dict[str, Any]) -> None:
             f"each one is comparable with the others.\n"
             f"  Divisors of {total}: {', '.join(str(d) for d in sorted(near)[:12])}.")
     per_segment = total // segments
-    if protocol in ("REST2", "rREST2") and per_segment < 1:
+    if protocol == "REST2" and per_segment < 1:
         raise ConfigError(
             f"stages.number_of_segments is {segments} and {quantity} is {total}, which is fewer "
             f"than one {unit} per segment.")
@@ -590,17 +573,9 @@ def _check_umbrella(resolved: dict[str, Any]) -> None:
     # what keeps the bias out of the exchange criterion (see `remd.protocol.apply_ladder_restraints`).
     # Per-rung variation is not offered: a bias that differed between rungs would enter the
     # acceptance probability, and the ladder would sample something nobody asked for.
-    if protocol in ("REST2", "rREST2"):
+    if protocol == "REST2":
         if not path:
             return
-        if (resolved.get("reservoir") or {}).get("enabled"):
-            raise ConfigError(
-                f"umbrella.file = {path!r} restrains every rung, and reservoir.enabled is true. A "
-                f"reservoir sample is drawn from a distribution generated WITHOUT this bias, so "
-                f"refreshing the top rung installs an unrestrained configuration into a restrained "
-                f"ladder -- the rung then samples neither ensemble, and nothing in the output says "
-                f"so. Refused rather than combined: generate the reservoir under the same "
-                f"restraints and it is a different file, or drop one of the two.")
         variables = resolved.get("collective_variables") or {}
         if not variables.get("file"):
             raise ConfigError(
@@ -615,8 +590,8 @@ def _check_umbrella(resolved: dict[str, Any]) -> None:
             raise ConfigError(
                 f"umbrella.file = {path!r} defines restraints, but protocol is {protocol}. A "
                 f"restraint biases the dynamics, so it is never applied as a side effect of "
-                f"another protocol -- either run `protocol: umbrella`, `protocol: REST2` or "
-                f"`protocol: rREST2`, or remove the file.")
+                f"another protocol -- either run `protocol: umbrella` or `protocol: REST2`, "
+                f"or remove the file.")
         return
 
     if not path:
@@ -665,6 +640,16 @@ def _check_collective_variables(resolved: dict[str, Any]) -> None:
 
 MD_SCHEMA.checks = (_check_protocol, _check_timestep, _check_collective_variables,
                     _check_umbrella)
+
+
+def _refuse_archived_rrest2(document: dict[str, Any]) -> None:
+    """`protocol: rREST2` and a `reservoir` section, refused by name with where the method went."""
+    if not isinstance(document, dict):
+        return
+    if document.get("protocol") == "rREST2":
+        raise ConfigError(f"protocol: rREST2 -- {RREST2_ARCHIVED}")
+    if "reservoir" in document:
+        raise ConfigError(f"reservoir: this section configured rREST2's refresh. {RREST2_ARCHIVED}")
 
 
 def _refuse_retired_platform(document: dict[str, Any]) -> None:
@@ -760,6 +745,7 @@ def resolve_md_config(path: Path | None, *, run_config: Path | None = None) -> d
         if not Path(path).is_file():
             raise ConfigError(f"{path}: no such configuration file")
     _refuse_retired_platform(document)
+    _refuse_archived_rrest2(document)
 
     # MERGED BEFORE `stated` IS TAKEN, not after. `stated` is what
     # `_apply_ais_reporting_defaults` consults to tell a value the user WROTE from one it
@@ -1003,7 +989,7 @@ PER_TAU_STAGE_NAMES = ("eq_nvt_posres", "eq_nvt_posres_2", "eq_nvt_free")
 
 
 def _equilibrates_per_tau(resolved: dict[str, Any]) -> bool:
-    return (resolved.get("protocol") in ("REST2", "rREST2")
+    return (resolved.get("protocol") == "REST2"
             and bool((resolved.get("rest2") or {}).get("equilibration_per_tau")))
 
 
@@ -1073,10 +1059,7 @@ _IN_SECTIONS = {
     # `resolved.config` beside it said otherwise.
     "REST2": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables",
                          "umbrella")),
-              ("remd", ("rest2", "reservoir"))),
-    "rREST2": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables",
-                          "umbrella")),
-               ("remd", ("rest2", "reservoir"))),
+              ("remd", ("rest2",))),
     "AIS": (("cntrl", ("", "dynamics", "reporting", "collective_variables")),
             ("AIS", ("ais", "ais_source"))),
     # Umbrella is cMD with biases, so it writes cMD's block and adds the restraint file.
@@ -1189,7 +1172,7 @@ def in_file_text(resolved: dict[str, Any], *, stage: str | None = None,
              ""]
     sections = _IN_SECTIONS[protocol]
     if preparation:
-        # &cntrl ONLY. `&remd`, `&AIS` and the reservoir block describe the method that follows
+        # &cntrl ONLY. `&remd` and `&AIS` describe the method that follows
         # this stage, not the stage, and carrying them made the same minimisation two different
         # files.
         sections = tuple((section, blocks) for section, blocks in sections
@@ -1204,8 +1187,8 @@ def in_file_text(resolved: dict[str, Any], *, stage: str | None = None,
             for key, target in known.items():
                 # Matched by the TARGET this key maps onto, not by reconstructing the target from
                 # the key: several inputs are deliberately spelled differently from the resolved
-                # field they set (`random_seed` -> `dynamics.seed`, `reservoir_enabled` ->
-                # `reservoir.enabled`), and reconstruction silently dropped every one of them.
+                # field they set (`random_seed` -> `dynamics.seed`, `rem_log` ->
+                # `rest2.rem_log`), and reconstruction silently dropped every one of them.
                 if target.startswith("_"):
                     continue
                 # NOT WRITTEN INTO A SHARED INPUT. Keyed by target rather than by key so both
@@ -1356,7 +1339,7 @@ def _method_neutral(resolved: dict[str, Any]) -> dict[str, Any]:
     """
     neutral = dict(resolved)
     neutral["protocol"] = MD_SCHEMA.fields["protocol"].default
-    for block in ("rest2", "reservoir", "ais", "ais_source", "umbrella"):
+    for block in ("rest2", "ais", "ais_source", "umbrella"):
         if block in neutral:
             neutral[block] = _schema_defaults(block)
     return neutral
@@ -1680,7 +1663,7 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
                 call.insert(2, f'  -c {previous} \\')
             lines += [f'echo "== {target["key"]} =="'] + call + ['']
             previous = target["restart_rel"]
-        if protocol in ("REST2", "rREST2"):
+        if protocol == "REST2":
             lines += ['# One rank per thermodynamic state. Any other world size is refused rather',
                       '# than silently reinterpreted: a ladder run in fewer processes than it has',
                       '# states is a different schedule, not a smaller one.',
@@ -1764,7 +1747,7 @@ raise SystemExit(run_generated_remd(__file__, protocol="{protocol}"))
 
 
 def _saved_ladder_states(resolved: dict[str, Any], dataset) -> dict[str, Any]:
-    """The saved scaled states a REST2/rREST2 ladder integrates, checked before anything is written.
+    """The saved scaled states a REST2 ladder integrates, checked before anything is written.
 
     A ladder scales nothing (docs/amber-like-fix/REST2-scaler.md, step 4): its states are
     `build/REST2/system_state<n>.xml`, written by `md-openmm build-top --rest2-scaler`, and
@@ -1875,7 +1858,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
             + f"  Run `md-openmm build-top` into {dataset.build}/ first.")
 
     ladder_states = None
-    if resolved["protocol"] in ("REST2", "rREST2"):
+    if resolved["protocol"] == "REST2":
         ladder_states = _saved_ladder_states(resolved, dataset)
 
     # THE WHOLE CHAIN, VALIDATED BEFORE THE FIRST SCRIPT IS WRITTEN.
@@ -2094,7 +2077,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         log.field("observations", f"{observations} (both endpoints included)")
         log.field("source", resolved["ais_source"]["trajectory"])
 
-    if protocol in ("REST2", "rREST2"):
+    if protocol == "REST2":
         ladder = {
             "protocol": protocol,
             "solvent": resolved["solvent"],
@@ -2106,7 +2089,6 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
             "state_trajectory": resolved["rest2"]["state_trajectory"],
             "rem_log": resolved["rest2"]["rem_log"],
             "neighbour_acceptance_report": resolved["rest2"]["neighbour_acceptance_report"],
-            "reservoir": dict(resolved["reservoir"]),
             "dynamics": dict(resolved["dynamics"]),
             # Kept in step with `ladder_from_resolved`, which is what the RUN rebuilds from. A
             # field added to one and not the other reaches the log and never the simulation.
@@ -2194,7 +2176,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
                              heading=heading),
                 overwrite=overwrite)
             note(target["input"])
-        if protocol in ("REST2", "rREST2"):
+        if protocol == "REST2":
             _write_shared_input(
                 dataset.stage_input(protocol),
                 in_file_text(resolved,
@@ -2213,7 +2195,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
     #
     # The states are `build/REST2/system_state<n>.xml`, checked above; the ladder integrates them as
     # they are. `build-md` no longer writes rungs of its own into `remd<n>/`.
-    if protocol in ("REST2", "rREST2"):
+    if protocol == "REST2":
         taus = ladder_states["taus"]
         # `solute.yaml` is named on every group line when it exists beside the built system. It is
         # the resolved scaling selection, and a ladder that derived its own would be a second

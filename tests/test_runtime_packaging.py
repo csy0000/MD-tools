@@ -48,13 +48,12 @@ def test_every_runtime_package_is_a_real_package():
 def test_no_runtime_module_imports_another_by_bare_name():
     """A bare import needs a directory on `sys.path`; a package import does not.
 
-    The one deliberate exception is a file loaded BY PATH -- the `--exchange-rule` plug-in -- which
-    is not part of any package when it runs and must therefore import absolutely.
+    A file loaded BY PATH -- an `--exchange-rule` plug-in -- is not part of any package when it
+    runs and must import absolutely; none ships in the package now (rREST2's
+    `rrest2_exchange.py` was archived in 0.5.4).
     """
     offenders = []
     for path in _runtime_modules():
-        if path.name == "rrest2_exchange.py":
-            continue                                   # loaded by path; see the docstring above
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
@@ -99,14 +98,6 @@ def test_each_package_exports_the_documented_names(package, expected):
     assert expected <= set(module.__all__), expected - set(module.__all__)
     for name in expected:
         assert hasattr(module, name), name
-
-
-def test_the_reservoir_rule_is_exposed_generically():
-    """rREST2 composes it; a future reservoir REMD method must be able to reuse it."""
-    from md_tools.remd.reservoir import ReservoirRefreshRule
-
-    assert hasattr(ReservoirRefreshRule, "propose")
-    assert hasattr(ReservoirRefreshRule, "describe")
 
 
 # --- the compatibility facades ------------------------------------------------------------------

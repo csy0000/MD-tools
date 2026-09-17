@@ -8,7 +8,7 @@ They reach an installed environment as **wheel data files**, which pip unpacks u
 
     <prefix>/share/md-tools/configs/machine/user.config.example
     <prefix>/share/md-tools/configs/sys/build-top.config
-    <prefix>/share/md-tools/configs/md/{cMD,REST2,rREST2,AIS}.config
+    <prefix>/share/md-tools/configs/md/{cMD,REST2,AIS}.config
 
 so `example_root()` asks the installed distribution where they went rather than assuming a layout.
 `importlib.resources` is not the right tool here: these are not package data, and making them package
@@ -33,7 +33,6 @@ EXAMPLES = (
     Path("sys") / "build-top.config",
     Path("md") / "cMD.config",
     Path("md") / "REST2.config",
-    Path("md") / "rREST2.config",
     Path("md") / "AIS.config",
 )
 

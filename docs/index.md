@@ -25,7 +25,7 @@ md-openmm export-reference  a finished run    -> a bundle that runs on OpenMM al
 * **[Machine configuration](machine-configuration.md)** — one file per machine: which platform it
   runs on, and where registered data goes. CUDA is the default and there is no silent fallback.
 
-* **[Methods](openmm_methods/README.md)** — cMD, REST2, rREST2, AIS and umbrella sampling. Each
+* **[Methods](openmm_methods/README.md)** — cMD, REST2, AIS and umbrella sampling. Each
   page carries a runnable `example.config` and the commands that use it.
 
 * **[Running](md-run.md)** — the Amber-like flags, the `.in` language, the MPI rules, and what

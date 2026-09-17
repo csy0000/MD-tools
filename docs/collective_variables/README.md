@@ -88,11 +88,11 @@ The schedule must be exact, and is refused rather than rounded:
 | protocol | requirement |
 |---|---|
 | cMD | divides each dynamics stage's step count |
-| REST2 / rREST2 | divides `rest2.exchange_interval_steps` |
+| REST2 | divides `rest2.exchange_interval_steps` |
 | AIS | a multiple of `ais.parameter_update_interval_steps` **and** divides `ais.switching_steps` |
 
 Step 0 and the final step appear exactly once each, in **every** protocol including the REST2
-and rREST2 ladders. Minimisation produces no series — its
+ladders. Minimisation produces no series — its
 iterations have no timestep, so a `time_ps` for them would be a fiction, and the intermediate
 geometries lie on no physical trajectory.
 
@@ -117,7 +117,7 @@ readable without the topology or the definition that produced it.
 | protocol | file | leading columns |
 |---|---|---|
 | cMD | `<key>.cv.csv` + `<key>.cv.json` (the stage's FILING key: `eq_1`, `min`, `cMD`) | `step,time_ps,trajectory_frame_index` |
-| REST2 / rREST2 | `cv_state<N>.csv` + `cv_state<N>.json` | `step,time_ps,exchange_attempt,state_index,tau,walker_index,exchange_phase,trajectory_frame_index` |
+| REST2 | `cv_state<N>.csv` + `cv_state<N>.json` | `step,time_ps,exchange_attempt,state_index,tau,walker_index,exchange_phase,trajectory_frame_index` |
 | AIS | `path_NNNN/cv.csv` | `path_index,source_frame_index,protocol_step,time_ps,tau,observation_index,coordinate_frame_index` |
 | AIS | `AIS_cv.csv` | the aggregate, same columns |
 
@@ -161,17 +161,6 @@ frame and others do not.
 
 The field is never `-1`. `-1` is not a frame index, and writing it invites a reader to index from
 the end of the file.
-
-### rREST2: the reservoir refresh
-
-A refreshed state's CV row holds the configuration the state **propagated**, not the reservoir
-sample that replaced it. The complete walker-indexed configurations are snapshotted before the
-exchange, so no later swap or refresh can mutate what a row is computed from.
-
-A refreshed state also names **no** trajectory frame, even though its walker index did not change:
-the frame about to be written holds the reservoir sample, and the row holds the propagated
-coordinates. Same conclusion as an accepted swap, reached by a second route that the mapping alone
-cannot see.
 
 ### AIS alignment
 
@@ -317,7 +306,7 @@ correct and statistically exact, and it is a *different* trajectory — which me
 series cannot be compared value-by-value with an uninterrupted reference.
 
 cMD and AIS always resumed through `loadCheckpoint` and so were always bitwise. The ladder did
-not, and every continued REST2/rREST2 run diverged from the resume point onward. Ladder
+not, and every continued REST2 run diverged from the resume point onward. Ladder
 checkpoints now store each rung's OpenMM context checkpoint **alongside** the coordinates,
 together with the platform and precision that produced them. They are an optimisation and never a
 requirement: a continuation that finds them, written by the platform it is running on, restores

@@ -4,7 +4,7 @@
 Neither knows anything about replica exchange, because three of the four callers do not exchange:
 
 * **fixed-tau cMD** holds one rung and never swaps;
-* **REST2** and **rREST2** build a ladder of them;
+* **REST2** builds a ladder of them;
 * **AIS** moves tau continuously along a switching path.
 
 Keeping the scaler independent of the ladder is what makes "the same scaling everywhere" a

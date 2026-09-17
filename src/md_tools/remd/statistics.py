@@ -10,8 +10,7 @@ Nothing reads a live counter, because a live counter describes the last event an
 import numpy as np
 
 
-def lifetime_statistics(accepted, proposed, *, tau, reservoir_events=None,
-                        reservoir_velocity_seeds=None):
+def lifetime_statistics(accepted, proposed, *, tau):
     """Aggregate the stored exchange history into lifetime figures.
 
     `accepted` and `proposed` are (exchanges, states, states) and NOT cumulative. Every stored row
@@ -47,42 +46,6 @@ def lifetime_statistics(accepted, proposed, *, tau, reservoir_events=None,
                 "acceptance": (n_accepted / n_proposed) if n_proposed else None,
             })
 
-    reservoir = None
-    if reservoir_events is not None:
-        events = np.asarray(reservoir_events, dtype=int)
-        if events.size:
-            # columns: state, frame, source step, outcome
-            attempted = events[:, 3] >= 0
-            accepted_mask = events[:, 3] == 1
-            used = events[attempted, 1]
-            source_steps = events[attempted, 2]
-            reservoir = {
-                "attempts": int(attempted.sum()),
-                "accepted": int(accepted_mask.sum()),
-                "acceptance": (float(accepted_mask.sum() / attempted.sum())
-                               if attempted.sum() else None),
-                "states_refreshed": sorted({int(s) for s in events[attempted, 0]}),
-                "distinct_frames_used": int(len(set(int(f) for f in used))) if used.size else 0,
-                "frame_usage_counts": {int(f): int((used == f).sum())
-                                       for f in sorted(set(int(x) for x in used))} if used.size
-                else {},
-                "source_steps_used": sorted({int(s) for s in source_steps}) if used.size else [],
-                # Under `maxwell` every refresh redrew momenta from one of these seeds, and each
-                # draw can be reproduced from the storage alone. Empty under `stored`, where the
-                # recorded momentum was installed and nothing was drawn.
-                "velocity_seeds_used": (
-                    sorted({int(s) for s in np.asarray(reservoir_velocity_seeds, dtype=int)[
-                        attempted] if int(s) >= 0})
-                    if reservoir_velocity_seeds is not None else []),
-                "note": ("a reservoir refresh replaces a configuration and is NOT a swap; it is "
-                         "never counted in the pair statistics above, and it is not a "
-                         "thermodynamic-state round trip"),
-            }
-        else:
-            reservoir = {"attempts": 0, "accepted": 0, "acceptance": None,
-                         "states_refreshed": [], "distinct_frames_used": 0,
-                         "frame_usage_counts": {}}
-
     return {
         "basis": "lifetime, summed over every committed exchange row in the analysis NetCDF",
         "exchange_range": [0, int(n_exchanges - 1)] if n_exchanges else [],
@@ -95,7 +58,6 @@ def lifetime_statistics(accepted, proposed, *, tau, reservoir_events=None,
                   / total_proposed[~np.eye(n_states, dtype=bool)].sum())
             if total_proposed[~np.eye(n_states, dtype=bool)].sum() else None),
         "by_state_pair": pairs,
-        "reservoir": reservoir,
     }
 
 
@@ -134,16 +96,6 @@ def completion_report(statistics):
         "overall": {"accepted": accepted, "proposed": proposed,
                     "acceptance": (accepted / proposed) if proposed else None},
     }
-    reservoir = statistics.get("reservoir") or {}
-    if reservoir.get("attempts"):
-        # Separate, and never folded into the pair figures: a reservoir refresh replaces a
-        # configuration rather than swapping two, so adding it in would inflate them.
-        report["reservoir"] = {
-            "attempts": int(reservoir["attempts"]),
-            "accepted": int(reservoir["accepted"]),
-            "acceptance": reservoir["acceptance"],
-            "states_refreshed": list(reservoir["states_refreshed"]),
-        }
     return report
 
 

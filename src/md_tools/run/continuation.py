@@ -265,7 +265,7 @@ def validate_public_entry(resolved, out_dir, *, protocol, stage=None,
         return
 
     interval = _cv_interval(resolved)
-    if protocol in ("REST2", "rREST2") and stage is None:
+    if protocol == "REST2" and stage is None:
         rest2 = (resolved or {}).get("rest2") or {}
         states = int(rest2.get("number_of_replicas") or 0)
         if not states:

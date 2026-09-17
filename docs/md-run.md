@@ -1,6 +1,6 @@
 # `md-openmm md-run` — running what `build-md` resolved
 
-`md-run` executes a stage, a REST2/rREST2 ladder, or a set of AIS switching paths from a short
+`md-run` executes a stage, a REST2 ladder, or a set of AIS switching paths from a short
 Amber-like input file. If you have run `pmemd -i mdin -p prmtop -c inpcrd -o mdout -r restrt`, you
 can read every command on this page without a manual, which is the whole reason it exists.
 
@@ -274,14 +274,22 @@ One resolver, `md_tools.openmm.platform_policy`, serves stages, ladders and AIS 
 cannot drift apart. This applies to OpenMM Context work; `build-top` assigns parameters with
 OpenFF and AmberTools, which is CPU work and is not claimed to be anything else.
 
-## REST2 and rREST2 under MPI
+## REST2 under MPI
 
-One rank per thermodynamic state:
+One rank per thermodynamic state, from the run directory, as `run.sh` launches it:
 
 ```bash
-mpirun -n 8 md-openmm md-run -ng 8 -i REST2.in -p built.pdb -s built.xml \
-          -c eq_npt_free.xml -o REST2.out -x REST2.nc -r restart.json -log REST2.log
+mpirun -n 8 md-openmm md-run -ng 8 -i ../input/REST2.in -p ../build/built.pdb \
+          --groupfile remd_groupfile.1 -odir . \
+          -o remd_records/REST2_prod1.out -log remd_records/REST2_prod1.log \
+          -r remd_records/restart_prod1.json
 ```
+
+There is no `-s` and no `-c`: every line of the group file names its state's saved System
+(`-s ../build/REST2/system_state<i>.xml`, from `md-openmm build-top --rest2-scaler`) and the
+starting state, and `-s` on the command line is refused. The group file's `-i _protocol.py` is the
+one the ladder writes into `-odir`, so any `-odir` other than the group file's directory is refused
+too.
 
 Three numbers must agree — `rest2.number_of_replicas`, `-ng`, and the MPI world size — and a
 mismatch is refused before a Context is opened, naming all three:

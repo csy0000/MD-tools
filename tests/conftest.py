@@ -450,8 +450,8 @@ def pytest_collection_modifyitems(config, items):
 #: marked across a dozen files -- and rather than guessed from the node id, which would silently
 #: stop matching the first time a file is renamed.
 MULTI_RANK_MODULES = frozenset({
-    "test_cv_mpi_cuda_ais.py", "test_cv_mpi_cuda_lanes.py", "test_cv_mpi_cuda_rrest2.py",
-    "test_md_run_mpi_gpu.py", "test_rrest2_cuda_smoke.py",
+    "test_cv_mpi_cuda_ais.py", "test_cv_mpi_cuda_lanes.py",
+    "test_md_run_mpi_gpu.py",
     "test_examples_getting_started.py", "test_mpi_fail_closed.py",
     "test_driver_fail_closed.py", "test_regression_preflight_task.py",
     "test_runtime_contract_matrix.py", "test_own_replica_exchange.py",

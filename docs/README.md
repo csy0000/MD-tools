@@ -13,9 +13,8 @@ is current is here.
 | page | |
 |---|---|
 | [Method index](openmm_methods/README.md) | what the four protocols are, and what they share |
-| [cMD](openmm_methods/cMD/README.md) | ordinary MD; also the source ensemble for AIS and reservoirs |
+| [cMD](openmm_methods/cMD/README.md) | ordinary MD; also the source ensemble for AIS |
 | [REST2](openmm_methods/REST2/README.md) | Hamiltonian replica exchange at one temperature |
-| [rREST2](openmm_methods/rREST2/README.md) | REST2 with a Boltzmann reservoir |
 | [AIS](openmm_methods/AIS/README.md) | non-equilibrium switching and work |
 | [umbrella](openmm_methods/umbrella/README.md) | biased sampling along a torsion, one window per run |
 

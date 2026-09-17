@@ -56,7 +56,9 @@ COMPONENT_KINDS: dict[str, tuple[str, str | None, str]] = {
     "eq": ("simulation", "equilibration", "The equilibration chain before production."),
     "cMD": ("simulation", "cMD", "Production molecular dynamics."),
     "REST2": ("simulation", "REST2", "Replica-exchange solute tempering ladder."),
-    "rREST2": ("simulation", "rREST2", "Reservoir REST2 ladder."),
+    # rREST2 is archived (0.5.4), but a dataset produced before that still registers: registering
+    # describes finished data and runs nothing.
+    "rREST2": ("simulation", "rREST2", "Reservoir REST2 ladder (archived method)."),
     "analysis": ("analysis", None, "Analysis derived from this dataset's own simulation output."),
 }
 

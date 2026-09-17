@@ -103,7 +103,7 @@ CUDA_SITES = {
         "test_hmr_timestep_lane"),
     "remd/engine.py::ReplicaEngine.__init__": (
         "one Simulation per thermodynamic state, all on CUDA",
-        "test_md_run_mpi_gpu.py, test_rrest2_cuda_smoke.py"),
+        "test_md_run_mpi_gpu.py, test_multi_rank_rest2_ladders_of_several_sizes"),
     "remd/engine.py::count_cuda_devices": (
         "opens a Context per device index to count what this process can actually see",
         "test_explicit_device_placement_lane"),
@@ -153,11 +153,10 @@ CUDA_SITES = {
         "test_cmd_restart_integration.py, test_cuda_precision_lane"),
     "md/phase_space.py::PhaseSpaceReporter.report": (
         "pulls CUDA positions, velocities and box vectors off the device on every phase-space "
-        "step -- the reservoir stream a probability-one rREST2 transfer is drawn from, so a "
-        "wrong frame here is a wrong acceptance, not a cosmetic defect",
-        "test_multi_rank_rrest2_with_a_real_reservoir (writes the stream on CUDA and consumes "
-        "it as a reservoir), test_cmd_restart_integration.py (its committed counts across a "
-        "resume)"),
+        "step of a fixed-tau run",
+        "test_cv_cuda_lanes.py::test_fixed_tau_phase_space_and_cv_resume_on_cuda (writes and "
+        "resumes the stream on CUDA), test_cmd_restart_integration.py (its committed counts "
+        "across a resume)"),
     "remd/engine.py::ReplicaEngine.propagate": (
         "integrates every owned state on CUDA between exchanges",
         "test_md_run_mpi_gpu.py, test_multi_rank_rest2_ladders_of_several_sizes"),
@@ -171,9 +170,9 @@ CUDA_SITES = {
         "reads CUDA positions/box out of a rung for storage or exchange",
         "test_multi_rank_rest2_ladders_of_several_sizes, test_explicit_solvent_rest2_lane"),
     "remd/engine.py::ReplicaEngine.set_configuration": (
-        "writes a configuration into a CUDA rung -- the swap itself, and reservoir refresh",
-        "test_multi_rank_rrest2_with_a_real_reservoir, test_cv_mpi_cuda_rrest2.py (a forced "
-        "refresh at every exchange, with CV reporting on, under mpirun)"),
+        "writes a configuration into a CUDA rung -- the swap itself",
+        "test_multi_rank_rest2_ladders_of_several_sizes, "
+        "test_cv_mpi_cuda_lanes.py::test_cv_continuation_under_mpi_on_cuda"),
     "remd/engine.py::ReplicaEngine.set_velocities_to_temperature": (
         "draws momenta on a CUDA rung",
         "test_multi_rank_rest2_ladders_of_several_sizes"),
@@ -185,13 +184,11 @@ CUDA_SITES = {
     "remd/engine.py::ReplicaEngine.integrator_state": (
         "reads a CUDA rung's OpenMM context checkpoint into the ladder checkpoint, so a "
         "continuation reproduces the trajectory rather than merely a valid one",
-        "test_cv_mpi_cuda_rrest2.py::test_interruption_and_resume_through_mpi_reproduce_the_"
-        "reference, test_cv_mpi_cuda_lanes.py::test_cv_continuation_under_mpi_on_cuda"),
+        "test_cv_mpi_cuda_lanes.py::test_cv_continuation_under_mpi_on_cuda"),
     "remd/engine.py::ReplicaEngine.load_integrator_state": (
         "restores a CUDA rung's context checkpoint on resume, including the integrator's "
         "pseudo-random stream position, which coordinates alone do not carry",
-        "test_cv_mpi_cuda_rrest2.py::test_interruption_and_resume_through_mpi_reproduce_the_"
-        "reference, test_cv_mpi_cuda_lanes.py::test_cv_continuation_under_mpi_on_cuda"),
+        "test_cv_mpi_cuda_lanes.py::test_cv_continuation_under_mpi_on_cuda"),
 }
 
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
@@ -1295,99 +1292,6 @@ def test_a_genuinely_unimportable_mpi4py_stops_a_plural_launch(built, hardware, 
             feature="mpi4py genuinely unimportable under mpirun -n 2: refused, nothing written",
             precision="-", device="-",
             detail="the real ImportError branch, through a shadowing package, not a test seam")
-
-
-def test_multi_rank_rrest2_with_a_real_reservoir(built, hardware, tmp_path):
-    """rREST2 under real `mpirun -n 2` on CUDA, against a reservoir produced at the top rung.
-
-    The serial rREST2 lane lives in `test_rrest2_cuda_smoke.py`. This is the coordinated one:
-    the reservoir refresh is a COLLECTIVE operation -- rank 0 draws the sample and every rank has
-    to agree about which exchange it happened at -- and a refresh that works in one process says
-    nothing about one that has to be agreed across four.
-    """
-    import shutil
-
-    if shutil.which("mpirun") is None:
-        pytest.fail("no mpirun on PATH; the multi-rank rREST2 lane is an unmet criterion")
-    if _visible() < 2:
-        pytest.fail(f"2 states need 2 devices; {_visible()} visible")
-
-    work = tmp_path / "rrest2-mpi"
-    work.mkdir()
-    # A ladder's rungs are scaled and serialised at BUILD time, so `build-md` reads
-    # `<system>/build/built.xml` -- and `-odir work/project` makes `work` the system root. The
-    # three other ladder lanes in this file copy it in; this one was missed and refused before
-    # writing anything.
-    shutil.copytree(built / "build", work / "build")
-    tau_max = 0.5
-
-    # The reservoir: a fixed-tau run AT THE LADDER'S TOP RUNG, streaming complete phase space.
-    # Anything else is a sample of a different distribution.
-    (work / "hot.config").write_text(yaml.safe_dump({
-        "protocol": "cMD", "solvent": "implicit",
-        "dynamics": {"tau": tau_max, "seed": 11, "phase_space_printout": 10},
-        "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 10,
-                   "production_steps": 40},
-        "reporting": {"crd_printout_solute": 10, "info_printout": 20,
-                      "checkpoint_printout": 40}}, sort_keys=False), encoding="utf-8")
-    assert subprocess.run(CLI + ["build-md", "-odir", str(work / "hot"),
-                                 "--config", str(work / "hot.config")],
-                          capture_output=True, text=True, timeout=600).returncode == 0
-
-    hot_run = work / "hotrun"
-    _equilibrate_chain(work / "hot", built / "build" / "built.pdb", built / "build" / "built.xml", work, hot_run,
-                       last="cMD")
-    phase_space = sorted(hot_run.glob("*phase*"))
-    assert phase_space, f"no phase-space file: {sorted(p.name for p in hot_run.iterdir())}"
-    reservoir = phase_space[0]
-
-    # A SYSTEM ROOT OF ITS OWN FOR THE LADDER.
-    #
-    # The reservoir source above runs at `tau = tau_max` and the ladder at the default `tau = 0`,
-    # so the two resolve the SHARED `input/eq_*.in` differently -- and `input/` belongs to the
-    # system, so the second generation was refused by name: "give it a different `<system>` root".
-    # They are deliberately different experiments over one built system, which is exactly what the
-    # refusal advises. The reservoir reaches the ladder by the absolute path it already carries,
-    # so splitting the roots costs nothing.
-    ladder_root = work / "ladder"
-    shutil.copytree(built / "build", ladder_root / "build")
-
-    (ladder_root / "rrest2.config").write_text(yaml.safe_dump({
-        "protocol": "rREST2", "solvent": "implicit",
-        "dynamics": {"seed": 13},
-        "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 10,
-                   "production_steps": 40},
-        "reporting": {"crd_printout_solute": 10, "info_printout": 20,
-                      "checkpoint_printout": 40},
-        "rest2": {"number_of_replicas": 2, "tau_max": tau_max,
-                  "exchange_interval_steps": 20, "number_of_exchanges": 2},
-        "reservoir": {"enabled": True, "path": str(reservoir),
-                      "refresh_interval_exchanges": 1, "velocities": "inherit"}},
-        sort_keys=False), encoding="utf-8")
-    assert subprocess.run(CLI + ["build-md", "-odir", str(ladder_root / "project"),
-                                 "--config", str(ladder_root / "rrest2.config")],
-                          capture_output=True, text=True, timeout=600).returncode == 0
-
-    run = work / "run"
-    start = _equilibrate(ladder_root / "project", built / "build" / "built.pdb",
-                         built / "build" / "built.xml", work, run, script="rREST2.py")
-    done = subprocess.run(
-        ["mpirun", "-n", "2", sys.executable, str(ladder_root / "project" / "rREST2.py"),
-         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
-         "-c", str(start), "-odir", str(run), "-ng", "2"],
-        cwd=work, capture_output=True, text=True, timeout=3600,
-        env=_environment(work, **_machine()))
-    assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
-
-    trajectories = sorted(run.glob("whole_state*_prod1.nc"))
-    assert len(trajectories) == 2, [p.name for p in trajectories]
-    report = (run / "rREST2.out").read_text(encoding="utf-8")
-    assert "platform           : CUDA" in report, report[:1500]
-    assert "reservoir" in report.lower(), report[:2000]
-    _record("test_multi_rank_rrest2_with_a_real_reservoir",
-            feature="rREST2 implicit, 2 states, real mpirun -n 2, real reservoir refresh",
-            precision="mixed", device="0, 1",
-            detail=f"reservoir {reservoir.name}; {len(trajectories)} state trajectories")
 
 
 def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):

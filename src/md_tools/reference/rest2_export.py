@@ -431,9 +431,8 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
 
     if ladder.get("reservoir", {}).get("enabled"):
         raise ValueError(
-            f"{run_dir} ran with a reservoir (rREST2). A reservoir refresh replaces a rung's "
-            f"configuration from a prepared phase-space file, and that file is not part of this "
-            f"bundle; running it without one would be a different sampler. Nothing written.")
+            f"{run_dir} ran with a reservoir (rREST2), which is archived as of md-tools 0.5.4 "
+            f"and is not a ladder this bundle can reproduce. Nothing written.")
     if (ladder.get("collective_variables") or {}).get("file"):
         raise ValueError(
             f"{run_dir} ran with a collective-variable definition, which this bundle does not "

@@ -146,8 +146,8 @@ def test_the_rung_stages_are_the_stages_a_scaled_run_gets(tmp_path):
 def test_a_stage_of_zero_steps_is_left_out(tmp_path):
     from md_tools.build.md import per_tau_equilibration_stages
 
-    resolved = _resolve(tmp_path, {"protocol": "rREST2", "rest2": {"equilibration_per_tau": True},
-                                   "reservoir": {"enabled": True, "path": "reservoir.nc"},
+    # REST2, not rREST2: rREST2 is archived (0.5.4), and the stage selection is the ladder's.
+    resolved = _resolve(tmp_path, {"protocol": "REST2", "rest2": {"equilibration_per_tau": True},
                                    "stages": {"restrained_npt_steps": 0}})
     assert [stage["name"] for stage in per_tau_equilibration_stages(resolved)] == [
         "eq_nvt_posres", "eq_nvt_free"]
@@ -263,6 +263,11 @@ def test_every_generated_input_resolves_back_to_its_resolved_config(tmp_path):
 #: text and recovering the old digest): run.sh's header stops at the first flag, so
 #: `./run.sh --cpu` no longer takes "--cpu" as the topology; REST2.py's usage shows the
 #: group-file launch, since -s on the command line is refused.
+#: REFRESHED for the rREST2 archive (0.5.4): every `resolved.config` and `input/REST2.in` lost the
+#: `reservoir` section. Verified by appending `reservoir: {enabled: false, path: null,
+#: refresh_interval_exchanges: 1, velocities: resample}` to each resolved.config, and
+#: `reservoir_enabled = false, refresh_interval_exchanges = 1, reservoir_velocities = resample`
+#: to the end of &remd, which recovers every previous digest exactly. Nothing else moved.
 BEFORE = {
     "explicit": {
         "REST2-run1/REST2.py": "09af17815c1e151c6292e8fbeb8394fbabf8996c3b1d7d753ebc999ae1e93cce",
@@ -270,20 +275,20 @@ BEFORE = {
         "REST2-run1/eq/eq_2.py": "a9a19c6c5e8f839a7a51e81a1ec554f89655bd04d581bc0c1babaa6aa07e6562",
         "REST2-run1/eq/eq_3.py": "6daed6d160528e34e730c67997fb015667e2a3fe5cf80677be6b3f1e68b3ccad",
         "REST2-run1/resolved.config":
-            "6f2fec67bd208c7510d537405614a064b225baf4d693757170319806b8714093",
+            "fe7c4eb9d718ee976314c37e672480a9ddbeb6fe51641dda349b6f4f7096067a",
         # BYTE-IDENTICAL to the run root's, and the equality is the assertion: `eq/` holds
         # generated scripts, and a generated script reads the `resolved.config` strictly beside
         # itself, so the copy must be the same document rather than a second one.
         "REST2-run1/eq/resolved.config":
-            "8bf04c0240f9678a1859aa267103bd4c56e941396bfffff9ea7077c06345e782",
+            "5e641449a71ee3def42daf5a14f7952e30d95677e168b89dcd5a970b7205895e",
         # The SHARED minimisation's declaration: method-neutral, so it is the same file whichever
         # method generates it first. Its digest therefore differs from the run's by construction.
         "min/resolved.config":
-            "8bf04c0240f9678a1859aa267103bd4c56e941396bfffff9ea7077c06345e782",
+            "5e641449a71ee3def42daf5a14f7952e30d95677e168b89dcd5a970b7205895e",
         "REST2-run1/run.config":
             "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
         "REST2-run1/run.sh": "583fa241e887760637a9f729d71cb8b85e40314b034c4e695ea952b92d1aff8f",
-        "input/REST2.in": "b17734119b56cb502a5a0a0c5a71ef2ae04a926eaf97a5c109febc687b3dc189",
+        "input/REST2.in": "b2cfa97173b178eb6243d7433b42014013e309e0e94f2e20d46848c64cda1fc8",
         "input/eq_1.in": "149c24d1d7536173034b74f8f8dfa035292b2710aebe1d62449fcc7d2a8cd4eb",
         "input/eq_2.in": "1e803fb37f931840ea037601df2255831815a0e4e2aea7676f35af5a3cf74cd3",
         "input/eq_3.in": "372e78ebdae42eac63ca85445c397739e73258f6f4353b05f20114503bc35586",
@@ -296,15 +301,15 @@ BEFORE = {
         "REST2-run1/eq/eq_2.py": "3054435667e24ebc079e4ecae1f1ddbc3de854035a6ee440f1a61e4f95c2cd35",
         "REST2-run1/eq/eq_3.py": "63f242cd9e3c1bf26ae98ff86e95792d76bbe4d94d06653bdaa6c1b140628f62",
         "REST2-run1/resolved.config":
-            "51ebec05d57459fa2916373958a75bc720d7939bd684681a9aa113cc53c11c94",
+            "bb398c8fb1722a64851aef83d3a4d78c68ccf9cda1c51ab947d36520e4b4e12a",
         "REST2-run1/eq/resolved.config":
-            "299fd1aa5d3e8f67bf8887d68e782d6878a54cae88b1ac8a01af70f98da19d0a",
+            "3e21b7c5c11a448cef03b5b2de55086b3591460ec9fdc79010ed3c98998fcaa8",
         "min/resolved.config":
-            "299fd1aa5d3e8f67bf8887d68e782d6878a54cae88b1ac8a01af70f98da19d0a",
+            "3e21b7c5c11a448cef03b5b2de55086b3591460ec9fdc79010ed3c98998fcaa8",
         "REST2-run1/run.config":
             "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
         "REST2-run1/run.sh": "583fa241e887760637a9f729d71cb8b85e40314b034c4e695ea952b92d1aff8f",
-        "input/REST2.in": "11ed2bef6c9eb724d1efa4ed382125a001e7fde3745c51324b241e9d33411b7a",
+        "input/REST2.in": "2f34092f82e0031e7cf6a2ab2439661d4eb60b253d35d85336df22a05bd10525",
         "input/eq_1.in": "97f1e792f92394f75abb30a88161566cc617990a3ad32d075401afd421057e20",
         "input/eq_2.in": "42adbaf0eac18587f548d8b040d915f89b41078a94600e4d0972f9dd2d1756e8",
         "input/eq_3.in": "e4b9e3b368a7261715c33468a67e008257eee7c42227ff42f17990d18f1caecc",

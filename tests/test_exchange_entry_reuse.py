@@ -35,7 +35,6 @@ import pytest
 
 from md_tools.remd.driver import ReplicaRun
 from md_tools.remd.engine import Configuration, reduced_potential
-from md_tools.remd.reservoir import ReservoirRefreshRule
 from md_tools.remd.rules import NeighbouringExchangeRule, alternating_pairs, deterministic_phase
 
 
@@ -198,16 +197,6 @@ def test_two_states_declare_the_same_pair_every_time():
         n_states=2, state_to_walker=[0, 1], exchange_index=i)) for i in range(1, 6)}
     assert len(declarations) == 1
     assert declarations.pop() == frozenset({(0, 0), (1, 1), (0, 1), (1, 0)})
-
-
-def test_the_reservoir_rule_declares_the_sweep_it_delegates_to():
-    """The refresh consults no reduced potential, so it adds nothing to the declaration."""
-    plain = NeighbouringExchangeRule()
-    rule = ReservoirRefreshRule()
-    for exchange_index in (1, 2, 3):
-        arguments = {"n_states": 4, "state_to_walker": [3, 2, 1, 0],
-                     "exchange_index": exchange_index}
-        assert rule.required_entries(**arguments) == plain.required_entries(**arguments)
 
 
 def test_a_declaration_is_optional_and_its_absence_means_everything():
