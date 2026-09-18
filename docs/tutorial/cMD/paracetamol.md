@@ -47,6 +47,7 @@ This is the step that costs something, and the one you do **once per molecule**.
 solute:
   kind: ligand
   compound_id: CHEMBL112
+  aliases: [paracetamol, acetaminophen]
 ```
 
 ```bash
@@ -92,6 +93,20 @@ declares the readable copies, and a load verifies they are there.
 
 `compound_id: CHEMBL112` is the substance. It is not required (a compound no database lists gets
 `LOCAL-<InChIKey block>`), but giving it makes the package findable by a name other people use.
+`aliases` are the searchable names — they are **names, not identities**, so they do not enter the
+parameter id, and a package written with different aliases is the same package.
+
+!!! warning "Set the aliases before you register, or they never land"
+    `data-register --ligand-package` is write-once: a package already in the catalog under that
+    identity is KEPT, and a later copy carrying more aliases registers as "already registered,
+    kept" — accepted, and silently without effect. Worse, once the package is in your catalog,
+    `--parameterize` finds it by search and reuses it, so a configuration stating aliases produces
+    a package that has none and says nothing about it.
+
+    `data-register --find-ligand` searches the compound id, the residue name and the canonical
+    SMILES as well, so a package with no aliases is still findable as `CHEMBL112` or `TYL` — just
+    not as "paracetamol". To change the aliases of a package already registered, the catalog entry
+    has to be removed first.
 
 Add `--register` to copy the finished package into the shared catalog under
 `$MD_DATA/parameters/ligands/`. That is optional throughout: every build below reads the folder
