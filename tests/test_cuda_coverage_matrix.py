@@ -219,11 +219,65 @@ CUDA_SITES = {
         "restores a CUDA rung's context checkpoint on resume, including the integrator's "
         "pseudo-random stream position, which coordinates alone do not carry",
         "test_cv_mpi_cuda_lanes.py::test_cv_continuation_under_mpi_on_cuda"),
+    "alchemy/windows.py::run_window": (
+        "builds the sampling Simulation on the platform `preflight_stage` resolved (`checked.acceleration`, never a platform string), loads a checkpoint or sets coordinates, sets the window's state, and integrates it in checkpoint-sized chunks",
+        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
+        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
+        "of it passes --cpu and is not CUDA evidence"),
+    "alchemy/windows.py::run_window.commit": (
+        "saves the sampling Context's checkpoint through `commit_generation`, binding the sample stream's committed prefix; on CUDA a device-to-host copy of the whole Context state",
+        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
+        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
+        "of it passes --cpu and is not CUDA evidence"),
+    "alchemy/windows.py::CrossStateEvaluator.__init__": (
+        "creates the SECOND Context, the evaluation Context, over a copy of the Hamiltonian's System, on the Platform object and properties the caller passes -- `run_window` passes the preflight's resolution",
+        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
+        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
+        "of it passes --cpu and is not CUDA evidence"),
+    "alchemy/windows.py::CrossStateEvaluator.evaluate": (
+        "pushes the sampled positions and box into the evaluation Context and, per state, sets the Hamiltonian's parameters and evaluates the energy; then the complete derivative at the origin state -- K+1 or more energy evaluations per report",
+        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
+        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
+        "of it passes --cpu and is not CUDA evidence"),
+    "alchemy/windows.py::SampleStreamReporter.report": (
+        "reads positions, box and energy out of the State the sampling Context produced for this report, and drives the evaluation Context through `CrossStateEvaluator.evaluate`",
+        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
+        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
+        "of it passes --cpu and is not CUDA evidence"),
+    "alchemy/windows.py::_set_initial_coordinates": (
+        "writes the starting State (or PDB positions and box) into the sampling Context",
+        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
+        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
+        "of it passes --cpu and is not CUDA evidence"),
+    "alchemy/windows.py::ParametricHamiltonian.set_state": (
+        "sets Context global parameters on whatever Context it is given -- the sampling or the evaluation one",
+        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
+        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
+        "of it passes --cpu and is not CUDA evidence"),
+    "alchemy/windows.py::ParametricHamiltonian.derivatives": (
+        "sets the state and reads OpenMM energy-parameter derivatives off the Context it is given",
+        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
+        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
+        "of it passes --cpu and is not CUDA evidence"),
+    "alchemy/windows.py::ComposedHamiltonian.set_state": (
+        "delegates to the inner Hamiltonian's set_state and sets `lambda_restraints` on the Context it is given",
+        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
+        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
+        "of it passes --cpu and is not CUDA evidence"),
+    "alchemy/windows.py::ComposedHamiltonian.derivatives": (
+        "the inner Hamiltonian's derivatives plus a restricted parameter-derivative evaluation of force group 16 (the Boresch restraint) on the Context it is given",
+        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
+        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
+        "of it passes --cpu and is not CUDA evidence"),
 }
 
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
 #: named exemption rather than an omission -- and the reason is checkable by reading the callsite.
 NON_CUDA_CONTEXT_SITES = {
+    "alchemy/windows.py::ParametricHamiltonian.__init__":
+        "inspects the forces of a System on the host -- global parameter names, requested derivatives, NonbondedForce offsets -- to prove its derivatives are complete. No Context exists.",
+    "alchemy/windows.py::ComposedHamiltonian.__init__":
+        "copies the inner System by an XmlSerializer round trip and adds the Boresch restraint force in group 16. No Context exists; the device work is in set_state and derivatives, classified as CUDA sites.",
     "build/md.py::_generated_cv_text":
         "reads the bond graph for `collective_variables.generate` off the SERIALISED built System "
         "-- `HarmonicBondForce.getBondParameters` and `System.getConstraintParameters` are System "
