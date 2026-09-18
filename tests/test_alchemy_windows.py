@@ -261,15 +261,61 @@ def test_window_campaign_recovers_the_exact_free_energy(model):
     print(f"\nS4 W7 campaign: exact {exact:.4f} kcal/mol, samples {samples.counts()}")
     for name, e in result["estimates"].items():
         print(f"  {name:12s} {e['delta_g_kcal_mol']:.4f} +- {e['sigma_kcal_mol']:.4f} kcal/mol")
-    for name in ("MBAR", "BAR", "EXP_forward", "EXP_reverse"):
+    # W7 as recorded in the acceptance matrix (2026-09-19): five windows are too coarse for 18
+    # coordinates. MBAR, BAR and EXP forward pass the gate; EXP reverse fails it and TI is
+    # inconclusive. The gate is not weakened. What is asserted about those two is W7b: neither
+    # failure is SILENT -- each is flagged by its own diagnostics.
+    verdicts = _verdicts(result, exact)
+    for name in ("MBAR", "BAR", "EXP_forward"):
+        assert verdicts[name]["verdict"] == "PASS", (name, verdicts[name])
+    _assert_no_silent_failure(result, verdicts)
+
+
+@pytest.mark.slow
+def test_w8_seventeen_windows_pass_every_estimator(model):
+    """W8, defined after W7 and before sampling: the same model and gate on 17 windows."""
+    states = window_states(model["path"], [k / 16 for k in range(17)], temperature_k=T)
+    model = dict(model, states=states)
+    settings = WindowSettings(steps=100_000, report_interval=200, checkpoint_interval=20_000,
+                              equilibration_steps=2000, timestep_fs=2.0, seed=8)
+    out = model["tmp"] / "w8"
+    parts = []
+    for st in states:
+        _run(model, st.state_id, settings, out=out)
+        p = window_paths(out, st.state_id)
+        parts.append(read_window_samples(p["samples"], json.loads(p["record"].read_text())))
+    result = est.analyze(concatenate(parts))
+    exact = exact_kj_mol() / KJ_PER_KCAL
+    verdicts = _verdicts(result, exact)
+    print(f"\nS4 W8 campaign: exact {exact:.4f} kcal/mol")
+    for name, v in verdicts.items():
         e = result["estimates"][name]
-        gate = est.agreement_gate(e["delta_g_kcal_mol"], e["sigma_kcal_mol"], exact)
-        assert gate["verdict"] == "PASS", (name, gate)
-    ti = result["estimates"]["TI"]
-    gate = est.agreement_gate(ti["delta_g_kcal_mol"], ti["sigma_kcal_mol"], exact,
-                              integration_sigma_kcal=ti["diagnostics"][
-                                  "quadrature_discrepancy_kJ_mol"] / KJ_PER_KCAL)
-    assert gate["verdict"] == "PASS", ("TI", gate)
+        print(f"  {name:12s} {e['delta_g_kcal_mol']:.4f} +- {e['sigma_kcal_mol']:.4f} "
+              f"kcal/mol  {v['verdict']}")
+    for name, v in verdicts.items():
+        assert v["verdict"] == "PASS", (name, v)
+
+
+def _verdicts(result, exact):
+    out = {}
+    for name in ("MBAR", "BAR", "EXP_forward", "EXP_reverse", "TI"):
+        e = result["estimates"][name]
+        sigma_int = (e["diagnostics"]["quadrature_discrepancy_kJ_mol"] / KJ_PER_KCAL
+                     if name == "TI" else 0.0)
+        out[name] = est.agreement_gate(e["delta_g_kcal_mol"], e["sigma_kcal_mol"], exact,
+                                       integration_sigma_kcal=sigma_int)
+    return out
+
+
+def _assert_no_silent_failure(result, verdicts):
+    for name, v in verdicts.items():
+        if v["verdict"] == "PASS":
+            continue
+        d = result["estimates"][name]["diagnostics"]
+        flagged = d.get("poor_overlap") or (
+            name == "TI" and v["verdict"] == "INCONCLUSIVE"
+            and d["quadrature_discrepancy_kJ_mol"] / KJ_PER_KCAL > est.GATE_MAX_COMBINED_SIGMA_KCAL_MOL / 3)
+        assert flagged, (f"{name} missed the gate ({v}) and nothing in its diagnostics says so")
 
 
 # ---------------------------------------------------------------------- the restraint layer
