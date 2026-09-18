@@ -70,6 +70,13 @@ CRITERIA_NAME = "parameter.config"
 PACKAGE_FILES = (MOLECULE_NAME, FFXML_NAME, METADATA_NAME)
 #: Files a package MAY hold beside the required ones. Anything else is refused.
 OPTIONAL_PACKAGE_FILES = (CRITERIA_NAME,)
+
+#: A package directory may also hold READABLE COPIES -- `TYL.sdf`, `TYL.pdb`, `TYL.xml` -- for a
+#: person, a tutorial and a `build-top` command line to point at. They are not identity and they
+#: are not parameters: they are copies of what the package already holds, DECLARED in the metadata
+#: with their digests and verified on load. Declared rather than merely tolerated, so "a package
+#: holds exactly these files" stays a check that catches junk rather than a comment.
+READABLE_COPIES_KEY = "readable_copies"
 ATOM_NAMES_PROPERTY = "MDT_ATOM_NAMES"
 PARAMETER_ID_PREFIX = "param_"
 IDENTITY_SCHEME = ("parameter_id = 'param_' + sha256(canonical_json({'chemical_state': "
@@ -173,7 +180,7 @@ class LigandPackage:
                 raise PackageError(f"the copy of {self.reference} in {staging} does not verify")
             os.rename(staging, destination)
         except BaseException:
-            for name in (*PACKAGE_FILES, *OPTIONAL_PACKAGE_FILES):
+            for name in package_files(self.path):
                 (staging / name).unlink(missing_ok=True)
             if staging.exists():
                 staging.rmdir()
@@ -188,13 +195,26 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def declared_copies(directory: Path) -> dict[str, dict[str, Any]]:
+    """The readable copies the metadata declares, or an empty mapping."""
+    metadata_path = Path(directory) / METADATA_NAME
+    if not metadata_path.is_file():
+        return {}
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return dict(metadata.get(READABLE_COPIES_KEY) or {})
+
+
 def package_files(directory: Path) -> list[str]:
-    """The package's files: the required ones, plus any optional one it carries."""
+    """The package's files: the required ones, any optional one, and any declared copy."""
     for name in PACKAGE_FILES:
         if not (Path(directory) / name).is_file():
             raise PackageError(f"{directory}: missing {name}")
-    return [*PACKAGE_FILES, *(name for name in OPTIONAL_PACKAGE_FILES
-                              if (Path(directory) / name).is_file())]
+    return [*PACKAGE_FILES,
+            *(name for name in OPTIONAL_PACKAGE_FILES if (Path(directory) / name).is_file()),
+            *sorted(declared_copies(directory))]
 
 
 def package_digest(directory: Path) -> str:
@@ -751,6 +771,10 @@ def _subsystem_table(system, mol, atom_indices: Sequence[int], c14: float, lj14:
 # ------------------------------------------------------------------------------------------------
 # loading
 # ------------------------------------------------------------------------------------------------
+#: `readable_copies` is OPTIONAL: a package written before the parameterise mode existed has
+#: none, and one created by an ordinary build still has none.
+_OPTIONAL_METADATA = (READABLE_COPIES_KEY,)
+
 _REQUIRED_METADATA = ("schema_version", "identity_scheme", "parameter_id", "template_name",
                       "compound", "chemical_state", "atoms", "forcefield", "charges",
                       "parameter_digest", "parameter_table_schema", "artifacts", "software",
@@ -764,18 +788,31 @@ def load_package(directory: Path, *, expected_directory_name: bool = True) -> Li
     for name in PACKAGE_FILES:
         if not (directory / name).is_file():
             raise PackageError(f"{directory}: not a ligand package (missing {name})")
-    known = (*PACKAGE_FILES, *OPTIONAL_PACKAGE_FILES)
+    # Read from the metadata on disk: this check runs before the metadata is parsed below, because
+    # an unexpected file is refused before anything else is believed about the directory.
+    copies = declared_copies(directory)
+    known = (*PACKAGE_FILES, *OPTIONAL_PACKAGE_FILES, *copies)
     extra = sorted(p.name for p in directory.iterdir() if p.name not in known)
     if extra:
         raise PackageError(f"{directory}: unexpected files {extra}; a package holds "
                            f"{', '.join(PACKAGE_FILES)}, optionally with "
-                           f"{', '.join(OPTIONAL_PACKAGE_FILES)}")
+                           f"{', '.join(OPTIONAL_PACKAGE_FILES)} and the readable copies its "
+                           f"metadata declares ({', '.join(sorted(copies)) or 'none'})")
+    for name, recorded in sorted(copies.items()):
+        path = directory / name
+        if not path.is_file():
+            raise PackageError(f"{directory}: the metadata declares the readable copy {name!r}, "
+                               f"which is not there")
+        actual = _sha256_bytes(path.read_bytes())
+        if recorded.get("sha256") != actual:
+            raise PackageError(f"{path}: sha256 {actual} does not match the metadata "
+                               f"({recorded.get('sha256')}); the copy was modified")
     try:
         metadata = json.loads((directory / METADATA_NAME).read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise PackageError(f"{directory / METADATA_NAME}: not valid JSON ({exc})") from exc
     missing = [k for k in _REQUIRED_METADATA if k not in metadata]
-    unknown = sorted(set(metadata) - set(_REQUIRED_METADATA))
+    unknown = sorted(set(metadata) - set(_REQUIRED_METADATA) - set(_OPTIONAL_METADATA))
     if missing or unknown:
         raise PackageError(f"{directory / METADATA_NAME}: missing {missing}, unknown {unknown}")
     if metadata["schema_version"] != PACKAGE_SCHEMA:

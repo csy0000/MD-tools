@@ -175,6 +175,17 @@ A single-molecule build (`ligand`, `peptide-like`) now also works through a pack
 reuses the one `solute.parameters` names, or creates one from the prepared molecule and writes it to
 `ligands/` beside `built.xml`. Either way the charges are computed at most once per build.
 
+### Parameters without a System: `--parameterize`
+
+```text
+md-openmm build-top --parameterize -i MOLECULE.{sdf,mol2} --resname NAME \
+    -op DIR/NAME.pdb -os DIR/NAME.xml -log LOG [--config PATH] [--register]
+```
+
+The third mode of this command, beside the build and `--rest2-scaler`. It writes ONE directory
+holding a reusable ligand parameter package and the readable copies named for `--resname`. No
+box, no solvent and no System to integrate: see [Ligand parameter packages](ligand-packages.md).
+
 ## What a build writes
 
 ```text

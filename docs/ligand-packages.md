@@ -174,6 +174,46 @@ not match, and a build record keeps it.
 
 ## Making a package
 
+**With `build-top --parameterize`**, which exists to produce a package and nothing else:
+
+```bash
+md-openmm build-top --parameterize -i TYL.sdf --config para.config \
+    -op build/parameter/TYL.pdb -os build/parameter/TYL.xml \
+    -log build/parameterize.log --resname TYL [--register]
+```
+
+`-i` reads a `.sdf` or a `.mol2` -- the only place `.mol2` is accepted, because parameterisation
+needs a molecular graph with bond orders and that is what several docking and preparation tools
+write. `-op` and `-os` must name files in ONE directory, and that directory is what is written:
+
+```text
+build/parameter/  molecule.sdf       the package
+                  parameters.ffxml   the package
+                  metadata.json      the package
+                  parameter.config   the package
+                  TYL.sdf            a readable copy of the molecule, named for --resname
+                  TYL.pdb            the molecule as a topology (-op)
+                  TYL.xml            the molecule ALONE as a serialised System (-os)
+```
+
+The first four ARE a package, so the directory registers and a catalog search finds it. The last
+three are what a person, a tutorial and a later command line point at; they are declared in the
+metadata with their digests, and a package whose copies were modified is refused. `-log` must be
+written OUTSIDE the directory, because a package holds nothing it does not declare.
+
+`TYL.xml` is the molecule alone: no solvent, no box, no cutoff, no constraints. It is a parameters
+artefact for reading and comparing, not a system to integrate -- a run's Hamiltonian comes from a
+`build-top` build that loads this package.
+
+The directory needs no particular name: `build/parameter/` is a perfectly good local package, and
+`<compound>/param_<id>/` is only what the CATALOG requires. `--register` is optional and goes
+through the same write-once path as `data-register --ligand-package`; it is not a second
+registration.
+
+`solute.parameters` applies here too, so a molecule the catalog already holds in this exact state,
+with these charges and this force field, is REUSED rather than charged again. What the mode
+guarantees is a package directory, not a charge calculation.
+
 **In a build.** A single-molecule build (`solute.kind: ligand` or `peptide-like`) with no
 `solute.parameters` creates a package from its prepared molecule before any force field is built.
 The charges are generated once, and every step of that build loads the saved parameters:
