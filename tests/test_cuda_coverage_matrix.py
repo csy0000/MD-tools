@@ -278,7 +278,7 @@ NON_CUDA_CONTEXT_SITES = {
         "`openmm.app.Topology` accessors and share their spelling with the Context ones. No "
         "Context, no System and no platform are involved -- this function maps ligand residues "
         "onto parameter packages and hands back a topology.",
-    "ligands/package.py::_subsystem_table":
+    "ligands/package.py::subsystem_parameter_table":
         "walks `System.getForces()` -- the host-side list of Force OBJECTS, not `State.getForces`, "
         "which is the device-derived array of the same name -- to read a ligand's parameters out "
         "of an already-built System: charges, Lennard-Jones, bonds, angles, torsions, exceptions "

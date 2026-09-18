@@ -76,7 +76,7 @@ from typing import Any, Iterable, Optional, Sequence
 import numpy as np
 
 from ..ligands.mapping import LigandSelector
-from ..ligands.package import LigandPackage, _compare_tables, _subsystem_table, load_package
+from ..ligands.package import LigandPackage, compare_parameter_tables, subsystem_parameter_table, load_package
 from .topology_mapping import AtomMap, MapError, _bonds, _neighbours, _positions, validate_map
 
 __all__ = [
@@ -98,7 +98,7 @@ PASSIVE_FORCES = ("CMMotionRemover", "MonteCarloBarostat", "MonteCarloAnisotropi
                   "MonteCarloMembraneBarostat", "MonteCarloFlexibleBarostat", "CMAPTorsionForce")
 
 #: Relative tolerance for "the environment carries package A's parameters": the package's own
-#: comparison tolerance (`ligands.package._compare_tables`).
+#: comparison tolerance (`ligands.package.compare_parameter_tables`).
 PARAMETER_RTOL = 1e-9
 #: Two constraint lengths are the same constraint only if they agree to this (nm). Lengths from one
 #: force-field parameter are bit-identical; a real difference is >= 1e-4 nm.
@@ -247,11 +247,11 @@ def _check_environment(environment: Environment, package_a: LigandPackage,
 
     c14, lj14 = package_a.conventions["coulomb14scale"], package_a.conventions["lj14scale"]
     try:
-        table, constrained = _subsystem_table(system, package_a.mol, ligand_indices, c14, lj14)
+        table, constrained = subsystem_parameter_table(system, package_a.mol, ligand_indices, c14, lj14)
     except ValueError as exc:
         raise TopologyError(f"the environment ligand cannot be read as package "
                             f"{package_a.reference}: {exc}") from exc
-    problems = _compare_tables(package_a.table, table, where="environment ligand",
+    problems = compare_parameter_tables(package_a.table, table, where="environment ligand",
                                skip_masses=True, missing_bonds_ok=table["_constraint_lengths"],
                                rel=PARAMETER_RTOL)
     if problems:

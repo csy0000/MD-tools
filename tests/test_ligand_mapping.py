@@ -88,7 +88,7 @@ def test_repeated_copies_and_a_second_species_map_with_equivalent_parameters(tmp
 
     from md_tools.ligands.mapping import (assert_instances_unchanged, load_packages_into,
                                           map_ligands)
-    from md_tools.ligands.package import _subsystem_table, _compare_tables
+    from md_tools.ligands.package import subsystem_parameter_table, compare_parameter_tables
     from md_tools.ligands.parameters import ligand_system
 
     tyl = _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
@@ -122,10 +122,10 @@ def test_repeated_copies_and_a_second_species_map_with_equivalent_parameters(tmp
         indices = [a.index for a in residue.atoms()]
         package = instance.package
         # Every parameter of this instance in the complex System is the package's own.
-        table, _ = _subsystem_table(system, package.mol, indices,
+        table, _ = subsystem_parameter_table(system, package.mol, indices,
                                     package.conventions["coulomb14scale"],
                                     package.conventions["lj14scale"])
-        assert _compare_tables(table, package.table, where=instance.selector.label(),
+        assert compare_parameter_tables(table, package.table, where=instance.selector.label(),
                                skip_masses=True) == []
         # And the isolated-ligand energy at these coordinates is the package's own.
         from openmm import Context, Platform, VerletIntegrator
