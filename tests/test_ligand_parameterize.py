@@ -74,7 +74,7 @@ def _parameterize(work: Path, structure: Path, catalog: Path, *, out="build/para
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("source", ["sdf", "mol2"])
+@pytest.mark.parametrize("source", ["sdf", "mol2", "smi"])
 def test_it_writes_a_real_package_with_the_readable_copies_beside_it(tmp_path, source):
     from md_tools.build.record import read_record
     from md_tools.ligands import load_package
@@ -83,7 +83,15 @@ def test_it_writes_a_real_package_with_the_readable_copies_beside_it(tmp_path, s
     work = tmp_path / "work"
     work.mkdir()
     mol = _molecule("CC(=O)Nc1ccc(O)cc1")
-    structure = (_sdf(mol, work / "in.sdf") if source == "sdf" else _mol2(mol, work / "in.mol2"))
+    if source == "sdf":
+        structure = _sdf(mol, work / "in.sdf")
+    elif source == "mol2":
+        structure = _mol2(mol, work / "in.mol2")
+    else:
+        # No coordinates at all: the conformer is embedded, as build-top embeds one. The package
+        # identity does not depend on it, so this must reach the same parameter id.
+        structure = work / "in.smi"
+        structure.write_text("CC(=O)Nc1ccc(O)cc1 paracetamol\n", encoding="utf-8")
 
     result = _parameterize(work, structure, tmp_path / "catalog")
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
@@ -112,6 +120,9 @@ def test_it_writes_a_real_package_with_the_readable_copies_beside_it(tmp_path, s
 
     record = read_record(work / "parameterize.log")
     assert record["mode"] == "parameterize"
+    coordinates = record["interpretation"]["coordinates"]
+    assert ("embedded from the SMILES" in coordinates) is (source == "smi")
+    assert ("used as given" in coordinates) is (source != "smi")
     assert record["outputs"]["package"]["reference"] == tyl.reference
     # The catalog already held this exact state, so nothing was charged again.
     assert record["ligand_packages"]["attached"]["charges_generated_in_this_build"] is False
@@ -191,13 +202,13 @@ def test_a_molecule_the_catalog_does_not_hold_is_parameterised(tmp_path):
     ("log inside", "inside the package directory"),
     ("with scaler", "two different jobs"),
     ("resname without the flag", "belongs to --parameterize"),
-    ("smiles input", "must be .sdf or .mol2"),
+    ("pdb input", "must be .sdf, .mol2, .smi"),
 ])
 def test_the_refusals(tmp_path, case, expected):
     work = tmp_path / "work"
     work.mkdir()
     (work / "in.sdf").write_text("x\n", encoding="utf-8")
-    (work / "in.smi").write_text("CCO ethanol\n", encoding="utf-8")
+    (work / "in.pdb").write_text("END\n", encoding="utf-8")
     args = {
         "two directories": ["--parameterize", "-i", "in.sdf", "-op", "a/TYL.pdb",
                             "-os", "b/TYL.xml", "--resname", "TYL"],
@@ -210,10 +221,96 @@ def test_the_refusals(tmp_path, case, expected):
                        "-log", "e/built.log", "--resname", "TYL"],
         "with scaler": ["--parameterize", "--rest2-scaler", "-i", "in.sdf", "--resname", "TYL"],
         "resname without the flag": ["-i", "in.sdf", "--resname", "TYL"],
-        "smiles input": ["--parameterize", "-i", "in.smi", "-op", "f/T.pdb", "-os", "f/T.xml",
-                         "--resname", "TYL"],
+        # A structure is not a molecular graph: a .pdb has no bond orders, which is what
+        # parameterisation needs, so it is refused here while .smi is embedded.
+        "pdb input": ["--parameterize", "-i", "in.pdb", "-op", "f/T.pdb", "-os", "f/T.xml",
+                      "--resname", "TYL"],
     }[case]
     result = _run(args, work)
     assert result.returncode == 2, result.stdout[-1000:] + result.stderr[-1000:]
     assert expected in result.stderr, result.stderr
     assert not any(work.glob("*/TYL.pdb")) and not any(work.glob("*/*.xml"))
+
+
+@pytest.mark.slow
+def test_a_build_reuses_the_parameterised_folder_by_path(tmp_path):
+    """The canonical two-step: parameterise into a folder, then build pointing AT that folder.
+
+    No catalog, no registration, no copying the folder into a second one under another name. The
+    path is relative to the configuration that names it, so nothing in a committed file is a
+    machine path.
+    """
+    from md_tools.build.record import read_record
+
+    _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    work = tmp_path / "work"
+    (work / "build").mkdir(parents=True)
+    (work / "input").mkdir()
+    _sdf(_molecule("CC(=O)Nc1ccc(O)cc1"), work / "input" / "TYL.sdf")
+    (work / "input" / "para.smi").write_text("CC(=O)Nc1ccc(O)cc1 paracetamol\n", encoding="utf-8")
+
+    (work / "build" / "para.config").write_text(
+        f"solute:\n  kind: ligand\n  compound_id: CHEMBL112\n"
+        f"ligand_catalog:\n  path: {tmp_path / 'catalog'}\n", encoding="utf-8")
+    made = _run(["--parameterize", "-i", "input/TYL.sdf", "--config", "build/para.config",
+                 "-op", "build/parameter/TYL.pdb", "-os", "build/parameter/TYL.xml",
+                 "-log", "build/parameterize.log", "--resname", "TYL"], work)
+    assert made.returncode == 0, made.stdout[-2000:] + made.stderr[-2000:]
+
+    # Step (b): the build points at the folder, by a path relative to its own configuration.
+    (work / "build" / "build-top.config").write_text(
+        "solute:\n  kind: ligand\n  residue_name: TYL\n  parameters: ./parameter\n"
+        "solvent:\n  model: TIP3P\n  padding_nm: 1.0\n", encoding="utf-8")
+    built = _run(["-i", "input/para.smi", "-os", "build/built.xml", "-op", "build/built.pdb",
+                  "-log", "build/built.log", "--config", "build/build-top.config"], work)
+    assert built.returncode == 0, built.stdout[-2000:] + built.stderr[-2000:]
+    attached = read_record(work / "build" / "built.log")["ligand_packages"]["attached"]
+    assert attached["how"] == "reused (stated reference)"
+    assert attached["charges_generated_in_this_build"] is False
+
+    # An absolute path works too, and a path that is not there says how it was read.
+    (work / "build" / "absolute.config").write_text(
+        f"solute:\n  kind: ligand\n  residue_name: TYL\n"
+        f"  parameters: {work / 'build' / 'parameter'}\n"
+        f"solvent:\n  model: TIP3P\n  padding_nm: 1.0\n", encoding="utf-8")
+    again = _run(["-i", "input/para.smi", "-os", "b2/built.xml", "-op", "b2/built.pdb",
+                  "-log", "b2/built.log", "--config", "build/absolute.config"], work)
+    assert again.returncode == 0, again.stderr[-2000:]
+    assert (work / "b2" / "built.xml").read_bytes() == (work / "build" / "built.xml").read_bytes()
+
+    (work / "build" / "missing.config").write_text(
+        "solute:\n  kind: ligand\n  residue_name: TYL\n  parameters: ./not-there\n",
+        encoding="utf-8")
+    missing = _run(["-i", "input/para.smi", "-os", "b3/built.xml", "-op", "b3/built.pdb",
+                    "-log", "b3/built.log", "--config", "build/missing.config"], work)
+    assert missing.returncode == 2
+    assert "is not a directory" in missing.stderr and "catalog reference" in missing.stderr
+    assert not (work / "b3").exists()
+
+
+@pytest.mark.slow
+def test_a_package_directory_moves_as_a_unit(tmp_path):
+    """Copying only the four "package" files leaves the declared copies behind, and is refused."""
+    import shutil
+
+    from md_tools.ligands import PackageError, load_package
+    from md_tools.ligands.package import PACKAGE_FILES, CRITERIA_NAME
+
+    _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    work = tmp_path / "work"
+    work.mkdir()
+    result = _parameterize(work, _sdf(_molecule("CC(=O)Nc1ccc(O)cc1"), work / "in.sdf"),
+                           tmp_path / "catalog")
+    assert result.returncode == 0, result.stderr[-2000:]
+    directory = work / "build" / "parameter"
+
+    partial = tmp_path / "partial"
+    partial.mkdir()
+    for name in (*PACKAGE_FILES, CRITERIA_NAME):
+        shutil.copy2(directory / name, partial / name)
+    with pytest.raises(PackageError, match="which is not there"):
+        load_package(partial, expected_directory_name=False)
+
+    whole = tmp_path / "whole"
+    shutil.copytree(directory, whole)
+    assert load_package(whole, expected_directory_name=False).reference.startswith("CHEMBL112/")

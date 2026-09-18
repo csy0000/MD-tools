@@ -25,6 +25,8 @@ from .package import (CRITERIA_NAME, LigandPackage, PackageError, load_package,
 
 __all__ = [
     "CATALOG_SUBPATH",
+    "is_catalog_reference",
+    "resolve_package",
     "search_for_match",
     "REFERENCE_PATTERN",
     "catalog_root_for",
@@ -188,3 +190,38 @@ def search_for_match(request: dict, roots: Iterable[Path]) -> tuple[Optional[Lig
                 return package, {"decision": "reuse", "matched": reference,
                                  "catalog_root": str(root), "considered": considered}
     return None, {"decision": "parameterise", "matched": None, "considered": considered}
+
+
+def is_catalog_reference(text: str) -> bool:
+    """Whether this names a CATALOG entry (`<compound>/param_<12 hex>`) rather than a path."""
+    return bool(REFERENCE_PATTERN.fullmatch(str(text)))
+
+
+def resolve_package(reference: str, *, roots: Iterable[Path],
+                    base_dir: Optional[Path] = None) -> LigandPackage:
+    """The package a configuration names, however it names it. ONE resolver, used everywhere.
+
+    `CHEMBL112/param_e932f4c4f371` is looked up in the catalogs, in order. Anything else is a PATH
+    to a package directory -- absolute, or relative to the configuration that names it -- and is
+    loaded from there without requiring the catalog's `<compound>/param_<id>/` naming: a local
+    package is `build/parameter/`, which is what `build-top --parameterize` writes.
+
+    A configuration naming a path it cannot open gets a message that says which of the two it was
+    read as, because `CHEMBL112/param_xxx` with a typo is a path that does not exist and the
+    refusal would otherwise be mystifying.
+    """
+    text = str(reference)
+    if is_catalog_reference(text):
+        return find_package(text, roots)
+    path = Path(text).expanduser()
+    if not path.is_absolute() and base_dir is not None:
+        path = Path(base_dir) / path
+    if not path.is_dir():
+        raise PackageError(
+            f"{reference!r} is not `<compound-id>/param_<12 hex>`, so it is read as a path to a "
+            f"package directory -- and {path} is not a directory. Write the catalog reference "
+            f"exactly, or point at a directory holding molecule.sdf, parameters.ffxml and "
+            f"metadata.json.")
+    # expected_directory_name=False: a LOCAL package directory is named whatever its build named
+    # it; `<compound>/param_<id>/` is what the CATALOG requires, and registration gives it that.
+    return load_package(path, expected_directory_name=False)

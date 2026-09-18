@@ -45,19 +45,42 @@ __all__ = ["PARAMETERIZE_SUFFIXES", "parameterize_ligand", "read_molecule"]
 
 #: What `--parameterize -i` reads. `.mol2` is accepted here and nowhere else: it carries a
 #: molecular graph with bond orders, which is what parameterisation needs, and it is what several
-#: docking and preparation tools write.
-PARAMETERIZE_SUFFIXES = (".sdf", ".mol2")
+#: docking and preparation tools write. `.smi` states the chemistry and no coordinates, so a
+#: conformer is EMBEDDED exactly as `build-top` embeds one (ETKDGv3 from the run seed, then MMFF):
+#: the package needs a conformer for its molecule.sdf and for the readable topology.
+#:
+#: The conformer is NOT part of a package's identity -- that is the chemical-state digest plus the
+#: parameter digest -- so the same molecule parameterised from a .smi and from a .sdf gets the same
+#: parameter id with DIFFERENT molecule.sdf coordinates. Measured by md-tools-propka: two builds
+#: from the SMILES gave identical charges and the same id as the package built from the SDF.
+PARAMETERIZE_SUFFIXES = (".sdf", ".mol2", ".smi")
 
 
-def read_molecule(path: Path):
-    """The one molecule in *path*, hydrogens kept, or a refusal naming what is wrong with it."""
+def read_molecule(path: Path, *, cfg: Optional[dict] = None, work: Optional[Path] = None):
+    """The one molecule in *path*, hydrogens kept, or a refusal naming what is wrong with it.
+
+    Returns `(molecule, how)`, where `how` says where the coordinates came from -- read, or
+    embedded from a SMILES -- so the record can tell the routes apart. `molecule.sdf` legitimately
+    differs between them while the parameter id does not.
+    """
     from rdkit import Chem
 
-    from ..openmm.system import read_single_sdf_molecule
+    from ..openmm.system import initial_structure, read_single_sdf_molecule
 
     path = Path(path)
+    if path.suffix.lower() == ".smi":
+        from .top import read_single_smiles
+
+        smiles, _name = read_single_smiles(path)
+        prepared = initial_structure(smiles, Path(work) / "structure", cfg or {})
+        mol = Chem.MolFromMolFile(prepared["solute_sdf"], removeHs=False)
+        seed = ((cfg or {}).get("structure", {}).get("etkdg", {}).get("seed")
+                or (cfg or {}).get("run", {}).get("seed"))
+        return mol, (f"embedded from the SMILES {smiles} (ETKDGv3 seed {seed}, "
+                     f"{prepared['n_conformers_embedded']} conformers, "
+                     f"{prepared['mmff_variant']}-minimised, lowest kept)")
     if path.suffix.lower() == ".sdf":
-        return read_single_sdf_molecule(path)
+        return read_single_sdf_molecule(path), "read from the SDF, used as given"
     mol = Chem.MolFromMol2File(str(path), removeHs=False, sanitize=True)
     if mol is None:
         raise ConfigError(
@@ -71,7 +94,7 @@ def read_molecule(path: Path):
             f"-i {path}: carries no explicit hydrogens. The molecule is parameterised exactly as "
             f"given and none are added, so an implicit-hydrogen file would be parameterised as "
             f"its heavy-atom skeleton.")
-    return mol
+    return mol, "read from the mol2, used as given"
 
 
 def _ligand_system(package) -> str:
@@ -128,8 +151,7 @@ def parameterize_ligand(*, input_path: Path, config_path: Optional[Path], out_pd
     if input_path.suffix.lower() not in PARAMETERIZE_SUFFIXES:
         raise ConfigError(
             f"-i {input_path}: --parameterize reads a molecular graph with coordinates, so the "
-            f"input must be {' or '.join(PARAMETERIZE_SUFFIXES)}, not {input_path.suffix}. A "
-            f"SMILES has no conformer to write as a topology; build a System from it instead.")
+            f"input must be {', '.join(PARAMETERIZE_SUFFIXES)}, not {input_path.suffix}.")
     if not re.fullmatch(r"[A-Za-z0-9]{3}", str(residue_name)):
         raise ConfigError(f"--resname {residue_name!r} must be three letters or digits: it is the "
                           f"PDB residue-name field, and it names the files beside the package.")
@@ -176,8 +198,6 @@ def parameterize_ligand(*, input_path: Path, config_path: Optional[Path], out_pd
             f"replace them deliberately; a package that is silently rewritten leaves every build "
             f"that recorded its digest describing parameters that no longer exist.")
 
-    mol = read_molecule(input_path)
-
     for target in (out_pdb, out_system, out_log):
         target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -198,6 +218,10 @@ def parameterize_ligand(*, input_path: Path, config_path: Optional[Path], out_pd
     try:
         staging = Path(tempfile.mkdtemp(prefix=".parameterize-", dir=directory))
         try:
+            # AFTER the log exists: a SMILES input embeds a conformer here, which is work rather
+            # than a check on the inputs, and the seed it used belongs in the record.
+            mol, coordinates = read_molecule(input_path, cfg=cfg, work=staging)
+            log.field("coordinates", coordinates)
             from ..ligands.build import attach_ligand_package
 
             log.heading("Parameters")
@@ -297,7 +321,8 @@ def parameterize_ligand(*, input_path: Path, config_path: Optional[Path], out_pd
             resolved_config=sys_resolved,
             stated_keys={k: list(v) for k, v in stated.items()},
             interpretation={"route": "parameterize", "residue_name": residue_name,
-                            "input_format": input_path.suffix.lstrip(".")},
+                            "input_format": input_path.suffix.lstrip("."),
+                            "coordinates": coordinates},
             ligand_packages={"packages": [{**placed.summary(), "path": str(directory.name)}],
                              "attached": record, "placed_in": str(directory.name)},
             registration=registration,
