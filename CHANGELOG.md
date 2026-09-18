@@ -9,6 +9,15 @@ shell that replaces it, because deleting a crystallisation additive is an edit t
 and one default moves (`solute.parameters` is now `search`). Full notes:
 [docs/release-notes/v0.6.0.md](docs/release-notes/v0.6.0.md).
 
+**`build-top --parameterize` writes a reusable ligand parameter package without building a
+System.** `md-openmm build-top --parameterize -i MOL.{sdf,mol2,smi} --resname NAME -op DIR/NAME.pdb
+-os DIR/NAME.xml -log LOG [--register]` is the command's third mode, beside the build and
+`--rest2-scaler`. The input must carry bond orders — a `.smi` states the chemistry and the
+conformer is embedded, a `.pdb` is refused because bond orders cannot be recovered from
+coordinates. `--register` adds the package to `$MD_DATA/parameters/ligands`, which is what lets a
+later configuration name it with no path; without it, a configuration points `parameter` straight
+at the directory. Reuse never requires registration.
+
 **AIS has a second switching schedule, `tau-linear`.** `ais.lambda_schedule: tau-linear` moves λ as
 `[(1 − τ₀ + τ₀t)² − (1 − τ₀)²] / [1 − (1 − τ₀)²]`, so that with V0 a saved REST2 state at τ₀ and V1
 its unscaled source the solute–solute scaling of the mixture follows `(1 − τ)²` along a τ linear in

@@ -178,13 +178,23 @@ reuses the one `solute.parameters` names, or creates one from the prepared molec
 ### Parameters without a System: `--parameterize`
 
 ```text
-md-openmm build-top --parameterize -i MOLECULE.{sdf,mol2} --resname NAME \
+md-openmm build-top --parameterize -i MOLECULE.{sdf,mol2,smi} --resname NAME \
     -op DIR/NAME.pdb -os DIR/NAME.xml -log LOG [--config PATH] [--register]
 ```
 
 The third mode of this command, beside the build and `--rest2-scaler`. It writes ONE directory
 holding a reusable ligand parameter package and the readable copies named for `--resname`. No
 box, no solvent and no System to integrate: see [Ligand parameter packages](ligand-packages.md).
+
+**The input must carry BOND ORDERS.** `.sdf` and `.mol2` supply coordinates as well; a `.smi`
+states the chemistry and the conformer is embedded. A structure alone — a `.pdb`, a `.cif` — is
+refused by name, because bond orders cannot be recovered from coordinates.
+
+**`--register` is optional and it is what makes a package reusable by NAME.** It places the
+finished package into the machine catalog under `$MD_DATA/parameters/ligands`, through the one
+registration path, so a later configuration can name it `<compound>/<parameter>` with no path from
+anywhere on the machine. Without it the package is a directory like any other, and a configuration
+reuses it by pointing `parameter` at that directory.
 
 ## What a build writes
 
