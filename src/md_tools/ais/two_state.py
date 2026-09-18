@@ -47,15 +47,32 @@ after 200 warm-up, best of 3, on an idle card), as ms/step for plain V0 against 
     1800 atoms, explicit TIP3P/PME, 4 fs    0.103 -> 0.302   2.93x   +0.199 ms/step
       22 atoms, implicit GBn2, 2 fs         0.063 -> 0.345   5.45x   +0.282 ms/step
 
-Two parts. One is INTRINSIC: the mixture evaluates the differing forces twice, so an explicit run
-pays a second PME reciprocal sum whatever the implementation. The other is the per-evaluation cost
-of `CustomCVForce` itself -- an inner Context and a chain rule each time an energy is asked for --
-which hpREST2 measured independently as roughly fixed and INDEPENDENT OF HOW MANY CVs the force
-holds (collapsing five forces into one recovered 1.09x). The delta above is roughly constant across
-systems two orders of magnitude apart in size while the RATIO swings from 2.9x to 5.5x, which is
-that fixed cost against a collapsing denominator: quote the delta, never the ratio, and never
-compare two ratios measured against different baselines. Moving lambda every step adds 2-5% on top,
-so the parameter change is not the expense; the evaluation is.
+WHICH PART IS IRREDUCIBLE, measured on the same card by splitting V0's NonbondedForce into two
+half-strength copies -- charges by 1/sqrt(2), epsilons by 1/2, every particle in both, which
+reproduces V0's energy to 0.000000 kJ/mol while paying for TWO PME reciprocal sums and using no
+CustomCVForce at all:
+
+    V0                                      0.1046 ms/step
+    two PME sums, no wrapper                0.1373    +0.033 ms/step
+    the mixture (one CustomCVForce)         0.3423    +0.238 ms/step
+
+So the second Hamiltonian costs about 0.033 ms/step and the `CustomCVForce` construct itself about
+0.205 -- roughly six sevenths of the overhead is the wrapper, not the physics. That contradicts the
+first reading of these numbers, which attributed most of the cost to the second PME; the split-force
+arm was suggested by hpREST2 and it inverted the conclusion. Their own arms agree that the cost is a
+near-fixed per-STEP charge for having such a construct at all: five CustomCVForce objects cost
++0.308 ms/step and ONE object holding all ten CVs +0.272, thirteen percent apart, and their
+tabulated bias expressed as a CustomCompoundBondForce instead costs +0.006.
+
+Their escape does not transfer -- a bias over four particles is expressible in a force kernel and a
+mix of two complete Hamiltonians, PME reciprocal sums included, is not -- so no cheaper arrangement
+is known here. It does mean the overhead is a WRAPPER cost that some future construction might
+avoid, not a price the physics demands. Moving lambda every step adds 2-5% on top, so the parameter
+change is not the expense; the evaluation is.
+
+The delta above is roughly constant across systems two orders of magnitude apart in size while the
+RATIO swings from 2.9x to 5.5x, which is that fixed cost against a collapsing denominator: quote the
+delta, never the ratio, and never compare two ratios measured against different baselines.
 
 WHAT IT CANNOT DO: resume bit-for-bit on CUDA. The inner Contexts of a `CustomCVForce` keep atom
 ordering state that no checkpoint captures, so a force differs in its last bits the moment a run
