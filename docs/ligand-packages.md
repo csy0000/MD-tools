@@ -240,6 +240,13 @@ registration.
 with these charges and this force field, is REUSED rather than charged again. What the mode
 guarantees is a package directory, not a charge calculation.
 
+The configuration must say `kind: ligand`, and `peptide-like` is refused HERE only. A package
+records a chemical state and its parameters; it records no kind, and nothing a build matches
+against depends on one. `peptide-like` is a build-time property -- the same force field and the
+same charges as `ligand`, plus a validated peptide-chemistry map over the result, which is what
+drives the mbondi3 corrections under implicit solvent. So a peptide-like solute is parameterised
+with `kind: ligand`, and a `kind: peptide-like` build reuses the package unchanged.
+
 **In a build.** A single-molecule build (`solute.kind: ligand` or `peptide-like`) with no
 `solute.parameters` creates a package from its prepared molecule before any force field is built.
 The charges are generated once, and every step of that build loads the saved parameters:

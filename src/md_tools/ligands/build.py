@@ -1,6 +1,8 @@
 """What `build-top` does with packages: create or reuse one for a ligand, and put its atoms in order.
 
-A single-molecule build (`solute.kind: ligand` or `peptide-like`) does one of three things, and
+A single-molecule build (`solute.kind: ligand` or `peptide-like` -- both take this route, because
+they share a force field, charges and parameters, and differ only in the peptide-chemistry map
+built over the result) does one of three things, and
 `solute.parameters` says which:
 
   * `search` (the default) -- look in the catalog for a package whose declared criteria match what

@@ -182,9 +182,17 @@ def parameterize_ligand(*, input_path: Path, config_path: Optional[Path], out_pd
     resolved = resolve_build_config(config_path)
     stated = resolved.pop("_stated", {})
     kind = str(resolved["solute"]["kind"])
-    if kind not in ("ligand", "peptide-like"):
-        raise ConfigError(f"solute.kind is {kind!r}; --parameterize parameterises one small "
-                          f"molecule, so the configuration must say `kind: ligand`.")
+    if kind != "ligand":
+        raise ConfigError(
+            f"solute.kind is {kind!r}; --parameterize writes a package of PARAMETERS, so the "
+            f"configuration must say `kind: ligand`.\n"
+            f"  A package records a chemical state and its parameters. It records no `kind`, and "
+            f"nothing a build matches against depends on one: `peptide-like` is a BUILD-time "
+            f"property -- the same force field and the same charges as `ligand`, plus a validated "
+            f"peptide-chemistry map over the result, which is what drives the mbondi3 corrections "
+            f"under implicit solvent.\n"
+            f"  So a peptide-like solute is parameterised here with `kind: ligand`, and the "
+            f"package it produces is reused by a `kind: peptide-like` build unchanged.")
     if resolved["ligands"]:
         raise ConfigError("`ligands` maps instances in a structure; --parameterize has one "
                           "molecule and no structure.")

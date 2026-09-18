@@ -314,3 +314,47 @@ def test_a_package_directory_moves_as_a_unit(tmp_path):
     whole = tmp_path / "whole"
     shutil.copytree(directory, whole)
     assert load_package(whole, expected_directory_name=False).reference.startswith("CHEMBL112/")
+
+
+@pytest.mark.slow
+def test_peptide_like_is_parameterised_as_a_ligand_and_reused_by_a_peptide_like_build(tmp_path):
+    """`--parameterize` takes `kind: ligand` only, and that costs a peptide-like solute nothing.
+
+    A package records a chemical state and its parameters; it records no `kind`, and nothing a
+    build matches against depends on one. `peptide-like` is a build-time property -- the same
+    force field and charges as `ligand`, plus a peptide-chemistry map over the result -- so the
+    package made here is reused by a peptide-like build unchanged.
+    """
+    from md_tools.build.record import read_record
+
+    _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    work = tmp_path / "work"
+    work.mkdir()
+    structure = _sdf(_molecule("CC(=O)Nc1ccc(O)cc1"), work / "in.sdf")
+
+    (work / "peptide_like.config").write_text(
+        f"solute:\n  kind: peptide-like\n  compound_id: CHEMBL112\n"
+        f"ligand_catalog:\n  path: {tmp_path / 'catalog'}\n", encoding="utf-8")
+    refused = _run(["--parameterize", "-i", "in.sdf", "--config", "peptide_like.config",
+                    "-op", "p/TYL.pdb", "-os", "p/TYL.xml", "-log", "p.log",
+                    "--resname", "TYL"], work)
+    assert refused.returncode == 2
+    assert "must say `kind: ligand`" in refused.stderr
+    assert "reused by a `kind: peptide-like` build unchanged" in refused.stderr
+    assert not (work / "p").exists()
+
+    # Parameterised as a ligand ...
+    made = _parameterize(work, structure, tmp_path / "catalog")
+    assert made.returncode == 0, made.stderr[-2000:]
+
+    # ... and consumed by a peptide-like build, which is the point of allowing only one here.
+    (work / "build-top.config").write_text(
+        "solute:\n  kind: peptide-like\n  residue_name: TYL\n  parameters: ./build/parameter\n"
+        "solvent:\n  model: TIP3P\n  padding_nm: 1.0\n", encoding="utf-8")
+    (work / "para.smi").write_text("CC(=O)Nc1ccc(O)cc1 paracetamol\n", encoding="utf-8")
+    built = _run(["-i", "para.smi", "-os", "out/built.xml", "-op", "out/built.pdb",
+                  "-log", "out/built.log", "--config", "build-top.config"], work)
+    assert built.returncode == 0, built.stdout[-2000:] + built.stderr[-2000:]
+    attached = read_record(work / "out" / "built.log")["ligand_packages"]["attached"]
+    assert attached["how"] == "reused (stated reference)"
+    assert attached["charges_generated_in_this_build"] is False
