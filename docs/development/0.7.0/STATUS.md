@@ -7,7 +7,7 @@ in [`handoffs/`](handoffs/) and never edit it.
 |---|---|
 | branch | `0.7.0` |
 | baseline | `e524e0e` on `dev-0.6.0` (the commit carrying the 20260918 instruction) |
-| contract commit | the shared-contracts commit on this branch; see [shared contracts](../shared-contracts.md) |
+| contract commit | `fabbb4a` on `0.7.0` — [shared contracts](../shared-contracts.md) |
 | aims | [AIMS.md](AIMS.md) |
 | worker branches | `work/0.7.0-topology` (S2), `work/0.7.0-hamiltonian` (S3), `work/0.7.0-execution-analysis` (S4) |
 | release state | **not released, not merged, not tagged.** Released only after 0.6.1 is released and integrated |
