@@ -40,6 +40,57 @@ update with its work read and one step takes 1.40 ms, against 7.77 ms for the pr
 dynamics alone take 0.48 ms against 0.17 ms for plain V0, because the differing NonbondedForce is
 evaluated twice -- as Amber computes the reciprocal sum twice.
 
+AND WHERE THAT COST COMES FROM, measured on 2026-09-18 (RTX A5000, mixed precision, 3000 steps
+after 200 warm-up, best of 3, on an idle card), as ms/step for plain V0 against the mixture:
+
+    1796 atoms, explicit TIP3P/PME, 4 fs    0.104 -> 0.306   2.94x   +0.202 ms/step
+    1800 atoms, explicit TIP3P/PME, 4 fs    0.103 -> 0.302   2.93x   +0.199 ms/step
+      22 atoms, implicit GBn2, 2 fs         0.063 -> 0.345   5.45x   +0.282 ms/step
+
+WHICH PART IS IRREDUCIBLE, measured on the same card by splitting V0's NonbondedForce into two
+half-strength copies -- charges by 1/sqrt(2), epsilons by 1/2, every particle in both, which
+reproduces V0's energy to 0.000000 kJ/mol while paying for TWO PME reciprocal sums and using no
+CustomCVForce at all:
+
+    V0                                      0.1046 ms/step
+    two PME sums, no wrapper                0.1373    +0.033 ms/step
+    the mixture (one CustomCVForce)         0.3423    +0.238 ms/step
+
+So the second Hamiltonian costs about 0.033 ms/step and the `CustomCVForce` construct itself about
+0.205 -- roughly six sevenths of the overhead is the wrapper, not the physics. That contradicts the
+first reading of these numbers, which attributed most of the cost to the second PME; the split-force
+arm was suggested by hpREST2 and it inverted the conclusion. Their own arms agree that the cost is a
+near-fixed per-STEP charge for having such a construct at all: five CustomCVForce objects cost
++0.308 ms/step and ONE object holding all ten CVs +0.272, thirteen percent apart, and their
+tabulated bias expressed as a CustomCompoundBondForce instead costs +0.006.
+
+Their escape does not transfer -- a bias over four particles is expressible in a force kernel and a
+mix of two complete Hamiltonians, PME reciprocal sums included, is not.
+
+ONE ALTERNATIVE WAS MEASURED AND DOES NOT PAY (2026-09-18, same card). A `CustomIntegrator` can read
+per-force-group forces and energies, so the mixture can be assembled without any `CustomCVForce`:
+V0's forces in one group, V1's in another, `fmix = (1-lam)*f0` then `fmix + lam*f1` -- two steps,
+because one step may not depend on two groups -- and `dV = energy1 - energy0` accumulated on device.
+The arithmetic is right: V(lambda) matched a host-side per-group evaluation to 1.6e-10 relative and
+the mixed force to 2e-4 kJ/mol/nm. The timing does not help:
+
+    the mixture (CustomCVForce)                     0.347 ms/step
+    groups, shared forces once, forces only         0.262     -- but AIS needs dV every update
+    groups, shared forces once, with the work reads 0.343     -- no gain
+    groups, everything duplicated, with work reads  0.295     -- 14% at best
+
+Per-GROUP evaluation carries its own cost, and asking for two or three group energies every step
+brings most of the wrapper's price back. The best arrangement found is about 14% faster than what is
+here, for a hand-written Langevin integrator whose equivalence to `LangevinMiddleIntegrator` would
+then have to be established -- correctness work out of all proportion to 14%. So the current shape
+stands, and the route is recorded as measured rather than left for someone to rediscover. It does mean the overhead is a WRAPPER cost that some future construction might
+avoid, not a price the physics demands. Moving lambda every step adds 2-5% on top, so the parameter
+change is not the expense; the evaluation is.
+
+The delta above is roughly constant across systems two orders of magnitude apart in size while the
+RATIO swings from 2.9x to 5.5x, which is that fixed cost against a collapsing denominator: quote the
+delta, never the ratio, and never compare two ratios measured against different baselines.
+
 WHAT IT CANNOT DO: resume bit-for-bit on CUDA. The inner Contexts of a `CustomCVForce` keep atom
 ordering state that no checkpoint captures, so a force differs in its last bits the moment a run
 resumes. A resume restores the committed generation exactly -- lambda, accumulated work, counters,

@@ -992,6 +992,97 @@ def test_ais_two_state_lane(built, hardware, tmp_path):
                    f"{worst:.3e} kJ/mol; " + _counter_detail(counters))
 
 
+def test_ais_tau_linear_schedule_on_cuda(built, hardware, tmp_path):
+    """The `tau-linear` schedule, on a device, from a SAVED scaled state.
+
+    The λ arithmetic is CPU-checkable and is checked there. What needs a device is the rest of the
+    claim: that the schedule reaches a CUDA Context as the lambdas the path actually holds, that
+    the mixing identity survives CUDA's precision at those lambdas, and that the saved-state claim
+    (-s is the state at tau0, -s2 the System it was scaled from) is checked on the real run.
+
+    V0 here is `build/AIS/system_state0.xml` WITH its scaler.yaml, not the bare `build/V0.xml` the
+    other AIS lanes use: tau-linear is refused without the record, which is the point.
+    """
+    import csv
+
+    from md_tools.ais.schedule import switching_schedule
+
+    work = tmp_path / "tau-linear"
+    work.mkdir()
+    _ais_system(built, work)                      # copies build/ in; its own end states below
+
+    from .conftest import make_scaled_state
+
+    tau0, switching, update, observe = 0.5, 20, 5, 5
+    state = make_scaled_state(work, tau=tau0, method="AIS")
+    argv = ["-p", str(work / "build" / "built.pdb"), "-s", str(state),
+            "-p2", str(work / "build" / "built.pdb"),
+            "-s2", str(work / "build" / "built.xml")]
+
+    import mdtraj
+
+    frames = mdtraj.load(str(work / "build" / "built.pdb"))
+    mdtraj.join([frames] * 8).save_dcd(str(work / "source.dcd"))
+
+    (work / "AIS.config").write_text(yaml.safe_dump({
+        "protocol": "AIS", "solvent": "implicit",
+        "ais": {"number_of_paths": 2, "switching_steps": switching,
+                "observation_interval_steps": observe,
+                "parameter_update_interval_steps": update,
+                "lambda_schedule": "tau-linear", "lambda_schedule_tau0": tau0},
+        "ais_source": {"trajectory": "../source.dcd", "selection": "evenly_spaced"},
+        "reporting": {"crd_printout_solute": observe, "info_printout": observe,
+                      "checkpoint_printout": update}}), encoding="utf-8")
+    generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
+                                      "--config", str(work / "AIS.config")],
+                               capture_output=True, text=True, timeout=600)
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+
+    done = subprocess.run(
+        [sys.executable, str(work / "project" / "AIS.py"), *argv,
+         "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run")],
+        cwd=work, capture_output=True, text=True, timeout=1800,
+        env=_environment(work, **_machine()))
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    from md_tools.build.record import read_record
+
+    record = read_record(work / "run" / "AIS.log")
+    assert record["acceleration"]["resolved_platform"] == "CUDA", record["acceleration"]
+
+    expected = switching_schedule(
+        switching_steps=switching, parameter_update_interval_steps=update,
+        observation_interval_steps=observe, timestep_fs=2.0,
+        trajectory_interval_steps=observe, state_interval_steps=observe,
+        checkpoint_interval_steps=update,
+        lambda_schedule="tau-linear", lambda_schedule_tau0=tau0)
+    identity = json.loads((work / "run" / "AIS_run.json").read_text(encoding="utf-8"))
+    assert identity["lambda"]["schedule"] == "tau-linear"
+    assert identity["lambda"]["tau0"] == tau0
+    assert identity["schedule"]["lambda_sha256"] == expected["lambda_sha256"]
+
+    with (work / "run" / "AIS_work.csv").open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows, "the work table is empty"
+    for row in rows:
+        step = int(row["switch_step"])
+        assert float(row["lambda_after"]) == pytest.approx(
+            expected["lambdas"][step // update], abs=1e-12), row
+    # The device ran the tau-linear lambdas, not the linear ones. Without this the test would pass
+    # against a run that ignored the schedule entirely.
+    assert any(abs(float(row["lambda_after"]) - int(row["switch_step"]) / switching) > 1e-6
+               for row in rows), "the lambdas are the linear table"
+
+    precision = record["acceleration"].get("cuda_precision") or "mixed"
+    aligned, worst = _assert_two_state_rows(rows, precision=precision)
+    assert aligned >= 2, "fewer than two frame-aligned rows carried observation potentials"
+    _record("test_ais_tau_linear_schedule_on_cuda",
+            feature="AIS implicit, tau-linear lambda schedule from a saved scaled state",
+            precision=precision, device=record["acceleration"].get("cuda_device_index") or "-",
+            detail=f"{len(rows)} rows, {aligned} frame-aligned, worst |mixture - direct| = "
+                   f"{worst:.3e} kJ/mol; lambda table sha256 matches the schedule's")
+
+
 def test_ais_reads_a_netcdf_source_on_cuda(built, hardware, tmp_path):
     """The other supported source format. DCD is covered in test_md_run_mpi_gpu.py."""
     work = tmp_path / "netcdf"
