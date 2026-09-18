@@ -120,17 +120,37 @@ jobs:
         # reason is worse than no test, so the argparse case is now detected explicitly rather
         # than being indistinguishable from success.
         run: |
-          printf '&cntrl\n  protocol = REST2,\n/\n' > ladder.in
+          # A LADDER READS -s ONLY FROM ITS GROUP FILE (0.5.4). This step used to pass `-s`, which
+          # that rule refuses BEFORE the MPI check -- so from 0.5.4 until this repair the step
+          # exited non-zero for the wrong reason and the refusal it is named for never ran. The
+          # fixture below was executed before it was written down. Dummy XMLs are enough on
+          # purpose: the coordination check is reached before any System is deserialised, which is
+          # what keeps this step cheap and honest rather than a build in disguise.
+          printf '&cntrl\n  protocol = REST2,\n/\n&remd\n  number_of_replicas = 4,\n/\n' > ladder.in
+          printf 'END\n'       > built.pdb
+          printf '<System/>\n' > built.xml
+          printf '<State/>\n'  > state.xml
+          printf '#\n'         > p.py
+          for i in 0 1 2 3; do
+            printf -- '-i p.py -p built.pdb -s built.xml -c state.xml --group-index %s\n' "$i" >> group
+          done
           if md-openmm md-run -ng 4 \
                -i ladder.in \
-               -p missing.pdb \
-               -s missing.xml \
+               -p built.pdb \
+               -groupfile group \
                -odir out >out.txt 2>&1; then
             echo "::error title=-ng accepted with no launcher::md-run exited 0"; exit 1
           fi
           if grep -qE "the following arguments are required|unrecognized arguments" out.txt; then
             echo "::error title=Argparse refused first::the flags do not match the current"\
                  " contract, so the MPI refusal was never reached"; cat out.txt; exit 1
+          fi
+          # THE SECOND WRONG REASON, and the one that actually bit: a protocol rule refusing before
+          # the MPI check. The guard above only ever recognised argparse, so it caught the 2024
+          # shape of this mistake and not the 0.5.4 one. Both are named now.
+          if grep -q "reads -s only from its group file" out.txt; then
+            echo "::error title=The ladder flag rule refused first::the MPI refusal was never"\
+                 " reached"; cat out.txt; exit 1
           fi
           grep -q "not started by an MPI launcher" out.txt || {
             echo "::error title=Wrong refusal::"; cat out.txt; exit 1; }

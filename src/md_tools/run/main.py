@@ -455,6 +455,18 @@ def md_run_main(argv: list[str] | None = None) -> int:
                 trajectory=args.trajectory, restart=args.restart, checkpoint=args.checkpoint,
                 output=args.output, log=args.log, cpu=bool(args.cpu),
                 device=int(args.device) if args.device is not None else None,
+                # FLAGS OF ANOTHER PROTOCOL, carried so the refusal written for them is REACHED.
+                # `preflight_stage` defaults all three to None, so omitting them failed silently
+                # rather than loudly: `_reject_flags_outside_their_protocol` was handed nothing to
+                # refuse, and `md-run` accepted `-ng 4` on a cMD stage, ran ONE process and reported
+                # success. The generated stage script refused the same flag correctly the whole
+                # time -- which is precisely the disagreement between `md-run` and a generated
+                # script that this project forbids, with `md-run` as the unchecked side.
+                # `-groupfile` is already unreachable here (a stage needs `-s`, and `-s` with
+                # `-groupfile` is refused by name above); it is passed anyway so this call states
+                # every flag the rule covers, rather than three of five and a reason to check.
+                number_of_groups=args.number_of_groups, groupfile=args.groupfile,
+                source_trajectory=args.source_traj,
                 protocol=protocol, system2=args.system2, topology2=args.topology2)
 
         # The COMPLETE inventory, not `resolved.config` alone. An `-odir` that already holds a

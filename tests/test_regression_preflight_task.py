@@ -69,17 +69,78 @@ def test_the_ci_workflow_tests_the_ng_refusal_with_the_current_flag_contract():
     step = step[:step.index("\n      - name:")] if "\n      - name:" in step else step
 
     assert "-x missing.xml" not in step, "an XML is still passed through the trajectory flag"
-    assert "-s " in step, "-s is mandatory and the step does not supply it"
+    # A LADDER READS -s ONLY FROM ITS GROUP FILE (0.5.4), so the step must pass `-groupfile` and
+    # NOT `-s` on the md-run command line. The assertion here used to be `"-s " in step`, with the
+    # reason "-s is mandatory and the step does not supply it" -- true when written, false from
+    # 0.5.4, and it then REQUIRED the broken form. That is why a green test sat over a step that
+    # could not pass: the test asserted the shape of the command, and the shape had gone stale.
+    assert "-groupfile" in step, "a ladder needs a group file, and no -s on the command line"
+    assert "-s missing.xml" not in step, "-s on the command line is refused by the ladder rule"
     assert "not started by an MPI launcher" in step
-    # And it must notice if argparse refused first, which is the failure it is masking today.
+    # And it must notice if it refused for the wrong reason. TWO wrong reasons are possible and
+    # both are checked: argparse (the 2024 shape) and a protocol rule refusing first (the 0.5.4
+    # shape, which the argparse-only guard was structurally blind to).
     assert "required" in step or "argparse" in step, \
         "the step cannot tell an argparse refusal from the MPI refusal it is testing"
+    assert "reads -s only from its group file" in step, \
+        "the step cannot tell a ladder-flag refusal from the MPI refusal it is testing"
 
 
 def test_no_ci_text_still_says_three_commands():
     workflow = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "three public commands" not in workflow
     assert "three commands" not in workflow
+
+
+def _a_real_stage(tmp_path: Path) -> dict:
+    """A cMD stage whose inputs are GENUINELY readable, so a protocol rule is what refuses.
+
+    Three earlier attempts at this check refused for the wrong reason -- an Amber key the parser
+    rejects by name, then an unreadable PDB, then a System that would not deserialise -- because
+    `md-run` validates its inputs before it applies any protocol rule. A test whose refusal comes
+    from an earlier gate proves nothing about the gate it is named for.
+    """
+    from openmm import System, XmlSerializer
+
+    topology = tmp_path / "built.pdb"
+    topology.write_text((REPO / "tests" / "data" / "ALA.pdb").read_text(encoding="utf-8"),
+                        encoding="utf-8")
+    particles = sum(1 for line in topology.read_text(encoding="utf-8").splitlines()
+                    if line.startswith(("ATOM  ", "HETATM")))
+    system = System()
+    for _ in range(particles):
+        system.addParticle(1.0)
+    (tmp_path / "built.xml").write_text(XmlSerializer.serialize(system), encoding="utf-8")
+    (tmp_path / "cmd.in").write_text("&cntrl\n  protocol = cMD,\n  stage    = min,\n/\n",
+                                     encoding="utf-8")
+    return {"cwd": tmp_path, "argv": ["-i", "cmd.in", "-p", "built.pdb", "-s", "built.xml"]}
+
+
+def test_md_run_refuses_ng_on_a_cmd_stage_and_writes_nothing(tmp_path):
+    """`-ng` was parsed by `md-run`, dropped, and never reached the rule written to refuse it.
+
+    `preflight_stage` has always refused `-ng` for a stage, and the GENERATED stage script has
+    always passed it there (`md/stage.py`). `md-run` called the same preflight without
+    `number_of_groups`, which defaults to None -- so the refusal was handed nothing to refuse, and
+    `md-openmm md-run -ng 4` on a cMD input ran ONE process and exited 0. That is the disagreement
+    between `md-run` and a generated script this project forbids, with `md-run` unchecked.
+
+    Both directions are asserted: a guard that has not been shown to stay quiet when the flag is
+    absent is not a guard, it is a refusal that happens to be on.
+    """
+    fixture = _a_real_stage(tmp_path)
+
+    refused = subprocess.run(CLI + ["md-run", "-ng", "4", *fixture["argv"], "-odir", "out"],
+                             cwd=fixture["cwd"], capture_output=True, text=True, timeout=300)
+    assert refused.returncode != 0, refused.stdout
+    assert "replicas to group" in refused.stderr, refused.stderr
+    assert not (tmp_path / "out").exists(), \
+        f"a refused preflight created -odir: {sorted(p.name for p in (tmp_path / 'out').iterdir())}"
+
+    accepted = subprocess.run(CLI + ["md-run", *fixture["argv"], "-odir", "out2"],
+                              cwd=fixture["cwd"], capture_output=True, text=True, timeout=300)
+    assert "replicas to group" not in accepted.stderr, \
+        f"the rule fired without -ng: {accepted.stderr}"
 
 
 # --- 2. one MPI authority ----------------------------------------------------------------------
