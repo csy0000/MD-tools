@@ -47,10 +47,12 @@ __all__ = [
     "PACKAGE_SCHEMA",
     "PackageError",
     "SUPPORTED_CHARGE_METHODS",
+    "compare_parameter_tables",
     "create_package",
     "import_package_from_system",
     "load_package",
     "parameter_id_for",
+    "subsystem_parameter_table",
 ]
 
 PACKAGE_SCHEMA = "md-tools-ligand-package/1"
@@ -389,7 +391,7 @@ def _smirnoff_ffxml(offmol, resource: str) -> tuple[str, Any]:
     return ffxml, generator.get_openmm_system(offmol)
 
 
-def _compare_tables(package: dict[str, Any], reference: dict[str, Any], *, where: str,
+def compare_parameter_tables(package: dict[str, Any], reference: dict[str, Any], *, where: str,
                     skip_masses: bool = False, missing_bonds_ok: Iterable | dict = (),
                     rel: float = 1e-9) -> list[str]:
     """Differences between two parameter tables, as sentences. Empty means they agree."""
@@ -515,7 +517,7 @@ def _finish_package(*, mol, names: list[str], raw_ffxml: str, reference_table: d
     c14, lj14 = nonbonded_scales(placeholder_ffxml)
     system = ligand_system(placeholder_ffxml, mol, names, "MDT_PENDING")
     table = parameter_table(system, mol, coulomb14scale=c14, lj14scale=lj14)
-    problems = _compare_tables(table, reference_table, where=reference_label,
+    problems = compare_parameter_tables(table, reference_table, where=reference_label,
                                missing_bonds_ok=missing_bonds_ok, skip_masses=skip_masses)
     if problems:
         raise PackageError(
@@ -681,7 +683,7 @@ def import_package_from_system(mol, *, system, atom_indices: Sequence[int], comp
     offmol = _offmol(mol, charges)
     raw_ffxml, _ = _smirnoff_ffxml(offmol, resource)
     c14, lj14 = nonbonded_scales(raw_ffxml)
-    reference_table, constrained = _subsystem_table(system, mol, atom_indices, c14, lj14)
+    reference_table, constrained = subsystem_parameter_table(system, mol, atom_indices, c14, lj14)
     return _finish_package(
         mol=mol, names=names, raw_ffxml=raw_ffxml, reference_table=reference_table,
         compound_id=compound_id, aliases=aliases, residue_name=residue_name, resource=resource,
@@ -698,7 +700,7 @@ def import_package_from_system(mol, *, system, atom_indices: Sequence[int], comp
         skip_masses=True)
 
 
-def _subsystem_table(system, mol, atom_indices: Sequence[int], c14: float, lj14: float):
+def subsystem_parameter_table(system, mol, atom_indices: Sequence[int], c14: float, lj14: float):
     """The parameter table of *system* restricted to *atom_indices*, renumbered to package order.
 
     Constrained bonds are returned separately, with their lengths checked into the table's

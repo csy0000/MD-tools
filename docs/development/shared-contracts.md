@@ -108,6 +108,27 @@ it changes one function, not two.
 **One parser, one resolver, used by preparation and validation alike.** The runtime consumes and
 verifies a resolved record; it never re-selects atoms from inputs that may have changed since.
 
+### The topology digest is canonical from 2.0 on
+
+**Decided 2026-09-19, on S2's reproduction, verified by S0.** `selection.topology_digest` hashes
+bonds in the order the Topology iterates them. That order comes from the file: OpenMM's PDB
+writer emits CONECT records for a non-standard residue in its own order, so reading and rewriting
+a file with a cross-residue CONECT bond — S2's hybrid `combined.pdb`, ethane in TIP3P plus a CLE
+residue bonded by CONECT — makes the digest alternate between two values forever
+(`28aba0b9…` / `40f51187…`, the last three bonds swapping). Its docstring promises the opposite.
+Standard protein bonds come from residue templates and are stable: ALA explicit and implicit and
+the ethane-in-TIP3P fixture round-trip unchanged. The exposure is therefore ligands, covalent
+links and cyclic peptides — whatever carries its bonds in CONECT.
+
+- **One function, fixed in place** (S1 owns `rest2/selection.py`): bonds are hashed as a sorted
+  list of sorted pairs. No second digest anywhere.
+- **2.0 records** carry `topology_digest_scheme: atoms-in-index-order+sorted-bond-set/1` and only
+  the canonical digest.
+- **1.0 records** (every 0.6.0 `solute.yaml`) keep validating: `validate_against` accepts a 1.0
+  record whose stored digest equals EITHER the canonical digest OR the legacy iteration-order
+  digest of the current topology. It is a named compatibility branch with its own tests, not a
+  loosened comparison, and nothing new is ever written in the legacy scheme.
+
 ### Mask grammar, version 1
 
 A documented subset of AMBER's, not the whole grammar:
@@ -132,8 +153,15 @@ atom set with different torsion and CMAP treatment, so the fingerprint moves to 
 the full version-2 selection record.
 
 `REST2_IMPLEMENTATION` (`src/md_tools/rest2/hamiltonian.py`), name `rest2-unscaled-torsions`,
-currently version 3, gains the selection semantics it now depends on and its version moves with
-them. `require_same_hamiltonian` keeps refusing a mismatch; the point of the version bump is that
+**stays at version 3** (decided 2026-09-19, on S1's deviation). It describes the per-term scaling
+rule, which selective REST2 does not change; the convention dict is embedded in every record and
+checked by `require_compatible_implementation`, so bumping it would refuse every 0.6.0
+continuation and defeat the legacy-resume ruling below. Selective semantics are versioned where
+they live instead: the selection policy `md-tools-selective-rest2/1` inside the
+`md-tools-solute-selection/2.0` record, and fingerprint v3. `scaler.yaml` carries `selection`,
+`selection_sha256` and `scaler_arguments` — exactly the `build_scaled_system` keyword arguments —
+and every consumer that rebuilds or identifies a state reads them from there rather than
+reconstructing them from `solute.atom_indices`. `require_same_hamiltonian` keeps refusing a mismatch; the point of the version bump is that
 a saved state built under other semantics is **refused**, not silently mixed into a ladder.
 
 **Decided 2026-09-19 (S0, on S1's proposal): a legacy run stays resumable.** A v3 fingerprint
@@ -249,7 +277,7 @@ file:
 |---|---|
 | `alchemy/__init__.py` | S0 — a docstring only until integration; no re-exports |
 | `alchemy/paths.py` | S0 as a **contract file** — the named state coordinates and `AlchemicalPath`, as S4 wrote them at `9d465a5`; changes are requested, not made |
-| `alchemy/samples.py`, `estimators.py`, `restraints.py`, `cycles.py` | S4 |
+| `alchemy/samples.py`, `estimators.py`, `restraints.py`, `cycles.py`, `windows.py` | S4 |
 | `alchemy/topology*.py` | S2 |
 | `alchemy/hamiltonian*.py`, `alchemy/softcore*.py` | S3 |
 
@@ -277,6 +305,9 @@ cost accounting. Specifically:
   including its own logs.
 - A checkpoint commit is a generation transaction. `md_tools.openmm.checkpoint` is the one
   implementation, for alchemical windows as for everything else.
+- No session reads or writes the machine's `$MD_DATA` (the user, 2026-09-19). Package and
+  catalog code is exercised against a temporary root with `MD_DATA` set to it; a registered
+  package is never a fixture.
 - Alchemical support is **optional** for existing cMD installations: an install without the
   alchemy extra keeps working unchanged.
 - Reused OpenFE / OpenMMTools components are pinned, with their license, version and commit
@@ -326,6 +357,9 @@ platform, command, evidence path, and a verdict of PASS / FAIL / BLOCKED / NOT R
 6. **CUDA and runtime** — real propagation, correct exchange state mapping, interruption and
    resume, changed-state rejection, installed-wheel execution outside the checkout, export
    reconstruction, full dataset registration.
+   *Registration is BLOCKED (sandbox) for this wave:* no session may touch the machine's
+   `$MD_DATA`. Registration code paths are tested against a temporary `MD_DATA` root only, and
+   the real registration row stays BLOCKED until the user lifts the restriction.
 7. **Regression** — existing cMD, whole-solute REST2 and two-state AIS keep their contracts, on
    the candidate integration commit.
 
