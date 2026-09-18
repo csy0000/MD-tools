@@ -108,6 +108,27 @@ it changes one function, not two.
 **One parser, one resolver, used by preparation and validation alike.** The runtime consumes and
 verifies a resolved record; it never re-selects atoms from inputs that may have changed since.
 
+### The topology digest is canonical from 2.0 on
+
+**Decided 2026-09-19, on S2's reproduction, verified by S0.** `selection.topology_digest` hashes
+bonds in the order the Topology iterates them. That order comes from the file: OpenMM's PDB
+writer emits CONECT records for a non-standard residue in its own order, so reading and rewriting
+a file with a cross-residue CONECT bond — S2's hybrid `combined.pdb`, ethane in TIP3P plus a CLE
+residue bonded by CONECT — makes the digest alternate between two values forever
+(`28aba0b9…` / `40f51187…`, the last three bonds swapping). Its docstring promises the opposite.
+Standard protein bonds come from residue templates and are stable: ALA explicit and implicit and
+the ethane-in-TIP3P fixture round-trip unchanged. The exposure is therefore ligands, covalent
+links and cyclic peptides — whatever carries its bonds in CONECT.
+
+- **One function, fixed in place** (S1 owns `rest2/selection.py`): bonds are hashed as a sorted
+  list of sorted pairs. No second digest anywhere.
+- **2.0 records** carry `topology_digest_scheme: atoms-in-index-order+sorted-bond-set/1` and only
+  the canonical digest.
+- **1.0 records** (every 0.6.0 `solute.yaml`) keep validating: `validate_against` accepts a 1.0
+  record whose stored digest equals EITHER the canonical digest OR the legacy iteration-order
+  digest of the current topology. It is a named compatibility branch with its own tests, not a
+  loosened comparison, and nothing new is ever written in the legacy scheme.
+
 ### Mask grammar, version 1
 
 A documented subset of AMBER's, not the whole grammar:
