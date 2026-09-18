@@ -43,3 +43,9 @@ md-openmm build-top -i input/ETA.sdf --config build/build.config \
 
 The package directories were then copied into `<compound>/<param_id>/` catalog layout, whole.
 Logs are not committed: they carry machine paths.
+
+**No `$MD_DATA` is involved.** `parameters: generate` searches no catalog (`search: null` in the
+log) and the environment names its package by path (`catalog_searched: []`). The whole procedure
+was re-run on 2026-09-19 with `MD_DATA` set to an empty temporary root: every file came back
+byte-identical except `metadata.json`'s `created_utc`, so the parameter ids, the parameter
+digests and `built.{xml,pdb}` are reproduced exactly. Nothing here is registered anywhere.

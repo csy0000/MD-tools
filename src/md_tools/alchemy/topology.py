@@ -85,6 +85,7 @@ __all__ = [
     "TopologyError",
     "TopologyPlan",
     "build_topology_plan",
+    "combined_topology_sha256",
     "load_plan",
 ]
 
@@ -124,6 +125,24 @@ def _sha256_text(text: str) -> str:
 
 def _positions_sha256(positions_nm: np.ndarray) -> str:
     return hashlib.sha256(np.ascontiguousarray(positions_nm, dtype="<f8").tobytes()).hexdigest()
+
+
+def combined_topology_sha256(topology) -> str:
+    """Atoms in index order (element, name, residue) and the bond SET, sorted.
+
+    `rest2.selection.topology_digest` hashes bonds in iteration order, and a PDB round trip
+    reorders a bond between two residues, so the combined topology is hashed with its bonds
+    sorted: the same topology read back from `combined.pdb` gives the same digest.
+    """
+    hasher = hashlib.sha256()
+    for atom in topology.atoms():
+        element = atom.element.symbol if atom.element is not None else "?"
+        hasher.update(f"{atom.index}:{atom.name}:{element}:{atom.residue.index}:"
+                      f"{atom.residue.name}\n".encode())
+    for first, second in sorted(tuple(sorted((b.atom1.index, b.atom2.index)))
+                                for b in topology.bonds()):
+        hasher.update(f"bond:{first}-{second}\n".encode())
+    return hasher.hexdigest()
 
 
 def _clone(obj):
@@ -486,6 +505,11 @@ def load_plan(directory: Path, *, package_roots: Iterable[Path] = ()) -> Topolog
                                 f"this plan was built from")
     positions = np.load(directory / "positions.npy", allow_pickle=False)
     topology = PDBFile(str(directory / "combined.pdb")).topology
+    if combined_topology_sha256(topology) != record["numbering"]["combined_topology_sha256"]:
+        raise TopologyError(f"{directory}/combined.pdb does not read back as the topology the "
+                            f"plan recorded")
+    if positions.shape != (record["particles"]["n_total"], 3):
+        raise TopologyError(f"{directory}/positions.npy has shape {positions.shape}")
     return TopologyPlan(
         record=record,
         system_a=XmlSerializer.deserialize((directory / "system_a.xml").read_text("utf-8")),
@@ -974,7 +998,9 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
     numbering = {
         "scheme": "topology-residue-index-1based",
         "source_topology_sha256": topology_digest(environment.topology),
-        "combined_topology_sha256": topology_digest(topology),
+        "combined_topology_sha256": combined_topology_sha256(topology),
+        "combined_topology_digest_scheme": "atoms in index order, bonds sorted "
+                                           "(alchemy.topology.combined_topology_sha256)",
         "source_residues_unchanged": environment.topology.getNumResidues(),
         "source_particles_unchanged": n_env,
         "appended_residue": appended_residue,
