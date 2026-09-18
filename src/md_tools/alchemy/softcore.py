@@ -45,7 +45,7 @@ from typing import Any, Mapping
 
 __all__ = [
     "SOFTCORE_FUNCTION", "SoftcoreSettings", "SoftcoreError", "ONE_4PI_EPS0",
-    "ANGSTROM2_TO_NM2", "REFUSED_FUNCTIONS", "pair_expressions",
+    "ANGSTROM2_TO_NM2", "REFUSED_FUNCTIONS", "BOUNDARY_14_RULES", "pair_expressions",
 ]
 
 SOFTCORE_FUNCTION = "amber18"
@@ -71,6 +71,13 @@ REFUSED_FUNCTIONS: Mapping[str, str] = {
 }
 
 
+#: The two boundary 1-4 rules and the pmemd setting each one reproduces.
+BOUNDARY_14_RULES: Mapping[str, str] = {
+    "scaled": "gti_add_sc = 1 (pmemd 20+ default)",
+    "unscaled": "gti_add_sc = 0 (Amber18 manual 21.1.5)",
+}
+
+
 class SoftcoreError(ValueError):
     """A softcore setting that is not the Amber18 potential, or is not a valid one."""
 
@@ -88,6 +95,14 @@ class SoftcoreSettings:
     softcore_function: str = SOFTCORE_FUNCTION
     scalpha: float = 0.5
     scbeta: float = 12.0  # angstrom^2
+    #: 1-4 exceptions between a softcore particle and a common one. "scaled": mixed between the end
+    #: states like every other exception, so they vanish where the region is a dummy -- pmemd 20+
+    #: `gti_add_sc = 1`, the AMBER default since Amber20, and what keeps a single-anchor dummy's
+    #: partition function separable. "unscaled": present at full strength at every lambda -- the
+    #: Amber18 manual 21.1.5 rule (`gti_add_sc = 0`), which the Amber20+ manual calls
+    #: theoretically incorrect; kept so an Amber18 run can be reproduced. Pairs and exceptions
+    #: INSIDE a region are unscaled under both.
+    sc_boundary_14: str = "scaled"
 
     def __post_init__(self) -> None:
         if not isinstance(self.sc, bool):
@@ -102,6 +117,9 @@ class SoftcoreSettings:
             raise SoftcoreError(
                 f"alchemical.softcore_function {self.softcore_function!r} is not known; the only "
                 f"implemented function is {SOFTCORE_FUNCTION!r}.")
+        if self.sc_boundary_14 not in BOUNDARY_14_RULES:
+            raise SoftcoreError(f"alchemical.sc_boundary_14 must be one of "
+                                f"{sorted(BOUNDARY_14_RULES)}, got {self.sc_boundary_14!r}")
         for key in ("scalpha", "scbeta"):
             value = getattr(self, key)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -116,13 +134,14 @@ class SoftcoreSettings:
     def record(self) -> dict[str, Any]:
         return {"sc": self.sc, "softcore_function": SOFTCORE_FUNCTION,
                 "scalpha": float(self.scalpha), "scbeta_angstrom2": float(self.scbeta),
-                "scbeta_nm2": self.scbeta_nm2}
+                "scbeta_nm2": self.scbeta_nm2, "sc_boundary_14": self.sc_boundary_14,
+                "sc_boundary_14_amber": BOUNDARY_14_RULES[self.sc_boundary_14]}
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any] | None) -> "SoftcoreSettings":
         """Strict: unknown keys are refused, as every MD-tools configuration section is."""
         data = dict(data or {})
-        known = {"sc", "softcore_function", "scalpha", "scbeta"}
+        known = {"sc", "softcore_function", "scalpha", "scbeta", "sc_boundary_14"}
         unknown = sorted(set(data) - known)
         if unknown:
             raise SoftcoreError(f"unknown alchemical softcore key(s) {unknown}; known: "

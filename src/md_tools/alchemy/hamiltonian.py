@@ -26,13 +26,26 @@ THE HAMILTONIAN (Amber18 manual section 21.1.5, eqs. 21.3, 21.5-21.7, and the ru
   or 21.6 (B), softening argument lam_s or 1 - lam_s, and X-internal pairs and X-touching
   exceptions removed.
 * U_unscaled is "the interactions among the disappearing atoms are not changed, and do not
-  contribute to dV/dlambda", and "any bond, angle, dihedral or 1-4 term that involves at least one
-  appearing or disappearing atom is not scaled by lambda" (manual 21.1.5). So: every non-excluded
-  pair inside a region, as a plain vacuum Coulomb + LJ pair with no cutoff (pmemd `gti_cut = 1`),
-  and every exception touching a region, at its full value from the end state where that region is
-  physical. A bonded term touching a region must be identical in both Systems -- the topology
-  plan's dummy construction decides which such terms exist -- and is then unscaled by
-  construction; one that differs is refused, because scaling it is not the Amber18 rule.
+  contribute to dV/dlambda" (manual 21.1.5): every non-excluded pair inside a region, as a plain
+  vacuum Coulomb + LJ pair with no cutoff (pmemd `gti_cut = 1`), and every exception inside a
+  region, at its full value from the end state where that region is physical.
+
+EXCEPTIONS AND BONDED TERMS ON THE BOUNDARY -- where Amber18 and its successors differ
+
+* A 1-4 exception between a region particle and a common one follows `sc_boundary_14`
+  (`softcore.SoftcoreSettings`): "scaled" (default) mixes it between the end states like every
+  other exception -- (1 - lam_e) qq_A/r + lam_e qq_B/r, (1 - lam_s) LJ_A + lam_s LJ_B, and the
+  dummy end state's value is zero -- which is pmemd 20+'s `gti_add_sc = 1`; "unscaled" puts it in
+  U_unscaled at full strength, the Amber18 manual's "any ... 1-4 term that involves at least one
+  appearing or disappearing atom is not scaled by lambda" (`gti_add_sc = 0`). The Amber20+ manual
+  calls the latter theoretically incorrect, and it couples a dummy to the physical coordinates, so
+  it is not the default; it exists to reproduce an Amber18 run.
+* A bonded term touching a region is whatever the topology plan's end states say. Identical in
+  both -- a term the plan RETAINS at the dummy end -- it is unscaled, the Amber18 rule. A term the
+  plan REMOVES at the dummy end (force constant 0 there, every other parameter equal) is mixed
+  with lambda_bonded, as pmemd 20+'s `gti_bat_sc = 1` scales the junction terms it does not keep;
+  that is what makes the plan's single-anchor dummy separable. Any other difference in a term
+  touching a region is refused.
 
 The Amber18 one-step transformation is the diagonal lam_e = lam_s = lam_b = lambda. The three
 components exist so a path can stage them (decharge, then sterics); the functional form is the
@@ -253,6 +266,7 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
             "at the end point; it is refused rather than softened behind your back. Set sc: true, "
             "or use a map with no unique particles")
     common = frozenset(range(n)) - a_set - b_set
+    boundary_scaled = settings.sc_boundary_14 == "scaled"
 
     nb_a, nb_b = _nonbonded_force(system_a, "A"), _nonbonded_force(system_b, "B")
     settings_a, settings_b = _nonbonded_settings(nb_a), _nonbonded_settings(nb_b)
@@ -298,9 +312,12 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
                                 "background per end state, unchanged (pmemd 26 pairs_calc_ti, "
                                 "gti_nonBond_kernels eleGauss=0)",
             "softcore_internal_nonbonded": "unscaled, vacuum Coulomb + LJ, no cutoff",
-            "exceptions_touching_softcore": "unscaled, from the end state where the region is "
-                                            "physical (Amber18; Amber20+ gti_add_sc=1 differs)",
-            "bonded_touching_softcore": "must be identical in both end states; unscaled",
+            "softcore_internal_exceptions": "unscaled, from the end state where the region is "
+                                            "physical",
+            "boundary_14": settings.sc_boundary_14,
+            "bonded_touching_softcore": "identical in both end states: unscaled; force constant 0 "
+                                        "at the dummy end only: mixed with lambda_bonded; "
+                                        "anything else refused",
             "a_only_x_b_only": "excluded",
             "dispersion_correction": "LJ common to both end states: NonbondedForce correction; "
                                      "changing and softcore LJ: CustomNonbondedForce long-range "
@@ -326,12 +343,13 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
     internal_pairs = {"A": _internal_pairs(a_set, A.exceptions), "B": _internal_pairs(b_set, B.exceptions)}
 
     # --- bonded and every other non-nonbonded force ------------------------------------------
-    mixed_bonded = _add_other_forces(system, system_a, system_b, a_set | b_set, record)
+    mixed_bonded = _add_other_forces(system, system_a, system_b, a_set, b_set)
 
     # --- end-state electrostatics (+ static LJ in A) ------------------------------------------
     for label, state, region in (("A", A, a_set), ("B", B, b_set)):
         system.addForce(_end_state_nonbonded(
-            label, state, region, a_set | b_set, static_lj, internal_pairs[label], settings_a, pme))
+            label, state, region, a_set | b_set, static_lj, internal_pairs[label], settings_a, pme,
+            boundary_scaled))
 
     # --- common-core LJ that changes ------------------------------------------------------------
     exclusions = set(A.exceptions) | set(B.exceptions)
@@ -347,7 +365,7 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
         system.addForce(elec)
         system.addForce(lj)
 
-    internal = _internal_force(A, B, a_set, b_set, internal_pairs, periodic)
+    internal = _internal_force(A, B, a_set, b_set, internal_pairs, periodic, boundary_scaled)
     if internal is not None:
         system.addForce(internal)
 
@@ -430,7 +448,7 @@ def _internal_pairs(region, exceptions) -> list[tuple[int, int]]:
             if (i, j) not in exceptions]
 
 
-def _add_other_forces(system, sa, sb, unique, record) -> list[dict[str, Any]]:
+def _add_other_forces(system, sa, sb, a_set, b_set) -> list[dict[str, Any]]:
     mm = _mm()
     mixed: list[dict[str, Any]] = []
     for k, (fa, fb) in enumerate(zip(sa.getForces(), sb.getForces())):
@@ -453,16 +471,36 @@ def _add_other_forces(system, sa, sb, unique, record) -> list[dict[str, Any]]:
                 f"force {k} ({kind}): the end states list different atoms in the same term slots; "
                 "the plan must give both end states one term layout")
         for slot, ((atoms, pa), (_, pb)) in enumerate(zip(terms_a, terms_b)):
-            if pa != pb and set(atoms) & unique:
-                raise AlchemicalHamiltonianError(
-                    f"force {k} ({kind}) term {slot} on particles {atoms} touches a softcore "
-                    f"particle and differs between the end states ({pa} vs {pb}). Amber18 does not "
-                    "scale a bonded term involving an appearing or disappearing atom; the plan "
-                    "must give it one value")
+            if pa != pb and set(atoms) & (a_set | b_set):
+                problem = _boundary_term_problem(atoms, pa, pb, a_set, b_set)
+                if problem:
+                    raise AlchemicalHamiltonianError(
+                        f"force {k} ({kind}) term {slot} on particles {atoms} touches a softcore "
+                        f"particle and differs between the end states ({pa} vs {pb}): {problem}")
         system.addForce(_mixed_bonded_force(kind, terms_a, terms_b, fa.usesPeriodicBoundaryConditions()))
         mixed.append({"index": k, "type": kind, "terms": len(terms_a),
                       "differing_terms": sum(pa != pb for (_, pa), (_, pb) in zip(terms_a, terms_b))})
     return mixed
+
+
+def _boundary_term_problem(atoms, pa, pb, a_set, b_set) -> str | None:
+    """None if a term touching a region differs only by being removed at that region's dummy end.
+
+    The force constant is the LAST parameter of every mixable term; everything before it
+    (length, angle, periodicity, phase) must be equal.
+    """
+    touched_a, touched_b = bool(set(atoms) & a_set), bool(set(atoms) & b_set)
+    if touched_a and touched_b:
+        return "it spans both regions, which the plan must exclude"
+    if pa[:-1] != pb[:-1]:
+        return ("its geometry differs; only a force constant removed at the dummy end may differ "
+                "for a term on a softcore particle")
+    dummy_end_k = pb[-1] if touched_a else pa[-1]
+    if dummy_end_k != 0.0:
+        return ("its force constant differs at both ends; Amber18 does not scale a bonded term on "
+                "an appearing or disappearing atom, and the only exception accepted is a term the "
+                "plan removes at the dummy end (force constant 0 there)")
+    return None
 
 
 def _bonded_terms(force) -> list[tuple[tuple[int, ...], tuple[float, ...]]]:
@@ -524,7 +562,7 @@ def _configure_nonbonded(force, nb_settings, pme):
 
 
 def _end_state_nonbonded(label, state: _EndState, region, unique, static_lj, internal_pairs,
-                         nb_settings, pme):
+                         nb_settings, pme, boundary_scaled: bool):
     """End state `label`'s electrostatics times its weight, plus (in A) the LJ both states share."""
     mm = _mm()
     f = mm.NonbondedForce()
@@ -543,7 +581,8 @@ def _end_state_nonbonded(label, state: _EndState, region, unique, static_lj, int
         if q != 0.0:
             f.addParticleParameterOffset(_QSCALE[label], i, q, 0.0, 0.0)
     for (i, j), (qq, sg, ep) in sorted(state.exceptions.items()):
-        if i in unique or j in unique:
+        both_unique = i in unique and j in unique       # inside a region, or A-only x B-only
+        if both_unique or ((i in unique or j in unique) and not boundary_scaled):
             f.addException(i, j, 0.0, sg, 0.0)          # removed like an exclusion; see U_unscaled
             continue
         static = i in static_lj and j in static_lj
@@ -622,7 +661,7 @@ def _softcore_forces(label, state, region, common, exclusions, nb_settings, kapp
     return out
 
 
-def _internal_force(A, B, a_set, b_set, internal_pairs, periodic):
+def _internal_force(A, B, a_set, b_set, internal_pairs, periodic, boundary_scaled):
     mm = _mm()
     f = mm.CustomBondForce(f"{ONE_4PI_EPS0!r}*qq/r + 4*eps*((sig/r)^12 - (sig/r)^6)")
     for p in ("qq", "sig", "eps"):
@@ -635,7 +674,9 @@ def _internal_force(A, B, a_set, b_set, internal_pairs, periodic):
                              0.5 * (state.sigma[i] + state.sigma[j]), eps])
             count += 1
         for (i, j), (qq, sg, ep) in sorted(state.exceptions.items()):
-            if (i in region or j in region) and (qq != 0.0 or ep != 0.0):
+            inside = i in region and j in region
+            boundary = (i in region) != (j in region)
+            if (inside or (boundary and not boundary_scaled)) and (qq != 0.0 or ep != 0.0):
                 f.addBond(i, j, [qq, sg, ep])
                 count += 1
     if not count:
