@@ -163,6 +163,16 @@ forces.
 Cost: two PME reciprocal sums per evaluation, as in pmemd, plus a few custom kernels over the
 softcore regions. It has not been measured on a device yet.
 
+## Cross-engine: pmemd
+
+At fixed coordinates, against Amber 26 pmemd (the CPU build) running TI with `icfe=1, ifsc=1`, at
+lambda 0, 0.25, 0.5, 0.75 and 1: dU/dlambda and the MBAR cross-state energies agree to 2.5e-3
+kJ/mol or better. That covers both boundary rules (`gti_add_sc` 1 and 0) and a five-atom appearing
+chain. Each run passes a rule set from the engines' own discrepancy on the ordinary end states.
+The evidence, the rule, the matched settings and the intentional differences are in
+[S3-evidence/amber](handoffs/S3-evidence/amber/README.md). pmemd.cuda, the R4 GPU path, is BLOCKED
+on a card.
+
 ## Interface
 
 ```python

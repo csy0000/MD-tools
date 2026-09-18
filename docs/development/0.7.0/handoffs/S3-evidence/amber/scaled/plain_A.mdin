@@ -1,0 +1,10 @@
+S3 cross-engine calibration: an ordinary end state, no TI
+ &cntrl
+  imin = 0, irest = 0, ntx = 1, nstlim = 1, dt = 0.000001,
+  ntt = 0, tempi = 0.0, ntc = 1, ntf = 1, ntb = 1, cut = 9.0,
+  ntpr = 1, ntwx = 0, ntwr = 1, iwrap = 0, ig = 1,
+ /
+ &ewald
+  ew_coeff = 0.4024978089, nfft1 = 100, nfft2 = 100, nfft3 = 100,
+  order = 5, eedmeth = 1, eedtbdns = 20000, vdwmeth = 0, netfrc = 0,
+ /
