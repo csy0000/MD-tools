@@ -101,12 +101,6 @@ type: string or null · default: `null`
 
 Build this BIOLOGICAL ASSEMBLY of an mmCIF input (the `_pdbx_struct_assembly` id, quoted: "3"), not its asymmetric unit. They are different molecules: 1TYL's asymmetric unit is an insulin dimer, its assembly 3 the T3R3 hexamer. Every copy of a chain gets its own chain id (A, B, C ... in operator order), and build/assembly.json maps each back to its author chain, label_asym ids and operator. An ion or water every operator places on the same symmetry-axis position is kept once, and each dropped copy is recorded; coinciding protein or ligand atoms are refused. `ligands` selectors and `protonation.overrides` name the EXPANDED chain ids. Null builds the file as deposited. Only for a .cif input and kind: peptide or complex.
 
-#### `input.remove`
-
-type: list · default: `[]`
-
-Residues deliberately REMOVED from the structure before anything else reads it -- crystallisation additives such as ethylene glycol (EDO) or thiocyanate (SCN), for example. One entry per residue: - select: {chain: A, resid: "1198", insertion_code: ""} reason: crystallisation additive The selector names exactly one residue (after `input.assembly` expansion, so the expanded chain ids), and the reason is required: a deletion is a preparation decision, recorded with the residue and its atom count in built.log. A standard protein residue cannot be removed this way. Nothing is ever deleted without an entry here -- an unmapped non-standard residue is still refused.
-
 #### `input.missing_atoms`
 
 type: string · default: `refuse` · one of `refuse`, `add`

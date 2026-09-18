@@ -177,18 +177,6 @@ BUILD_SCHEMA = Schema(
                       "selectors and `protonation.overrides` name the EXPANDED chain ids. Null "
                       "builds the file as deposited. Only for a .cif input and kind: peptide or "
                       "complex."),
-            Field("remove", list, default=[],
-                  doc="Residues deliberately REMOVED from the structure before anything else "
-                      "reads it -- crystallisation additives such as ethylene glycol (EDO) or "
-                      "thiocyanate (SCN), for example. One entry per residue:\n"
-                      "  - select: {chain: A, resid: \"1198\", insertion_code: \"\"}\n"
-                      "    reason: crystallisation additive\n"
-                      "The selector names exactly one residue (after `input.assembly` expansion, "
-                      "so the expanded chain ids), and the reason is required: a deletion is a "
-                      "preparation decision, recorded with the residue and its atom count in "
-                      "built.log. A standard protein residue cannot be removed this way. Nothing is "
-                      "ever deleted without an entry here -- an unmapped non-standard residue is "
-                      "still refused."),
             Field("missing_atoms", str, default="refuse", enum=("refuse", "add"),
                   doc="What to do when a standard residue lacks heavy atoms -- a disordered "
                       "surface side chain, a missing terminal OXT. `refuse` (the default) stops "
@@ -394,6 +382,27 @@ def _check_pairings(resolved: dict[str, Any]) -> None:
     # box or salt keys under GBn2 are refused above.
 
 
+def _refuse_retired_remove_key(document: dict[str, Any]) -> None:
+    """`input.remove` deleted crystallisation additives. Removing them is the reader's own edit.
+
+    The generic unknown-key refusal would say `remove` is not a key of `input` and list the two
+    that are, which tells a reader holding a working configuration nothing about what to do. The
+    feature existed, it was removed deliberately, and the replacement is one line of shell -- so
+    the refusal carries the migration, as the retired HMR key below does.
+    """
+    section = document.get("input")
+    if not isinstance(section, dict) or "remove" not in section:
+        return
+    raise ConfigError(
+        "input.remove is retired. Deleting a crystallisation additive (EDO, SCN, a cryoprotectant) "
+        "is an edit to your own structure file, not a build setting. Strip the residues before "
+        "building, for example\n"
+        "    grep -v -E \"^HETATM .* (EDO|SCN) \" deposited.cif > prepared.cif\n"
+        "and pass the edited file to -i. That edits the DEPOSITED ids, before any input.assembly "
+        "expansion, so a residue present in several copies is removed from all of them. Record in "
+        "your own notes what you removed and why: the build no longer does.")
+
+
 def _refuse_retired_hmr_key(document: dict[str, Any]) -> None:
     """`constraints.hydrogen_mass_amu` was the old way to ask for repartitioning. Say so.
 
@@ -443,6 +452,7 @@ def resolve_build_config(path: Path | None) -> dict[str, Any]:
         if not isinstance(document, dict):
             raise ConfigError(f"{path}: the document must be a mapping")
     _refuse_retired_hmr_key(document)
+    _refuse_retired_remove_key(document)
     stated = {name: tuple(block) for name, block in document.items() if isinstance(block, dict)}
     # ALIASES BEFORE DEFAULTS. `kind` has a default; the legacy boolean does not have one that
     # could be compared against it. Resolving here, against what the document actually STATES,
@@ -757,20 +767,6 @@ def _check_input_and_protonation(resolved: dict[str, Any]) -> None:
     implicit = is_implicit(canonical_solvent(resolved["solvent"]["model"]))
     stated = resolved.get("_explicit_keys", {}).get("protonation", ())
     protein = kind in ("peptide", "complex")
-    removals = resolved["input"]["remove"]
-    if removals and not protein:
-        raise ConfigError(f"input.remove lists {len(removals)} residue(s), but solute.kind is "
-                          f"{kind!r}; removal applies to a protein structure (peptide or complex).")
-    for n, entry in enumerate(removals):
-        select = entry.get("select") if isinstance(entry, dict) else None
-        if (not isinstance(entry, dict) or set(entry) - {"select", "reason"}
-                or not isinstance(select, dict) or set(select) - {"chain", "resid", "insertion_code"}
-                or "chain" not in select or "resid" not in select):
-            raise ConfigError(f"input.remove[{n}] must be {{select: {{chain, resid, "
-                              f"insertion_code}}, reason}}, got {entry!r}")
-        if not str(entry.get("reason") or "").strip():
-            raise ConfigError(f"input.remove[{n}] has no reason. Removing a residue is a "
-                              f"preparation decision, and the record says why it was made.")
     if resolved["input"]["assembly"] is not None and not protein:
         raise ConfigError(
             f"input.assembly = {resolved['input']['assembly']!r}, but solute.kind is {kind!r}. A "
@@ -1000,25 +996,22 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
     # MISSING HEAVY ATOMS AND CHAIN BREAKS, decided before anything reads the structure for real:
     # a break is refused, and incomplete residues are refused or built under input.missing_atoms.
-    removal_record = None
     if (peptide or complex_build) and suffix in (".pdb", ".cif"):
         from openmm import app as _app
 
-        from ..openmm.completion import CompletionError, inspect_structure, remove_residues
+        from ..openmm.completion import CompletionError, inspect_structure
 
         reader = _app.PDBxFile if structure_input.suffix.lower() == ".cif" else _app.PDBFile
         try:
             original = reader(str(structure_input))
-            kept_topology, kept_positions, removal_record = remove_residues(
-                original.topology, original.positions, resolved["input"]["remove"])
             completed_topology, completed_positions, completion_record = inspect_structure(
-                kept_topology, kept_positions,
+                original.topology, original.positions,
                 missing_atoms=resolved["input"]["missing_atoms"])
         except CompletionError as exc:
             if assembly_scratch is not None:
                 assembly_scratch.cleanup()
             raise ConfigError(f"-i {input_path}: {exc}") from None
-        if completion_record["atoms_added"] or removal_record:
+        if completion_record["atoms_added"]:
             if assembly_scratch is None:
                 assembly_scratch = tempfile.TemporaryDirectory(prefix="build-top-assembly-")
             completed = Path(assembly_scratch.name) / "completed.pdb"
@@ -1026,11 +1019,8 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                 _app.PDBFile.writeFile(completed_topology, completed_positions, handle, keepIds=True)
             structure_input = completed
             prepared_pdb_bytes = completed.read_bytes()
-            if removal_record:
-                prepared_by.append(f"input.remove: {len(removal_record)} residue(s)")
-            if completion_record["atoms_added"]:
-                prepared_by.append(f"input.missing_atoms: add, "
-                                   f"{len(completion_record['atoms_added'])} atom(s)")
+            prepared_by.append(f"input.missing_atoms: add, "
+                               f"{len(completion_record['atoms_added'])} atom(s)")
 
     mapped = None
     out_mapping = out_system.parent / "ligand_mapping.json"
@@ -1103,10 +1093,6 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         log.field("assembly", f"{assembly_record['assembly_id']}: "
                               f"{len(assembly_record['chains'])} chain(s), "
                               f"{len(assembly_record['deduplicated'])} on-axis copy(ies) dropped")
-    for removed in removal_record or []:
-        log.field("removed", f"{removed['residue']} {removed['chain']}:{removed['resid']}"
-                             f"{removed['insertion_code']} ({removed['n_atoms']} atom(s)): "
-                             f"{removed['reason']}")
     if completion_record is not None and completion_record["atoms_added"]:
         added_residues = {(a["chain"], a["resid"], a["insertion_code"])
                           for a in completion_record["atoms_added"]}
@@ -1484,8 +1470,6 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             written_outputs["prepared_structure"] = file_facts(out_prepared)
         if completion_record is not None:
             log.update(structure_completion=completion_record)
-        if removal_record:
-            log.update(removed_residues=removal_record)
         protonation = (record.get("protonation") or {}).get("protonation")
         if protonation is not None:
             log.update(protonation=protonation)
