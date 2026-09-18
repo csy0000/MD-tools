@@ -70,6 +70,13 @@ Each method page carries a minimal, runnable `example.config` beside it.
 | [Runtime closure and CV evidence](release-notes/20260904-cv-and-runtime-closure-evidence.md) | the measured lanes, hardware, wheel and CUDA coverage behind the collective-variable and runtime-closure work |
 | [CUDA coverage matrix](release-notes/cuda-coverage-matrix.md) | every CUDA-relevant source site and the lane that exercises it, generated from a real run |
 
+## Development roadmap
+
+The [0.6.1–0.7.2 development instruction](claudecode-instructions/20260918_parallel-0.6.1-0.7.x-development.md)
+defines the requested branch aims, references, documentation cleanup, and separate Claude Code
+sessions for concurrent selective REST2 and alchemical development. These are planned features;
+0.6.0 remains under testing, and this roadmap does not announce a release.
+
 ## History
 
 | page | |

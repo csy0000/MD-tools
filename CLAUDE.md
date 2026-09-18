@@ -2,6 +2,15 @@
 
 Read this before acting. It is short on purpose.
 
+## Active release-development instruction
+
+For the user-requested 0.6.1 / 0.7.x branch bootstrap and parallel development, read
+[20260918_parallel-0.6.1-0.7.x-development.md](docs/claudecode-instructions/20260918_parallel-0.6.1-0.7.x-development.md) first, then this guide.
+It records the authorized branch aims, documentation cleanup, worktrees, session ownership,
+and the specific 0.7.0 exception permitting `md-openmm combine-topology` under the existing
+executable. The four-command rule below describes the current 0.6.0 baseline; it must not block
+that explicitly requested future subcommand. Other runtime and scientific invariants still apply.
+
 ## The package
 
 One installed executable, `md-openmm`. Exactly four public work commands:
