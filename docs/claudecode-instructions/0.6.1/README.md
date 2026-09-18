@@ -19,10 +19,29 @@ not an active instruction for this branch.
 | S0 (coordinator) | `0.6.1` | `src/md_tools/cli/md_openmm.py`, shared configuration and schema authorities, data-contract changes, root docs, packaging, and any file two jobs touch |
 | S1 | `work/0.6.1-selection` | [assignment](S1.md) |
 
+## Session sandbox (the user, 2026-09-19)
+
+Every session works inside its own worktree and nothing else:
+
+- **Push only your own branch.** A worker pushes its `work/...` branch; the coordinator pushes the
+  four integration branches. Nobody pushes `main`, `dev`, `dev-0.6.0` or another session's branch.
+- **No `$MD_DATA`.** Do not register, retrieve, search or read anything under the machine's
+  `$MD_DATA` — no `data-register`, no catalog lookup against it, no registered dataset as a
+  fixture. A test that needs a catalog or a dataset root builds one in a temporary directory and
+  points `MD_DATA` at it explicitly; unsetting the variable is not isolation, because the user
+  configuration then finds the machine root again.
+- Nothing outside the worktree is written except the session's own temporary/scratch directories
+  and its own environment: not another worktree, not the `site-packages` of a shared environment,
+  not the user configuration.
+
+Consequently **registration evidence is out of reach in this wave.** Every acceptance row that says
+"registration" is BLOCKED (sandbox) until the user lifts this, and is reported that way — never as
+passed, and never satisfied by registering into the real catalog "just once".
+
 ## Rules that apply to every session on this branch
 
 - Work only in your own worktree and on your own worker branch.
-- Do not merge into `0.6.1`, force-push a shared ref, edit another session's worktree, or mark a
+- Do not merge into `0.6.1`, push any branch but your own, force-push, edit another session's worktree, or mark a
   shared milestone complete. The coordinator integrates, in dependency order.
 - A change to a shared contract is requested from the coordinator, who lands one commit updating
   the document and its fixtures. Never a private variant.

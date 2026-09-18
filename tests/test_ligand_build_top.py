@@ -40,7 +40,7 @@ def _record(log: Path) -> dict:
 def _ligand_table(system_xml: Path, pdb: Path, residue_key, package):
     from openmm import XmlSerializer, app
 
-    from md_tools.ligands.package import _subsystem_table
+    from md_tools.ligands.package import subsystem_parameter_table
 
     system = XmlSerializer.deserialize(system_xml.read_text())
     topology = app.PDBFile(str(pdb)).topology
@@ -49,7 +49,7 @@ def _ligand_table(system_xml: Path, pdb: Path, residue_key, package):
                    (residue_key is None and r.name == package.residue_name))
     indices = [a.index for a in residue.atoms()]
     assert [a.name for a in residue.atoms()] == list(package.atom_names)
-    table, constrained = _subsystem_table(system, package.mol, indices,
+    table, constrained = subsystem_parameter_table(system, package.mol, indices,
                                           package.conventions["coulomb14scale"],
                                           package.conventions["lj14scale"])
     table.pop("_constraint_lengths")
@@ -143,12 +143,12 @@ solvent:
             assert sorted(table[section]) == sorted(reference[section]), (key, section)
     # And both equal the package itself, term by term (masses aside: no HMR here, but the
     # System's masses are compared by the package tests).
-    from md_tools.ligands.package import _compare_tables
+    from md_tools.ligands.package import compare_parameter_tables
 
     table, constrained = _ligand_table(build / "built.xml", build / "built.pdb", ("C", "202"), eth)
     table["conventions"] = eth.table["conventions"]
     # Package first: a bond constrained in the built System has no force term there.
-    assert _compare_tables(eth.table, table, where="EOH", skip_masses=True,
+    assert compare_parameter_tables(eth.table, table, where="EOH", skip_masses=True,
                            missing_bonds_ok=constrained) == []
 
 

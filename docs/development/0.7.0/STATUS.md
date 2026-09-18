@@ -17,11 +17,11 @@ in [`handoffs/`](handoffs/) and never edit it.
 | | milestone | owner | state | evidence |
 |---|---|---|---|---|
 | A0 | interfaces, schemas, fixtures, adapter choice | S0 with S2–S4 | IN PROGRESS | [shared contracts](../shared-contracts.md) |
-| A1 | `combine-topology` construction | S2 | NOT STARTED | — |
-| A2 | Amber18 softcore, energies and derivatives | S3 | NOT STARTED | — |
-| A3 | windows, FEP/BAR/MBAR and TI, hydration | S4 | NOT STARTED | — |
-| A4 | relative binding cycle | S4 | NOT STARTED | — |
-| A5 | absolute binding cycle with restraints | S4 | NOT STARTED | — |
+| A1 | `combine-topology` construction | S2 | IMPLEMENTED (callable layer; CLI not wired) | integrated at `6df0df6`; [handoffs/S2.md](handoffs/S2.md); 114 passed on Reference, `MD_DATA` at an empty temp root |
+| A2 | Amber18 softcore, energies and derivatives | S3 | IN PROGRESS — nothing handed off yet | — |
+| A3 | windows, FEP/BAR/MBAR and TI, hydration | S4 | IN PROGRESS — estimators and windows integrated; W7 **FAIL (partial)** against the exact 8.633 kcal/mol: MBAR, BAR, EXP-forward PASS, EXP-reverse FAIL (flagged poor overlap, ESS 24), TI INCONCLUSIVE (σ_int 0.62); W8 (17 windows, gate fixed before running) running on CPU | [handoffs/S4.md](handoffs/S4.md), [S4 acceptance matrix](handoffs/S4-acceptance-matrix.md) |
+| A4 | relative binding cycle | S4 | IN PROGRESS — cycle arithmetic only; needs A1 plus A2 for a real leg | [handoffs/S4.md](handoffs/S4.md) |
+| A5 | absolute binding cycle with restraints | S4 | IN PROGRESS — Boresch restraints (minimum image), standard-state release term and cycle arithmetic integrated; no molecular binding run | [handoffs/S4.md](handoffs/S4.md) |
 | A6 | CUDA/CI, exports, registration, wheel validation | S0 | NOT STARTED | — |
 
 State values are NOT STARTED, IN PROGRESS, IMPLEMENTED (code and deterministic tests), VALIDATED
@@ -33,12 +33,29 @@ S3 and S4 do not wait for S2. S3 builds against the agreed miniature topology-pl
 builds against frozen energy and derivative fixtures. Real end-to-end execution waits for A1 and
 A2 — individual development does not.
 
+## Coordinator queue (S0)
+
+| item | why it waits |
+|---|---|
+| wire `md-run` / `build-md` for alchemical windows (`protocol` value, `.in` keys, `resolved.config`) | the window runner needs S3's Hamiltonian interface to settle first; wiring it against a moving API means doing it twice |
+| a data-contract method entry for alchemical datasets | needed before registration can even be tested against a temporary root; real registration stays BLOCKED (sandbox) |
+| `md-openmm combine-topology` CLI and its input schema | S2's callable surface is accepted; the input schema is PROPOSED in `topology-plan.md` |
+
 ## Integration commits
 
-None yet.
+| commit | what | checks |
+|---|---|---|
+| `f04397b` | merge S2 at `7d8b7f9` | held: the CUDA inventory found six unclassified S2 sites, two taking a free `platform` string |
+| `6bae714` | `ligands.package` comparison functions made public for S2 | stale-entry guard PASS |
+| `84a77b0` | `alchemy` extra: `pymbar>=4,<5`, `scipy` | — |
+| `6df0df6` | merge S2 at `ea43898`: recovery Contexts pinned to Reference by constant, six sites classified non-CUDA | 114 passed (S2's files plus all ligand tests, slow included, CUDA hidden); both inventory guards PASS run directly; `MD_DATA` temp root empty afterwards |
+| `3748945` | merge S4 at `9b7d605`: samples, estimators, restraints, cycles, windows, 12 windows.py matrix entries (10 CUDA sites, lane NONE YET — BLOCKED) | 130 passed, 3 slow deselected (S4's own CPU campaigns); both inventory guards PASS run directly; `MD_DATA` temp root empty afterwards |
 
 ## Blockers
 
+- Registration (A6): BLOCKED (sandbox). The user has put `$MD_DATA` out of reach of every
+  session (2026-09-19); registration is tested against temporary roots only.
+- CUDA: every CUDA site in `alchemy/windows.py` is classified with lane NONE YET — BLOCKED; no card is allocated to this wave (0–4 the 0.6.0 gate, 5–8 hpREST2).
 - The OpenFE adapter choice (A0) is not settled: which components are pinned, at which versions,
   under which license, and what is vendored. S0 owns closing this with S2 and S3.
 - No AMBER cross-engine reference environment has been identified yet for gate 4
