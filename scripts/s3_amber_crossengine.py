@@ -206,7 +206,7 @@ def prmtop_energy(parm7, rst7, like_system):
 # pmemd
 # --------------------------------------------------------------------------------------------
 
-def mdin(clambda, kappa_nm, grid, boundary, scmask1="HA", scmask2="FB"):
+def mdin(clambda, kappa_nm, grid, boundary, scmask1="HA", scmask2="FB", order=5):
     gti_add_sc = {"scaled": 1, "unscaled": 0}[boundary]
     lambdas = ",".join(f"{v:.4f}" for v in LAMBDAS)
     return f"""S3 cross-engine single point, clambda = {clambda}
@@ -223,7 +223,7 @@ def mdin(clambda, kappa_nm, grid, boundary, scmask1="HA", scmask2="FB"):
  /
  &ewald
   ew_coeff = {kappa_nm / 10.0:.10f}, nfft1 = {grid[0]}, nfft2 = {grid[1]}, nfft3 = {grid[2]},
-  order = 5, eedmeth = 1, eedtbdns = 20000, vdwmeth = 0, netfrc = 0,
+  order = {order}, eedmeth = 1, eedtbdns = 20000, vdwmeth = 0, netfrc = 0,
  /
 """
 
@@ -247,7 +247,7 @@ def parse_mdout(text):
     return out
 
 
-def plain_mdin(kappa_nm, grid):
+def plain_mdin(kappa_nm, grid, order=5):
     return f"""S3 cross-engine calibration: an ordinary end state, no TI
  &cntrl
   imin = 0, irest = 0, ntx = 1, nstlim = 1, dt = 0.000001,
@@ -256,7 +256,7 @@ def plain_mdin(kappa_nm, grid):
  /
  &ewald
   ew_coeff = {kappa_nm / 10.0:.10f}, nfft1 = {grid[0]}, nfft2 = {grid[1]}, nfft3 = {grid[2]},
-  order = 5, eedmeth = 1, eedtbdns = 20000, vdwmeth = 0, netfrc = 0,
+  order = {order}, eedmeth = 1, eedtbdns = 20000, vdwmeth = 0, netfrc = 0,
  /
 """
 
@@ -303,12 +303,17 @@ def main():
     ap.add_argument("--amberhome", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--boundary", default="scaled", choices=("scaled", "unscaled"))
+    ap.add_argument("--pmemd", default="pmemd",
+                    help="the executable under $AMBERHOME/bin: pmemd (CPU) or pmemd.cuda_DPFP")
+    ap.add_argument("--order", type=int, default=5,
+                    help="PME spline order given to pmemd; OpenMM's is 5. pmemd.cuda may accept "
+                         "only 4, and then the difference is part of what the calibration measures")
     ap.add_argument("--tail", action="store_true",
                     help="the five-atom appearing chain: softcore-internal pairs and 1-4s")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    pmemd = Path(args.amberhome) / "bin" / "pmemd"
+    pmemd = Path(args.amberhome) / "bin" / args.pmemd
 
     sa, sb, a_only, b_only, x = fixture(args.tail)
     scmask2 = "FB" + ("".join(",T%d" % k for k in range(1, 5)) if args.tail else "")
@@ -347,7 +352,7 @@ def main():
     calibration = {}
     for label in ("A", "B"):
         stem = out / f"plain_{label}"
-        stem.with_suffix(".mdin").write_text(plain_mdin(kappa, grid))
+        stem.with_suffix(".mdin").write_text(plain_mdin(kappa, grid, args.order))
         subprocess.run([str(pmemd), "-O", "-i", str(stem.with_suffix(".mdin")),
                         "-p", str(out / f"single_{label}.parm7"), "-c", str(out / f"single_{label}.rst7"),
                         "-o", str(stem.with_suffix(".mdout")), "-r", str(stem.with_suffix(".restrt")),
@@ -361,13 +366,14 @@ def main():
     runs = {}
     for v in LAMBDAS:
         stem = out / f"clambda_{round(v * 100):03d}"
-        stem.with_suffix(".mdin").write_text(mdin(v, kappa, grid, args.boundary, "HA", scmask2))
+        stem.with_suffix(".mdin").write_text(mdin(v, kappa, grid, args.boundary, "HA", scmask2,
+                                                  args.order))
         cmd = [str(pmemd), "-O", "-i", str(stem.with_suffix(".mdin")), "-p", str(parm7),
                "-c", str(rst7), "-o", str(stem.with_suffix(".mdout")),
                "-r", str(stem.with_suffix(".restrt")), "-inf", str(stem.with_suffix(".mdinfo"))]
         subprocess.run(cmd, check=True, cwd=out)
         runs[v] = parse_mdout(stem.with_suffix(".mdout").read_text())
-    report["pmemd"] = {"binary": "$AMBERHOME/bin/pmemd",   # no machine path in a report
+    report["pmemd"] = {"binary": f"$AMBERHOME/bin/{args.pmemd}", "pme_order": args.order,
                        "runs": {f"{v:.2f}": r for v, r in runs.items()}}
 
     # 4. compare. U(lambda) is compared as a difference from U(0): pmemd's EPtot and OpenMM's
