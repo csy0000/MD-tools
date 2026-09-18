@@ -41,12 +41,22 @@ import numpy as np
 
 __all__ = [
     "FACTORIZATION_TOL_KJ",
+    "RECOVERY_PLATFORM",
     "audit_plan",
     "dummy_energy",
     "endpoint_accounting",
     "factorization_check",
     "restraint_energy",
 ]
+
+#: Every Context this module creates is on OpenMM's Reference platform, by construction and with
+#: no parameter to change it. Recovery is construction-time arithmetic, like build-top's hydrogen
+#: relaxation: it must be float64 and bit-reproducible, and there is nothing to accelerate. A
+#: `platform` argument here was a second platform policy beside
+#: `md_tools.openmm.platform_policy` -- a caller could pass "CUDA" and bypass the machine
+#: configuration, the device policy and --cpu -- so there is none. These Contexts never reach
+#: platform_policy and are not CUDA evidence.
+RECOVERY_PLATFORM = "Reference"
 
 #: The retained dummy energy may vary by at most this under a physical move (kJ/mol): pure float64
 #: arithmetic, so the floor is rounding. The unfiltered variation it is compared against is O(1).
@@ -380,7 +390,7 @@ def _check_environment_terms(f_env, f_sys, ligand: set, n_env: int, label: str) 
 # ------------------------------------------------------------------------------------------------
 # energy
 # ------------------------------------------------------------------------------------------------
-def _energies_by_class(system, positions_nm, platform: str) -> dict[str, float]:
+def _energies_by_class(system, positions_nm) -> dict[str, float]:
     import openmm
     from openmm import unit
 
@@ -392,7 +402,8 @@ def _energies_by_class(system, positions_nm, platform: str) -> dict[str, float]:
             classes.append(name)
         force.setForceGroup(classes.index(name))
     integrator = openmm.VerletIntegrator(0.001)
-    context = openmm.Context(work, integrator, openmm.Platform.getPlatformByName(platform))
+    context = openmm.Context(work, integrator,
+                             openmm.Platform.getPlatformByName(RECOVERY_PLATFORM))
     context.setPositions(positions_nm)
     out = {}
     for g, name in enumerate(classes):
@@ -401,7 +412,7 @@ def _energies_by_class(system, positions_nm, platform: str) -> dict[str, float]:
     return out
 
 
-def _dispersion(system, positions_nm, platform: str) -> float:
+def _dispersion(system, positions_nm) -> float:
     """OpenMM's long-range dispersion correction for *system*, as on minus off."""
     import openmm
     from openmm import NonbondedForce, unit
@@ -420,7 +431,7 @@ def _dispersion(system, positions_nm, platform: str) -> float:
         force.setUseDispersionCorrection(flag)
         work.addForce(force)
         context = openmm.Context(work, openmm.VerletIntegrator(0.001),
-                                 openmm.Platform.getPlatformByName(platform))
+                                 openmm.Platform.getPlatformByName(RECOVERY_PLATFORM))
         context.setPositions(positions_nm)
         values.append(context.getState(getEnergy=True).getPotentialEnergy()
                       .value_in_unit(unit.kilojoule_per_mole))
@@ -428,8 +439,7 @@ def _dispersion(system, positions_nm, platform: str) -> float:
 
 
 def endpoint_accounting(plan, endpoint: str, reference_system, reference_to_hybrid: Sequence[int],
-                        *, positions_nm: Optional[np.ndarray] = None,
-                        platform: str = "Reference") -> dict[str, Any]:
+                        *, positions_nm: Optional[np.ndarray] = None) -> dict[str, Any]:
     """Every term of the endpoint energy, named, against an independent physical reference.
 
     *reference_to_hybrid[i]* is the plan particle that reference particle i is. The reference
@@ -440,13 +450,13 @@ def endpoint_accounting(plan, endpoint: str, reference_system, reference_to_hybr
     endpoint = endpoint.upper()
     x = np.array(plan.positions_nm if positions_nm is None else positions_nm, dtype=float)
     system = plan.system(endpoint)
-    hybrid = _energies_by_class(system, x, platform)
-    reference = _energies_by_class(reference_system, x[list(reference_to_hybrid)], platform)
+    hybrid = _energies_by_class(system, x)
+    reference = _energies_by_class(reference_system, x[list(reference_to_hybrid)])
     dummy = dummy_energy(plan.record, endpoint, x)
     box = np.array([[_q(c) for c in v] for v in system.getDefaultPeriodicBoxVectors()])
     restraint = restraint_energy(plan.record, x, box)
-    dispersion = _dispersion(system, x, platform) - _dispersion(
-        reference_system, x[list(reference_to_hybrid)], platform)
+    dispersion = _dispersion(system, x) - _dispersion(
+        reference_system, x[list(reference_to_hybrid)])
     accounted = {
         "HarmonicBondForce": reference.get("HarmonicBondForce", 0.0) + dummy["bonds"],
         "HarmonicAngleForce": reference.get("HarmonicAngleForce", 0.0) + dummy["angles"],
@@ -460,7 +470,7 @@ def endpoint_accounting(plan, endpoint: str, reference_system, reference_to_hybr
                 for name in sorted(set(hybrid) | set(accounted))}
     return {
         "endpoint": endpoint,
-        "platform": platform,
+        "platform": RECOVERY_PLATFORM,
         "hybrid": hybrid,
         "reference": reference,
         "dummy_bonded": dummy,

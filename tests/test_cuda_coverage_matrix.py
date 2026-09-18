@@ -224,6 +224,42 @@ CUDA_SITES = {
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
 #: named exemption rather than an omission -- and the reason is checkable by reading the callsite.
 NON_CUDA_CONTEXT_SITES = {
+    "alchemy/topology.py::Environment.from_files":
+        "reads the environment's coordinates with `PDBFile.getPositions` -- the positions a PDB "
+        "FILE holds, parsed on the host, sharing only the spelling of the State accessor. It "
+        "deserialises built.xml into a System and hashes both files; no Context exists and no "
+        "platform is chosen. This is the input side of `combine-topology`, before any run.",
+    "alchemy/topology.py::build_topology_plan":
+        "copies the environment's periodic box onto the combined topology with "
+        "`Topology.getPeriodicBoxVectors` / `Topology.setPeriodicBoxVectors`, the "
+        "`openmm.app.Topology` accessors that share their spelling with the Context ones. It "
+        "builds two endpoint Systems by cloning and editing Force parameters on the host, and "
+        "its checks (`audit_plan`, `factorization_check`) are accessor walks and numpy "
+        "arithmetic: construction creates no Context and never reaches platform_policy.",
+    "alchemy/topology_recovery.py::_dispersion":
+        "creates a Context, sets positions and reads a potential energy -- on the REFERENCE "
+        "platform, by the module constant `RECOVERY_PLATFORM`, with no argument that could change "
+        "it. It measures OpenMM's long-range dispersion correction (energy with it on minus off) "
+        "so the endpoint-recovery accounting can name the shift zero-epsilon dummies cause. "
+        "Construction-time float64 arithmetic, like `_relax_hydrogens`: a deliberate refusal of "
+        "the machine platform, never CUDA evidence. If it ever takes the machine platform it "
+        "becomes a CUDA site and needs a lane.",
+    "alchemy/topology_recovery.py::_energies_by_class":
+        "creates a Context, sets positions and reads one potential energy per force class -- on "
+        "the REFERENCE platform, by the module constant `RECOVERY_PLATFORM`, with no argument that "
+        "could change it (a `platform` parameter here was removed as a second platform policy). "
+        "It evaluates a topology plan's endpoint Systems and an independently built reference "
+        "for `endpoint_accounting`: float64 and bit-reproducible, before any run exists, and "
+        "never CUDA evidence.",
+    "alchemy/topology_recovery.py::_nonzero_terms":
+        "walks `System.getForces()` -- the host-side list of Force OBJECTS, not `State.getForces` "
+        "-- to read an endpoint System's bonded terms, exceptions and particle parameters for "
+        "the term audit. Accessors only; nothing is evaluated and no Context exists.",
+    "alchemy/topology_recovery.py::audit_plan":
+        "the same `System.getForces()` list, on both endpoint Systems and the environment, to "
+        "prove each endpoint reproduces its package's parameter table and leaves the environment "
+        "untouched. Host-side accessors; it creates no Context, which is why the builder can run "
+        "it on every plan on a machine with no GPU.",
     "build/md.py::_generated_cv_text":
         "reads the bond graph for `collective_variables.generate` off the SERIALISED built System "
         "-- `HarmonicBondForce.getBondParameters` and `System.getConstraintParameters` are System "
