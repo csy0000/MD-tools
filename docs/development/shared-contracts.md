@@ -277,7 +277,7 @@ file:
 |---|---|
 | `alchemy/__init__.py` | S0 — a docstring only until integration; no re-exports |
 | `alchemy/paths.py` | S0 as a **contract file** — the named state coordinates and `AlchemicalPath`, as S4 wrote them at `9d465a5`; changes are requested, not made |
-| `alchemy/samples.py`, `estimators.py`, `restraints.py`, `cycles.py` | S4 |
+| `alchemy/samples.py`, `estimators.py`, `restraints.py`, `cycles.py`, `windows.py` | S4 |
 | `alchemy/topology*.py` | S2 |
 | `alchemy/hamiltonian*.py`, `alchemy/softcore*.py` | S3 |
 

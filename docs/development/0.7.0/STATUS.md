@@ -33,6 +33,15 @@ S3 and S4 do not wait for S2. S3 builds against the agreed miniature topology-pl
 builds against frozen energy and derivative fixtures. Real end-to-end execution waits for A1 and
 A2 — individual development does not.
 
+## Coordinator queue (S0)
+
+| item | why it waits |
+|---|---|
+| wire `md-run` / `build-md` for alchemical windows (`protocol` value, `.in` keys, `resolved.config`) | the window runner needs S3's Hamiltonian interface to settle first; wiring it against a moving API means doing it twice |
+| a data-contract method entry for alchemical datasets | needed before registration can even be tested against a temporary root; real registration stays BLOCKED (sandbox) |
+| `md-openmm combine-topology` CLI and its input schema | S2's callable surface is accepted; the input schema is PROPOSED in `topology-plan.md` |
+| land S2 at `7d8b7f9` | merged locally with a renaming integration commit; held because six S2 functions were unclassified in the CUDA coverage matrix and two took a free `platform` string |
+
 ## Integration commits
 
 None yet.
