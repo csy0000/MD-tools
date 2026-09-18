@@ -13,16 +13,17 @@ precision.
 
 | tutorial | method | system | wall time |
 |---|---|---|---|
-| [paracetamol](cMD/paracetamol.md) | cMD | one small molecule, explicit TIP3P, 1800 atoms | ~2 min |
+| [paracetamol](cMD/paracetamol.md) | cMD | **parameterise a molecule once**, then a box from that package: explicit TIP3P, 1800 atoms, 200 ps (release after 0.5.4) | ~1 min |
 | [chignolin](cMD/chignolin.md) | cMD | 10-residue peptide from 1UAO, explicit TIP3P, 2553 atoms, 1 ns at 4 fs | ~1 min |
 | [barnase–barstar](cMD/barnase-barstar.md) | cMD | protein–protein complex from 1BRS assembly 3, PROPKA protonation, explicit TIP3P, 29725 atoms, 10 ns (release after 0.5.4) | ~40 min |
 | [bromodomain + paracetamol](cMD/bromodomain-paracetamol.md) | cMD | protein–ligand complex from 4A9K assembly 1, a reused paracetamol package, PROPKA protonation, explicit TIP3P, 24036 atoms, 10 ns (release after 0.5.4) | ~35 min |
-| [paracetamol](REST2/paracetamol.md) | REST2 | explicit TIP3P, 4 states, 10 ns per state, 4 GPUs | ~12 min |
+| [paracetamol](REST2/paracetamol.md) | REST2 | the registered package from the cMD page, explicit TIP3P, 4 states, 10 ns per state, 1 GPU under MPS (release after 0.5.4) | ~20 min |
 | [chignolin](REST2/chignolin.md) | REST2 | 10-residue peptide from 1UAO, explicit TIP3P, 6 states, 10 ns per state, 6 GPUs | ~8 min |
 | [alanine dipeptide](AIS/alanine.md) | AIS | from a sequence, explicit TIP3P, 2 ns source + 64 switching paths, 1 GPU | ~12 min |
 | [paracetamol](AIS/paracetamol.md) | AIS | explicit TIP3P, 2 ns source + 64 switching paths, 1 GPU | ~13 min |
 
-Start with **cMD: paracetamol**. It explains each step; the others refer back to it.
+Start with **cMD: paracetamol**. It explains each step, and it is where the ligand parameters the
+other paracetamol pages reuse are made; the others refer back to it.
 
 ## Before any of them
 
