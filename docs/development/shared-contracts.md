@@ -35,13 +35,13 @@ instance: two copies of one compound share the residue name, the package and the
 rebuild without its topology digest beside it. Catalog lookup keeps going through
 `ligands.catalog.resolve_package` and the existing `$MD_DATA` configuration — no new catalog.
 
-**Two gaps both branches will hit, named here so neither invents a private answer:**
+**Three gaps both branches will hit, named here so neither invents a private answer:**
 
 1. **There is no instance alias today.** `aliases` in a package manifest are *compound* aliases.
    The `L01:` keys in the 0.6.1 ligand selection syntax therefore need either a recorded
-   instance name added to the mapping record, or resolution against `residue_key`. Whichever S1
-   chooses, an alias that does not resolve to exactly one instance is refused, never guessed from
-   a residue name. S0 lands the mapping-record change if one is needed.
+   instance name added to the mapping record, or resolution against `residue_key`. **Decided
+   2026-09-19:** until S0 adds an instance name to the mapping record, the compact `L01: <path>`
+   form is refused by name — see section 3. Nothing is ever guessed from a residue name.
 2. **Aliases are metadata, not identity, and today they are write-once and incomplete.**
    `parameter_id` hashes the chemical state and the parameter table; `compound.aliases` sits
    beside it. Stated `solute.aliases` reach `create_package` only when a build *creates* a
@@ -136,6 +136,67 @@ currently version 3, gains the selection semantics it now depends on and its ver
 them. `require_same_hamiltonian` keeps refusing a mismatch; the point of the version bump is that
 a saved state built under other semantics is **refused**, not silently mixed into a ladder.
 
+**Decided 2026-09-19 (S0, on S1's proposal): a legacy run stays resumable.** A v3 fingerprint
+would otherwise make every 0.6.0 ladder and phase-space stage unresumable under 0.6.1 even when
+nothing about its Hamiltonian changed — the same defect the 20260909 resume-identity note records,
+where a defaulted field made every in-flight run unresumable. So `require_same_hamiltonian`
+accepts a recorded **v2** identity if and only if:
+
+- the current selection is `selection_mode: legacy-full-solute`, and
+- every v2 field (`system_sha256`, `selection_sha256` recomputed the v2 way, `tau`,
+  `temperature_k`, `ensemble`, `n_solute_atoms`, `n_unscaled_central_bonds`,
+  `unscaled_impropers`) matches.
+
+A v2 record meeting an **explicit** selection is refused by name, and so is any v2 field mismatch.
+The acceptance is a named compatibility branch with three tests — legacy resumes, explicit
+refused, one-field mismatch refused — not a relaxed comparison. Anything written by 0.6.1 is v3.
+
+### The REST2 selection configuration keys
+
+**Decided 2026-09-19.** Optional top-level keys of the scaler configuration (`SCALER_SCHEMA`,
+`src/md_tools/build/scaler.py`), named as the user wrote them:
+
+~~~yaml
+backbone_scaling_list: ":45,46,59"     # mask string, grammar v1
+sidechain_scaling_list: ":45-50"       # mask string, grammar v1
+ligand_scaling_dict:
+  L01:                                 # a user label; NOT an identity
+    mask: ":201"
+    torsion_exclusions: L01-exclusions.yaml   # or: auto
+~~~
+
+None present → legacy full solute. The REST2 workflow configuration (`configs/md/REST2.config`)
+forwards the same keys through `build-md`; that forwarding and its schema are S0's, and a key
+declared in both places must agree or the build is refused.
+
+**The compact form `L01: <path>` is refused by name in 0.6.1**, with the explicit form printed as
+the fix. The user asked for it when `L01` is an existing, unambiguous recorded instance alias, and
+`md-tools-ligand-mapping/1` records no instance alias, so no key can qualify yet. This is a
+deferred requirement, not a dropped one: adding an instance name to the mapping record is an S0
+item, and when it lands the compact form is accepted for names that resolve to exactly one
+instance. A `ligand_scaling_dict` key is a label; instance identity is `residue_key` plus the
+one-based topology residue index.
+
+### Torsion-exclusion files, `md-tools-torsion-exclusions/1`
+
+~~~yaml
+format: md-tools-torsion-exclusions/1
+parameters: CHEMBL112/param_0123456789ab    # the package the atom names belong to
+residue_name: TYL
+central_bonds:
+  - [C4, N1]
+~~~
+
+- Atom names are **package-local** (`LigandPackage.atom_names`), never global indices.
+- The file is bound to a **parameter package**, not to a residue name: two packages can share a
+  residue name, and names from one mean nothing in the other. A `parameters` that does not match
+  the selected instance's package is refused.
+- It **adds** protected central bonds. It never un-protects a bond the classifier protects —
+  amide, aromatic, double bond, improper — and a listed bond that is not a central bond of any
+  torsion in the package is refused rather than ignored.
+- Its resolved contents and sha256 are copied into the selection record; the path alone is not
+  provenance.
+
 ## 4. The alchemical topology plan (0.7.0)
 
 A record independent of the MD runner. It is produced by `combine-topology` and consumed by the
@@ -179,6 +240,26 @@ state:
 must reconstruct the same state energies without a live original Context.** Changing parameters in
 a Context is allowed only when the complete state is recorded well enough to rebuild it.
 
+### The alchemy package and the sample record
+
+**Decided 2026-09-19.** All 0.7.0 alchemical code lives in `src/md_tools/alchemy/`. One owner per
+file:
+
+| file | owner |
+|---|---|
+| `alchemy/__init__.py` | S0 — a docstring only until integration; no re-exports |
+| `alchemy/paths.py` | S0 as a **contract file** — the named state coordinates and `AlchemicalPath`, as S4 wrote them at `9d465a5`; changes are requested, not made |
+| `alchemy/samples.py`, `estimators.py`, `restraints.py`, `cycles.py` | S4 |
+| `alchemy/topology*.py` | S2 |
+| `alchemy/hamiltonian*.py`, `alchemy/softcore*.py` | S3 |
+
+**`md-tools-alchemical-samples/1`** (`alchemy/samples.py`, S4) is adopted as THE shared sample
+record: `potential_kj_mol[n, k]` evaluated at every state, `volume_nm3[n]` required under NPT,
+`derivatives[component][n]` keyed by the component names of `paths.py`, `origin_state` as the only
+provenance, and any rank/worker/GPU field refused on read. The reduced potential is computed from
+it, never stored. S3's cross-state evaluation produces exactly this shape; S4's estimators consume
+nothing else.
+
 Agree, before S2/S3/S4 diverge, the callable interfaces for: construction, state setting,
 energy and cross-state evaluation, and complete derivatives. Provide real miniature fixtures, not
 only mocks — a mock cannot notice a missing PME reciprocal-space term.
@@ -212,6 +293,12 @@ parallel against the same numbers instead of against each other's code:
 | a two-residue peptide plus one small ligand, explicit solvent | selection boundaries: phi/psi across a residue boundary, chi1 reaching backbone, two copies of one compound | S1 |
 | a miniature endpoint pair, neutral, one atom substituted | a topology plan small enough to check by hand in both directions | S2, S3 |
 | frozen state energies and derivatives for that pair, at lambda 0, 0.25, 0.5, 0.75, 1 | lets estimator work start before a real Hamiltonian exists | S4 |
+
+**Status 2026-09-19:** none of the three shared fixtures is built yet. S4 is working against its
+own analytic fixture, `tests/data/alchemy_s4/harmonic_staged_v1.json` — a harmonic model with a
+closed-form dG — named so it cannot be mistaken for the shared one. That is the right call and it
+stays S4's. The shared frozen-energy fixture will be written in the sample-record shape above once
+S3 has a molecular Hamiltonian that can produce it; until then it is BLOCKED on A2, not missing.
 
 A fixture is versioned. When a fixture changes, its version changes, and every result citing the
 old version is re-derived rather than reinterpreted.
