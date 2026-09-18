@@ -141,6 +141,14 @@ FORCE_GROUPS: Mapping[str, int] = {
 #: the energy or its derivatives.
 _SIGMA_FOR_ZERO_EPSILON = 0.1
 
+#: The platform of the two CONSTRUCTION-time probes -- reading the PME parameters OpenMM chooses
+#: (`_pme_parameters`) and calibrating the dispersion carrier (`_dispersion_force`). Pinned, not
+#: the machine platform: they are deterministic single-point reads that fix numbers written into
+#: the Hamiltonian's System, which must be the same whichever machine builds it, and nothing is
+#: propagated. The Hamiltonian's RUN-time evaluations use whatever Context the caller made, on the
+#: platform `md_tools.openmm.platform_policy` chose.
+BUILD_PROBE_PLATFORM = "Reference"
+
 _MIXABLE_BONDED = ("HarmonicBondForce", "HarmonicAngleForce", "PeriodicTorsionForce")
 _REFUSED_NONBONDED = ("CustomNonbondedForce", "GBSAOBCForce", "CustomGBForce", "AmoebaMultipoleForce",
                       "AmoebaVdwForce", "DrudeForce", "ATMForce")
@@ -246,7 +254,7 @@ def _pme_parameters(system, nb) -> tuple[float, int, int, int]:
         probe.addParticle(system.getParticleMass(i))
     probe.setDefaultPeriodicBoxVectors(*system.getDefaultPeriodicBoxVectors())
     probe.addForce(mm.XmlSerializer.deserialize(_xml(nb)))
-    context = mm.Context(probe, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
+    context = mm.Context(probe, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName(BUILD_PROBE_PLATFORM))
     try:
         return tuple(context.getSystem().getForce(0).getPMEParametersInContext(context))  # type: ignore
     finally:
@@ -697,7 +705,7 @@ def _dispersion_force(system_a, A, B, static_lj, nb_settings, pme):
     box = system_a.getDefaultPeriodicBoxVectors()
     probe.setDefaultPeriodicBoxVectors(*box)
     probe.addForce(force(1.0, 2.0))        # at lambda_sterics = 0 the weight is exactly 1.0
-    context = mm.Context(probe, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
+    context = mm.Context(probe, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName(BUILD_PROBE_PLATFORM))
     context.setPositions([[0.01 * i, 0.0, 0.0] for i in range(n)])    # the one pair: 0.01 nm
     volume = box[0][0]._value * box[1][1]._value * box[2][2]._value
     unit = context.getState(getEnergy=True).getPotentialEnergy()._value * volume

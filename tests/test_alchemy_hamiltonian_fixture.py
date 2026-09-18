@@ -149,10 +149,13 @@ def test_physical_end_states(periodic, tail, boundary_14):
 
 
 def _richardson(estimates):
-    """Richardson extrapolation of the last two estimates, steps a factor 10 apart, both O(h^2)
-    (central, and the second-order one-sided form): (100 D(h/10) - D(h)) / 99 cancels the h^2
-    term. It is reported beside the raw differences, never instead of them."""
-    return (100.0 * estimates[-1] - estimates[-2]) / 99.0
+    """Richardson extrapolation of each ADJACENT pair of estimates, steps a factor 10 apart, both
+    O(h^2) (central, and the second-order one-sided form): (100 D(h/10) - D(h)) / 99 cancels the
+    h^2 term. Every pair, not only the smallest steps: with the dispersion correction on, OpenMM
+    re-integrates its long-range correction numerically whenever lambda_sterics changes, which
+    puts ~5e-9 kJ/mol of noise in the energy, so at h = 1e-4 a difference is noise-limited and
+    the (1e-2, 1e-3) pair is the informative one. Reported beside the raw differences."""
+    return [(100.0 * fine - coarse) / 99.0 for coarse, fine in zip(estimates, estimates[1:])]
 
 
 def _fd(f, lam, h):
@@ -164,11 +167,12 @@ def _fd(f, lam, h):
     return (f(lam + h) - f(lam - h)) / (2 * h)
 
 
-@pytest.mark.parametrize("periodic, tail, boundary_14", [
-    (False, False, "scaled"), (False, True, "scaled"), (False, True, "unscaled"),
-    (True, False, "scaled"), (True, True, "scaled")],
-    ids=["vacuum", "vacuum-tail", "vacuum-tail-unscaled14", "pme", "pme-tail"])
-def test_derivatives_against_finite_differences(periodic, tail, boundary_14):
+@pytest.mark.parametrize("periodic, tail, boundary_14, dispersion", [
+    (False, False, "scaled", False), (False, True, "scaled", False),
+    (False, True, "unscaled", False), (True, False, "scaled", False),
+    (True, True, "scaled", True)],
+    ids=["vacuum", "vacuum-tail", "vacuum-tail-unscaled14", "pme", "pme-tail-dispersion"])
+def test_derivatives_against_finite_differences(periodic, tail, boundary_14, dispersion):
     """Every component, at the five lambdas, against finite differences of TWO energies.
 
     * of this Hamiltonian's own energy (the definition: dU/dlambda_k is the limit of this), and
@@ -178,7 +182,15 @@ def test_derivatives_against_finite_differences(periodic, tail, boundary_14):
     Several step sizes; the error must shrink with h until round-off, and the best must be within
     tolerance. The table is printed (`-s`) as the convergence report.
     """
-    sa, sb, a, b, x, h, c, kw = _setup(periodic, boundary_14, tail=tail)
+    sa, sb, a, b, x, h, c, kw = _setup(periodic, boundary_14, tail=tail, dispersion=dispersion)
+    # With the dispersion correction on, the independent reference has no tail term; its
+    # finite difference is then compared after adding the exact linear dispersion slope, which
+    # `test_dispersion_mixes_the_end_states_own_corrections` pins to OpenMM's own corrections.
+    slope = 0.0
+    if dispersion:
+        parts = h.derivative_components(c, _state((0.5, 0.5, 0.5)))
+        slope = parts["lambda_sterics"]["dispersion"]
+        assert slope != 0.0
     # The tail's first atom starts 0.22 nm from the Cl-, so at lambda_sterics = 1 the derivative
     # is ~2.4e4 kJ/mol and the O(h^2) truncation needs h = 1e-4 to fall under 1e-5 relative, in
     # PME as in vacuum.
@@ -198,9 +210,10 @@ def test_derivatives_against_finite_differences(periodic, tail, boundary_14):
                 t[k] = v
                 return fx.reference_energy(sa, sb, a, b, x, _state(t), **kw)["total"]
             own_fd = [_fd(own, base, s) for s in steps]
-            ref_fd = [_fd(ref, base, s) for s in steps]
-            own_err = [abs(analytic[name] - d) for d in own_fd] + [abs(analytic[name] - _richardson(own_fd))]
-            ref_err = [abs(analytic[name] - d) for d in ref_fd] + [abs(analytic[name] - _richardson(ref_fd))]
+            ref_fd = [_fd(ref, base, s) + (slope if name == "lambda_sterics" else 0.0)
+                      for s in steps]
+            own_err = [abs(analytic[name] - d) for d in own_fd + _richardson(own_fd)]
+            ref_err = [abs(analytic[name] - d) for d in ref_fd + _richardson(ref_fd)]
             report.append((base, name, analytic[name], own_err, ref_err))
             scale = max(1.0, abs(analytic[name]))
             # truncation O(h^2) at 1e-2 must fall by >= ~10x by 1e-3 unless already at round-off
@@ -208,7 +221,7 @@ def test_derivatives_against_finite_differences(periodic, tail, boundary_14):
             assert min(own_err) < {False: 1e-6, True: 1e-5}[periodic] * scale, (base, name, own_err)
             assert min(ref_err) < {False: 1e-6, True: 3e-4}[periodic] * scale, (base, name, ref_err)
     print(f"\n{'pme' if periodic else 'vacuum'}{' tail' if tail else ''}: lambda, component, dU/dlambda, "
-          "|err| vs own FD, then vs reference FD, at h = 1e-2, 1e-3, 1e-4, then Richardson(1e-3, 1e-4)")
+          "|err| vs own FD, then vs reference FD: h = 1e-2, 1e-3, 1e-4, Richardson(1e-2,1e-3), (1e-3,1e-4)")
     for base, name, value, own_err, ref_err in report:
         print(f"  {base:4.2f} {name:22s} {value:14.6f}  "
               + " ".join(f"{e:9.2e}" for e in own_err) + "  |  "
@@ -302,7 +315,9 @@ def test_record_names_the_rules_and_the_end_states():
     assert r["softcore"] == {"sc": True, "softcore_function": "amber18", "scalpha": 0.5,
                              "scbeta_angstrom2": 12.0, "scbeta_nm2": 0.12,
                              "sc_boundary_14": "scaled",
-                             "sc_boundary_14_amber": "gti_add_sc = 1 (pmemd 20+ default)"}
+                             "sc_boundary_14_amber": "gti_add_sc = 1 (pmemd 20+ default)",
+                             "sc_boundary_14_default":
+                                 "scaled -- PROVISIONAL, the user's decision is pending (2026-09-19)"}
     assert r["rules"]["boundary_14"] == "scaled"
     assert r["particles"]["a_only"] == [7] and r["particles"]["b_only"] == [8]
     assert r["particles"]["common_lj_changing"] == [0]
@@ -383,3 +398,69 @@ def test_dispersion_with_a_switching_function_is_refused():
         _nb(s).setSwitchingDistance(0.8)
     with pytest.raises(AlchemicalHamiltonianError, match="switching function"):
         build_hamiltonian(sa, sb, a, b)
+
+
+def test_openmm_long_range_corrections_are_not_additive_over_subsets():
+    """Why the dispersion term is built from whole end states. A canary on OpenMM's behaviour
+    (8.6): if it changes, the construction's reasoning must be revisited, not just this number.
+
+    * NonbondedForce, and CustomNonbondedForce without groups, count N (N + 1) / 2 pairs with the
+      N self pairs included, normalised to N^2 -- not the distinct-pair tail.
+    * CustomNonbondedForce WITH interaction groups returns exactly N / (N + 1) times the
+      distinct-pair tail of the group pairs, N being every particle in the System.
+    So neither kind of correction, summed over a split of the particles into subsets, gives the
+    correction of the whole; a Hamiltonian that moves LJ out of NonbondedForce subset by subset
+    shifts both end states' energies by O(1/N) of their tail.
+    """
+    rng = np.random.default_rng(3)
+    n, box, rc = 7, 3.0, 1.0
+    sig, eps = rng.uniform(0.25, 0.4, n), rng.uniform(0.1, 0.8, n)
+    x = rng.uniform(0, box, (n, 3))
+
+    def tail(i, j):
+        s, e = 0.5 * (sig[i] + sig[j]), math.sqrt(eps[i] * eps[j])
+        return 16 * math.pi * e * (s ** 12 / (9 * rc ** 9) - s ** 6 / (3 * rc ** 3)) / box ** 3
+
+    def correction(make):
+        out = []
+        for on in (True, False):
+            s = openmm.System()
+            for _ in range(n):
+                s.addParticle(1.0)
+            s.setDefaultPeriodicBoxVectors([box, 0, 0], [0, box, 0], [0, 0, box])
+            s.addForce(make(on))
+            out.append(_context(s, x).getState(getEnergy=True).getPotentialEnergy()._value)
+        return out[0] - out[1]
+
+    def custom(groups):
+        def make(on):
+            f = openmm.CustomNonbondedForce("4*e*((s/r)^12-(s/r)^6); s=0.5*(s1+s2); e=sqrt(e1*e2)")
+            f.addPerParticleParameter("s")
+            f.addPerParticleParameter("e")
+            for i in range(n):
+                f.addParticle([sig[i], eps[i]])
+            f.setNonbondedMethod(openmm.CustomNonbondedForce.CutoffPeriodic)
+            f.setCutoffDistance(rc)
+            f.setUseLongRangeCorrection(on)
+            for g in groups:
+                f.addInteractionGroup(*g)
+            return f
+        return make
+
+    def nonbonded(on):
+        f = openmm.NonbondedForce()
+        f.setNonbondedMethod(openmm.NonbondedForce.CutoffPeriodic)
+        f.setCutoffDistance(rc)
+        f.setUseDispersionCorrection(on)
+        for i in range(n):
+            f.addParticle(0.0, sig[i], eps[i])
+        return f
+
+    distinct = sum(tail(i, j) for i, j in itertools.combinations(range(n), 2))
+    with_self = distinct + sum(tail(i, i) for i in range(n))
+    assert correction(nonbonded) == pytest.approx(n / (n + 1) * with_self, rel=1e-6)
+    assert correction(custom([])) == pytest.approx(n / (n + 1) * with_self, rel=1e-6)
+    group = ([0, 1, 2], [3, 4, 5, 6])
+    group_tail = sum(tail(i, j) for i in group[0] for j in group[1])
+    assert correction(custom([group])) == pytest.approx(n / (n + 1) * group_tail, rel=1e-6)
+    assert abs(n / (n + 1) * with_self - distinct) > 1e-5 * abs(distinct)

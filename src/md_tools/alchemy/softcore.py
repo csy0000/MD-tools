@@ -78,6 +78,13 @@ BOUNDARY_14_RULES: Mapping[str, str] = {
 }
 
 
+#: The default boundary rule departs from the literal Amber18 text the user chose, so it is the
+#: user's decision; until they make it, "scaled" is provisional and every record says so. The
+#: softcore FORM (`softcore_function`) and the boundary rule are two separate recorded facts:
+#: nothing here calls their combination "amber18".
+BOUNDARY_14_DEFAULT_STATUS = "scaled -- PROVISIONAL, the user's decision is pending (2026-09-19)"
+
+
 class SoftcoreError(ValueError):
     """A softcore setting that is not the Amber18 potential, or is not a valid one."""
 
@@ -135,7 +142,8 @@ class SoftcoreSettings:
         return {"sc": self.sc, "softcore_function": SOFTCORE_FUNCTION,
                 "scalpha": float(self.scalpha), "scbeta_angstrom2": float(self.scbeta),
                 "scbeta_nm2": self.scbeta_nm2, "sc_boundary_14": self.sc_boundary_14,
-                "sc_boundary_14_amber": BOUNDARY_14_RULES[self.sc_boundary_14]}
+                "sc_boundary_14_amber": BOUNDARY_14_RULES[self.sc_boundary_14],
+                "sc_boundary_14_default": BOUNDARY_14_DEFAULT_STATUS}
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any] | None) -> "SoftcoreSettings":
