@@ -258,6 +258,9 @@ def test_window_campaign_recovers_the_exact_free_energy(model):
     samples = concatenate(parts)
     result = est.analyze(samples)
     exact = exact_kj_mol() / KJ_PER_KCAL
+    print(f"\nS4 W7 campaign: exact {exact:.4f} kcal/mol, samples {samples.counts()}")
+    for name, e in result["estimates"].items():
+        print(f"  {name:12s} {e['delta_g_kcal_mol']:.4f} +- {e['sigma_kcal_mol']:.4f} kcal/mol")
     for name in ("MBAR", "BAR", "EXP_forward", "EXP_reverse"):
         e = result["estimates"][name]
         gate = est.agreement_gate(e["delta_g_kcal_mol"], e["sigma_kcal_mol"], exact)
@@ -295,3 +298,86 @@ def test_composed_hamiltonian_owns_lambda_restraints(model):
     assert e == pytest.approx(e_inner + r.energy_kj_mol(x, 0.7), rel=1e-10)
     with pytest.raises(WindowError, match="exactly"):
         ham.set_state(ctx, {k: state[k] for k in NAMES})
+
+
+# ---------------------------------------------------------------------- NPT, periodic, PME water
+def _npt_model(tmp_path):
+    """Two dummy particles joined by a lambda-dependent harmonic bond (r0 = 0) in TIP3P water
+    under PME. The dummies carry no charge and no LJ, so the bond's free energy is exactly
+    (3/2) kT ln(K1/K0) + C whatever the solvent, the box or its fluctuations do."""
+    ff = app.ForceField("amber14/tip3p.xml")
+    m = app.Modeller(app.Topology(), [])
+    m.addSolvent(ff, boxSize=openmm.Vec3(2.2, 2.2, 2.2) * unit.nanometer, model="tip3p")
+    system = ff.createSystem(m.topology, nonbondedMethod=app.PME,
+                             nonbondedCutoff=0.9 * unit.nanometer, constraints=app.HBonds)
+    nb = next(f for f in system.getForces() if isinstance(f, openmm.NonbondedForce))
+    top = app.Topology()
+    top.setPeriodicBoxVectors(m.topology.getPeriodicBoxVectors())
+    atoms = {}
+    for chain in m.topology.chains():
+        c = top.addChain()
+        for res in chain.residues():
+            r = top.addResidue(res.name, c)
+            for a in res.atoms():
+                atoms[a] = top.addAtom(a.name, a.element, r)
+    for bond in m.topology.bonds():
+        top.addBond(atoms[bond[0]], atoms[bond[1]])
+    dc = top.addChain()
+    first = system.getNumParticles()
+    for _ in range(2):
+        top.addAtom("D", app.Element.getBySymbol("C"), top.addResidue("DUM", dc))
+        system.addParticle(12.0)
+        nb.addParticle(0.0, 0.1, 0.0)
+    bond = openmm.CustomBondForce(
+        f"0.5*kk*r^2 + {C}*lambda_electrostatics^2; kk = {K0} + ({K1} - {K0})*lambda_sterics")
+    for name in NAMES:
+        bond.addGlobalParameter(name, 0.0)
+        bond.addEnergyParameterDerivative(name)
+    bond.addBond(first, first + 1, [])
+    bond.setUsesPeriodicBoundaryConditions(True)
+    system.addForce(bond)
+    pos = list(m.positions.value_in_unit(unit.nanometer)) + [openmm.Vec3(1.1, 1.1, 1.1),
+                                                             openmm.Vec3(1.15, 1.1, 1.1)]
+    pdb = tmp_path / "npt.pdb"
+    with pdb.open("w") as h:
+        app.PDBFile.writeFile(top, pos * unit.nanometer, h)
+    xml = tmp_path / "npt.xml"
+    xml.write_text(openmm.XmlSerializer.serialize(system))
+    path = staged_path([("lambda_electrostatics", 0.5), ("lambda_sterics", 1.0)],
+                       endpoint_a="bond K0", endpoint_b="bond K1")
+    states = window_states(path, [0.0, 0.25, 0.5, 0.75, 1.0], temperature_k=T,
+                           pressure_bar=1.01325)
+    return dict(ham=ParametricHamiltonian(system, NAMES), pdb=pdb, xml=xml, path=path,
+                states=states, tmp=tmp_path)
+
+
+@pytest.mark.slow
+def test_npt_windows_carry_pv_resume_and_recover_the_exact_free_energy(tmp_path):
+    model = _npt_model(tmp_path)
+    settings = WindowSettings(steps=10_000, report_interval=50, checkpoint_interval=2_500,
+                              equilibration_steps=1_000, timestep_fs=2.0, seed=5)
+    out = tmp_path / "npt"
+    parts = []
+    for st in model["states"]:
+        if st.state_id == "w002":
+            assert _run(model, st.state_id, settings, out=out,
+                        stop_after_steps=4_000)["disposition"] == "interrupted"
+        _run(model, st.state_id, settings, out=out)
+        p = window_paths(out, st.state_id)
+        record = json.loads(p["record"].read_text())
+        parts.append(read_window_samples(p["samples"], record))
+    samples = concatenate(parts)
+    assert samples.ensemble == "NPT" and np.ptp(samples.volume_nm3) > 0.05   # the box moved
+    u = samples.reduced_potential()
+    pv = 1.01325 * 0.0602214076 * samples.volume_nm3 / samples.kt
+    np.testing.assert_allclose(u - samples.potential_kj_mol / samples.kt, pv[:, None] *
+                               np.ones_like(u), rtol=1e-12)
+    result = est.analyze(samples)
+    exact = (1.5 * kt_kj_mol(T) * math.log(K1 / K0) + C) / KJ_PER_KCAL
+    print(f"\nS4 N1 NPT campaign: exact {exact:.4f} kcal/mol, samples {samples.counts()}")
+    for name, e in result["estimates"].items():
+        print(f"  {name:12s} {e['delta_g_kcal_mol']:.4f} +- {e['sigma_kcal_mol']:.4f} kcal/mol")
+    for name in ("MBAR", "BAR"):
+        e = result["estimates"][name]
+        gate = est.agreement_gate(e["delta_g_kcal_mol"], e["sigma_kcal_mol"], exact)
+        assert gate["verdict"] == "PASS", (name, gate)
