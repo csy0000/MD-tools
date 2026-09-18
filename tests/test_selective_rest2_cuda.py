@@ -11,9 +11,9 @@ selective backbone, selective sidechains, one ligand instance, and all three com
     stored coordinates, on the platform the ladder ran on, within the calibrated tolerance of
     `test_selective_rest2_integration`, and the whole-solute Hamiltonian is caught.
 
-PLATFORM_POLICY_EXEMPTION: none needed; this propagates on CUDA. `SELECTIVE_REST2_LANE_PLATFORM=CPU`
-exists ONLY to check the harness itself on a machine whose cards are reserved; a CPU run is never
-CUDA evidence, and the platform assertion below fails any such run that claims otherwise.
+CUDA only, and deliberately without a CPU switch: the platform policy keeps propagating gpu
+files free of any other platform. (The harness was exercised once, before this file was made
+CUDA-only, through a CPU override that no longer exists; that run was never CUDA evidence.)
 """
 from __future__ import annotations
 
@@ -29,10 +29,8 @@ from .test_selective_rest2_integration import (CLI, EXCHANGE_ENERGY_TOLERANCE_KT
                                                _env, _run, _saved_states, _whole_solute_states,
                                                exchange_energy_discrepancy)
 
-PLATFORM = os.environ.get("SELECTIVE_REST2_LANE_PLATFORM", "CUDA")
-#: `gpu` unless the harness override asked for CPU -- so an override run can never be collected,
-#: counted or reported as part of the GPU lane.
-pytestmark = [pytest.mark.slow] + ([pytest.mark.gpu] if PLATFORM == "CUDA" else [])
+PLATFORM = "CUDA"
+pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 STATES, EXCHANGE_EVERY, EXCHANGES = 3, 50, 4
 
 SELECTIONS = {
@@ -48,13 +46,12 @@ SELECTIONS = {
 
 def _environment(root: Path) -> dict:
     env = _env(root, REPO / "src")
-    if PLATFORM == "CUDA":
-        # The lane's card, as the conftest assigned it or the caller confined it.
-        visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-        if visible is None:
-            env.pop("CUDA_VISIBLE_DEVICES", None)
-        else:
-            env["CUDA_VISIBLE_DEVICES"] = visible
+    # The lane's card, as the conftest assigned it or the caller confined it.
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if visible is None:
+        env.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        env["CUDA_VISIBLE_DEVICES"] = visible
     return env
 
 
@@ -65,7 +62,7 @@ def _minimised_start(fixture, root: Path):
 
     context = openmm.Context(fixture.system, openmm.LangevinMiddleIntegrator(
         300 * unit.kelvin, 1 / unit.picosecond, 0.001 * unit.picoseconds),
-        openmm.Platform.getPlatformByName("CPU"))
+        openmm.Platform.getPlatformByName(PLATFORM))
     context.setPositions(fixture.positions)
     openmm.LocalEnergyMinimizer.minimize(context, 10.0, 2000)
     context.setVelocitiesToTemperature(300.0 * unit.kelvin, 1)
@@ -105,8 +102,7 @@ def ladder(request, tmp_path_factory):
 
     run = root / "run"
     _run([str(root / "REST2-run1" / "REST2.py"), "-p", str(root / "build" / "built.pdb"),
-          "--groupfile", str(ladder_group_file(root, run)), "-odir", str(run),
-          *(["--cpu"] if PLATFORM == "CPU" else [])],
+          "--groupfile", str(ladder_group_file(root, run)), "-odir", str(run)],
          cwd=root / "REST2-run1", env=env, timeout=3600)
     return name, root, run
 
