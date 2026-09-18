@@ -26,8 +26,8 @@ import pytest
 openmm = pytest.importorskip("openmm")
 
 from tests import alchemy_s3_fixture as fx  # noqa: E402
-from md_tools.alchemy.hamiltonian import (AlchemicalHamiltonianError,  # noqa: E402
-                                          build_hamiltonian)
+from md_tools.alchemy.hamiltonian import (FORCE_GROUPS,  # noqa: E402
+                                          AlchemicalHamiltonianError, build_hamiltonian)
 from md_tools.alchemy.softcore import SoftcoreSettings  # noqa: E402
 
 TOL = {False: 1e-8, True: 1e-4}
@@ -183,14 +183,12 @@ def test_derivatives_against_finite_differences(periodic, tail, boundary_14, dis
     tolerance. The table is printed (`-s`) as the convergence report.
     """
     sa, sb, a, b, x, h, c, kw = _setup(periodic, boundary_14, tail=tail, dispersion=dispersion)
-    # With the dispersion correction on, the independent reference has no tail term; its
-    # finite difference is then compared after adding the exact linear dispersion slope, which
-    # `test_dispersion_mixes_the_end_states_own_corrections` pins to OpenMM's own corrections.
-    slope = 0.0
-    if dispersion:
-        parts = h.derivative_components(c, _state((0.5, 0.5, 0.5)))
-        slope = parts["lambda_sterics"]["dispersion"]
-        assert slope != 0.0
+    # With the dispersion correction on, the dispersion carrier (group `dispersion`) is left OUT
+    # of both sides here: the independent reference has no tail term, and OpenMM re-integrates
+    # the carrier's long-range correction by quadrature at every lambda, which leaves ~5e-8 kJ/mol
+    # of non-linearity in its energy. Its slope is held to the end states' own corrections to 1e-8
+    # by `test_dispersion_mixes_the_end_states_own_corrections` instead.
+    groups = set(FORCE_GROUPS.values()) - ({FORCE_GROUPS["dispersion"]} if dispersion else set())
     # The tail's first atom starts 0.22 nm from the Cl-, so at lambda_sterics = 1 the derivative
     # is ~2.4e4 kJ/mol and the O(h^2) truncation needs h = 1e-4 to fall under 1e-5 relative, in
     # PME as in vacuum.
@@ -198,20 +196,22 @@ def test_derivatives_against_finite_differences(periodic, tail, boundary_14, dis
     report = []
     for base in (0.0, 0.25, 0.5, 0.75, 1.0):
         state = _state((base, base, base))
-        analytic = h.derivatives(c, state)
+        parts = h.derivative_components(c, state)
+        analytic = {p: sum(v for g, v in parts[p].items() if FORCE_GROUPS[g] in groups)
+                    for p in NAMES}
         for k, name in enumerate(NAMES):
             def own(v, k=k):
                 t = [base] * 3
                 t[k] = v
-                return h.energy(c, _state(t))
+                h.set_state(c, _state(t))
+                return c.getState(getEnergy=True, groups=groups).getPotentialEnergy()._value
 
             def ref(v, k=k):
                 t = [base] * 3
                 t[k] = v
                 return fx.reference_energy(sa, sb, a, b, x, _state(t), **kw)["total"]
             own_fd = [_fd(own, base, s) for s in steps]
-            ref_fd = [_fd(ref, base, s) + (slope if name == "lambda_sterics" else 0.0)
-                      for s in steps]
+            ref_fd = [_fd(ref, base, s) for s in steps]
             own_err = [abs(analytic[name] - d) for d in own_fd + _richardson(own_fd)]
             ref_err = [abs(analytic[name] - d) for d in ref_fd + _richardson(ref_fd)]
             report.append((base, name, analytic[name], own_err, ref_err))

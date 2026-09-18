@@ -109,8 +109,11 @@ Three further OpenMM 8.6 behaviours this depends on, each measured:
 1. A NonbondedForce's dispersion correction is **not** recomputed when an epsilon offset changes
    through a global parameter. So nothing lambda-dependent is left in a NonbondedForce's LJ.
 2. A CustomNonbondedForce's long-range correction **is** recomputed on a global-parameter change,
-   by numerical quadrature. That puts ~5e-9 kJ/mol of noise into the energy, which bounds how
-   small a finite-difference step can usefully be.
+   by numerical quadrature. So the dispersion carrier's energy departs from exact linearity in
+   `lambda_sterics` by up to **4.9e-8 kJ/mol** (2e-8 kT; measured over 41 lambdas on S2's
+   chloroethane plan), while its derivative is the exact slope (D_B - D_A, to 1e-8). This is
+   negligible for any estimator, but it bounds finite-difference checks: the tests difference
+   every other group at full precision (1e-10 kJ/mol) and check the carrier's slope on its own.
 3. If an energy-parameter derivative of a long-range correction simplifies to zero, OpenMM
    **aborts the process** ("Cannot use long range correction with a force that does not depend on
    r"). It is an abort, not an exception. The carrier therefore names no lambda when D_A = D_B.
