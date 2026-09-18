@@ -4,14 +4,21 @@
     In 0.5.3, AIS switched a scaling coordinate τ inside one System. In 0.5.4 it is a linear
     transformation between **two** Systems, and the older behaviour is retired.
 
+    The build below **reuses** the parameter package made by
+    [cMD: paracetamol](../cMD/paracetamol.md), which needs the release after 0.5.4. The run itself
+    is unchanged: reusing the package produces the same `built.xml` (sha256 `1a7c9faa...`) and the
+    same coordinates as the build that generated the charges here, so every number on this page is
+    the one that run produced.
+
 The AIS chain of [AIS: alanine dipeptide](alanine.md), applied to a small molecule given as SMILES.
 Read that page first: it explains each step, and this page shows only where the ligand route differs
 and what the run produced. Every command below was run exactly as written, and every number is
 copied from the files that run produced. The run used md-tools at commit `3da35d0` on one NVIDIA RTX
 3080, with CUDA and mixed precision.
 
-It took about 13 minutes. Building took 1.5 min, most of it the partial-charge calculation, scaling
-took 1 s, and the chain from minimisation to the last switching path took 11 min 34 s.
+It took about 12 minutes. Building took **3.1 s** — the charges are not calculated here, they are
+read from the package — scaling took 1 s, and the chain from minimisation to the last switching
+path took 11 min 34 s.
 
 ## 1. The system, with a residue name
 
@@ -32,6 +39,7 @@ CC(=O)Nc1ccc(O)cc1 paracetamol
 solute:
   kind: ligand
   residue_name: TYL
+  parameters: CHEMBL112/param_e932f4c4f371
 solvent:
   model: TIP3P
   padding_nm: 1.5
@@ -43,6 +51,13 @@ hydrogen_mass_repartitioning:
 md-openmm build-top -i build/paracetamol.smi \
     -os build/built.xml -op build/built.pdb -log build/built.log --config build/build-top.config
 ```
+
+`solute.parameters` names the package this molecule's parameters come from, so **no charges are
+generated here**: they are read from the package that [cMD: paracetamol](../cMD/paracetamol.md)
+made and `data-register --ligand-package` put in the shared catalog. Give a path to a package
+directory instead if it is not registered. The switching paths and the cMD box therefore rest on
+identical ligand parameters — an AIS result and an ordinary MD result for this molecule differ in
+sampling, not in the Hamiltonian's ligand terms.
 
 `solute.residue_name` names the molecule's residue in `built.pdb`, and the bond-order file is named
 after it, `TYL.sdf`, so the scaler finds the SDF by the residue it describes. Without a name the
@@ -197,6 +212,7 @@ property of paracetamol.
 
 ## Next
 
+* where these parameters come from: [cMD: paracetamol](../cMD/paracetamol.md)
 * the peptide route, with every step explained: [AIS: alanine dipeptide](alanine.md)
 * REST2 on the same molecule: [REST2: paracetamol](../REST2/paracetamol.md)
 * the method, the work convention and every file: [AIS](../../openmm_methods/AIS/README.md)
