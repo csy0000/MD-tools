@@ -511,11 +511,41 @@ def test_a_plan_is_never_written_over(hybrid, tmp_path):
 
 def test_loading_against_other_packages_is_refused(hybrid, tmp_path, eta):
     from md_tools.alchemy.topology import TopologyError, load_plan
+    from md_tools.ligands import PackageError
 
     written = hybrid.write(tmp_path / "plan")
     fake_root = tmp_path / "catalog"
     compound, parameter = CHLOROETHANE.split("/")
     shutil.copytree(PACKAGES / ETHANE, fake_root / compound / parameter)
     shutil.copytree(PACKAGES / ETHANE, fake_root / ETHANE)
-    with pytest.raises(Exception):
+    with pytest.raises((TopologyError, PackageError)):
         load_plan(written, package_roots=[fake_root])
+    with pytest.raises(TopologyError, match="is in none of"):
+        load_plan(written, package_roots=[tmp_path / "empty"])
+
+
+def test_a_plan_from_packages_registered_in_a_temporary_catalog(tmp_path, monkeypatch, water):
+    """"Registered endpoint parameters", with the machine's $MD_DATA never read.
+
+    MD_DATA is SET to an empty temporary root (unsetting it would fall back to the user
+    configuration). Both endpoints are registered there through the catalog's own write-once path
+    and resolved back by reference, and the plan records exactly those identities.
+    """
+    from md_tools.ligands.catalog import default_catalog_root, register_package, resolve_package
+
+    monkeypatch.setenv("MD_DATA", str(tmp_path / "md_data"))
+    catalog = default_catalog_root()
+    assert catalog == tmp_path / "md_data" / "parameters" / "ligands"
+    for reference in (ETHANE, CHLOROETHANE):
+        _, destination, new = register_package(PACKAGES / reference, catalog)
+        assert new and destination == catalog / reference
+    a = resolve_package(ETHANE, roots=[catalog])
+    b = resolve_package(CHLOROETHANE, roots=[catalog])
+    assert a.path.is_relative_to(tmp_path) and b.path.is_relative_to(tmp_path)
+    plan = _build(a, b, core_map(a, b), water, "hybrid")
+    assert plan.record["endpoints"]["A"]["reference"] == ETHANE
+    assert plan.record["endpoints"]["B"]["package_sha256"] == package(CHLOROETHANE).package_sha256
+    written = plan.write(tmp_path / "plan")
+    from md_tools.alchemy.topology import load_plan
+
+    assert load_plan(written, package_roots=[catalog]).sha256 == plan.sha256
