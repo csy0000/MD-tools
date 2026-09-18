@@ -133,7 +133,7 @@ BUILD_SCHEMA = Schema(
                   doc="Searchable names stored with a package this build creates: "
                       "`[paracetamol, acetaminophen, TYL]`. Names, not identities."),
             Field("parameters", str, default="search", nullable=True,
-                  doc="Where this molecule's parameters come from. Three values:\n"
+                  doc="Where this molecule's parameters come from. Four kinds of value:\n"
                       "  search (the default) -- look in the catalog for a package whose declared "
                       "criteria match this build: the molecule's topology, its protonation state, "
                       "and the charge method INCLUDING the implementation that would run here "
