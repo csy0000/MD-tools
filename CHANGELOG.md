@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-09-18
+
+Reusable ligand parameter packages, protonation you choose (PROPKA3 or OpenMM), mmCIF biological
+assemblies with recorded removals and built missing atoms, and concurrent CUDA placed by measured
+throughput with MPS verified rather than assumed. Nothing is removed or renamed; one default moves
+(`solute.parameters` is now `search`). Full notes: [docs/release-notes/v0.6.0.md](docs/release-notes/v0.6.0.md).
 
 **AIS has a second switching schedule, `tau-linear`.** `ais.lambda_schedule: tau-linear` moves λ as
 `[(1 − τ₀ + τ₀t)² − (1 − τ₀)²] / [1 − (1 − τ₀)²]`, so that with V0 a saved REST2 state at τ₀ and V1
