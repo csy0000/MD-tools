@@ -677,6 +677,9 @@ class LadderPreflight(ExecutionPreflight):
     #: The validated collective-variable definition, parsed before any output exists so a
     #: malformed cv.yaml refuses the run rather than failing at the first observation.
     cv_definition: Any = None
+    #: The selection document of the saved states' `scaler.yaml` (md-tools-solute-selection/2.0),
+    #: or None for a record older than 0.6.1. Consumed by the ladder's Hamiltonian identity.
+    selection: Any = None
 
 
 @dataclass(frozen=True)
@@ -1021,6 +1024,7 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
     from ..rest2.states import ScaledStateError, scaled_state_identity
 
     unscaled_impropers = True
+    selection = None
     if name != "min":
         try:
             identity = scaled_state_identity(loaded.system_path)
@@ -1036,10 +1040,12 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
                     f"from the one it integrates.")
             from ..rest2.states import load_scaler_record
 
-            section = load_scaler_record(identity["record"])["unscaled_torsions"]
+            scaler_record = load_scaler_record(identity["record"])
+            section = scaler_record["unscaled_torsions"]
             excluded = [tuple(int(a) for a in bond)
                         for bond in section.get("unscaled_central_bonds", [])]
             unscaled_impropers = bool(section.get("unscaled_impropers", True))
+            selection = scaler_record.get("selection")
         elif tau > 0.0:
             raise PreflightError(
                 f"{where} claims tau = {tau}, but -s {Path(loaded.system_path).name} is not a "
@@ -1074,7 +1080,7 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
         hamiltonian_identity = identity_record(
             system, tau=tau, temperature_k=float(stage["temperature_K"]),
             ensemble=stage.get("ensemble"), solute_indices=solute, excluded_bonds=excluded,
-            unscaled_impropers=unscaled_impropers)
+            unscaled_impropers=unscaled_impropers, selection=selection)
 
     add_positional_restraint(system, loaded.pdb.positions, solute)
     if not implicit:
@@ -1464,6 +1470,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
             f"`md-openmm build-top --rest2-scaler`, and `build-md` writes such a group file.")
     solute_indices = list(saved_states["solute_indices"])
     excluded_bonds = list(saved_states["excluded_bonds"])
+    selection = saved_states["selection"]
     if loaded is not None:
         solute_record = saved_states["solute_record"](loaded)
     if loaded is not None:
@@ -1658,6 +1665,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                            excluded_bonds=tuple(tuple(int(a) for a in b) for b in excluded_bonds),
                            cv_definition=cv_definition,
                            ladder_restraints=tuple(ladder_restraints),
+                           selection=selection,
                            notes={"solute_document": solute_record} if solute_record else {})
 
 
@@ -1745,7 +1753,12 @@ def _saved_state_ladder(groupfile, *, replicas: int, ladder, where: str, out_dir
         return document
 
     return {"taus": taus, "systems": systems, "solute_indices": solute,
-            "excluded_bonds": excluded, "solute_record": solute_record}
+            "excluded_bonds": excluded, "solute_record": solute_record,
+            # The md-tools-solute-selection/2.0 document the states were built under (0.6.1), or
+            # None for a record written before it existed. The ladder's Hamiltonian identity
+            # hashes it: from the solute list alone a selective region is indistinguishable from
+            # the whole solute.
+            "selection": record.get("selection")}
 
 
 def _cv_interval_of(document) -> int:

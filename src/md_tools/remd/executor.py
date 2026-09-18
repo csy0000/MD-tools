@@ -735,6 +735,7 @@ def run_grouped(files, arguments, groups, *, prepared=None):
         # this carries the one thing the command line can still say about it.
         explicit_cpu=str(getattr(protocol, "platform", None) or "").upper() == "CPU",
         precision=getattr(protocol, "precision", None),
+        selection=getattr(prepared, "selection", None) if prepared is not None else None,
         identity_extra={"groups": len(groups),
                         "group_indices": [g["group_index"] for g in groups]},
         # The validated platform, device and coordination. The driver consumes these; it no
