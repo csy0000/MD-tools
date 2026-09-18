@@ -580,3 +580,89 @@ def test_recovery_has_no_platform_choice(hybrid, water, eta):
         assert "platform" not in inspect.signature(function).parameters, function.__name__
     assert _accounting(hybrid, water, eta, "A")["platform"] == recovery.RECOVERY_PLATFORM == \
         "Reference"
+
+
+def _dummy_free_energy(record, positions, group, frame, include_removed, kt):
+    """-kT ln Z of one single-atom dummy group, by quadrature over its position around P1.
+
+    Z = integral of exp(-U_dummy/kT) d^3x over the dummy's position, U_dummy the bonded energy of
+    every term touching it at its dummy endpoint (numpy, vectorised over the grid; the per-point
+    `dummy_energy` it mirrors is checked against OpenMM in the recovery tests). Spherical
+    coordinates about P1 in the (P1, P2, P3) frame, Jacobian r^2 sin(theta), the same grid for
+    both conformations.
+    """
+    from md_tools.alchemy.topology_recovery import _frame
+
+    (d,) = group["atoms"]
+    side = group["dummy_at"].lower()
+    other = "b" if side == "a" else "a"
+    origin, axes = _frame(positions, frame["p1"], frame["p2"], frame["p3"])
+    r, theta, phi = np.meshgrid(np.linspace(0.15, 0.21, 41),
+                                np.linspace(1e-3, np.pi - 1e-3, 121),
+                                np.linspace(-np.pi, np.pi, 144, endpoint=False), indexing="ij")
+    local = np.stack([r * np.cos(theta), r * np.sin(theta) * np.cos(phi),
+                      r * np.sin(theta) * np.sin(phi)], axis=-1)
+    dummy = origin + local @ axes                      # (..., 3) positions of the dummy
+
+    def at(atom):
+        return dummy if atom == d else positions[atom]
+
+    def unit(v):
+        return v / np.linalg.norm(v, axis=-1, keepdims=True)
+
+    energy = np.zeros(r.shape)
+    for family, slots in record["terms"].items():
+        for slot in slots:
+            if d not in slot["atoms"]:
+                continue
+            if slot["at_dummy_end"] == "dummy-retained":
+                params = slot[side]
+            elif include_removed and slot["at_dummy_end"] == "dummy-removed":
+                params = slot[other]
+            else:
+                continue
+            p = [at(a) for a in slot["atoms"]]
+            if family == "bonds":
+                length = np.linalg.norm(p[0] - p[1], axis=-1)
+                energy += 0.5 * params[1] * (length - params[0]) ** 2
+            elif family == "angles":
+                cos = np.sum(unit(p[0] - p[1]) * unit(p[2] - p[1]), axis=-1)
+                energy += 0.5 * params[1] * (np.arccos(np.clip(cos, -1, 1)) - params[0]) ** 2
+            else:
+                b0, b1, b2 = p[0] - p[1], p[2] - p[1], p[3] - p[2]
+                b1 = b1 / np.linalg.norm(b1, axis=-1, keepdims=True)
+                v = b0 - np.sum(b0 * b1, axis=-1, keepdims=True) * b1
+                w = b2 - np.sum(b2 * b1, axis=-1, keepdims=True) * b1
+                angle = np.arctan2(np.sum(np.cross(b1, v) * w, axis=-1), np.sum(v * w, axis=-1))
+                energy += params[1] * (1.0 + np.cos(slot["periodicity"] * angle - params[0]))
+    weights = np.exp(-(energy - energy.min()) / kt) * r ** 2 * np.sin(theta)
+    return energy.min() - kt * np.log(weights.sum())
+
+
+def test_openfe_dummy_group_limitation_is_addressed_as_a_free_energy(hybrid):
+    """OpenFE documents that keeping every dummy-core bonded term can bias the result, because the
+    dummy partition function then depends on the physical conformation. Measured here as a free
+    energy: -kT ln Z_dummy in two conformations of the physical core, differing only in core
+    internal coordinates (an H-C-C bend and an H-C-C-H twist around the anchor).
+
+    With the junction rule the dummy free energy is the same in both -- it cancels in any cycle.
+    Keeping every term, as OpenFE does, it differs by a free energy a cycle would silently absorb.
+    """
+    record = hybrid.record
+    group = next(g for g in record["dummy_groups"] if g["dummy_at"] == "A")   # Cl1 at endpoint A
+    frame = group["frame"]
+    kt = 2.494339  # kJ/mol at 300 K
+    x1 = np.array(hybrid.positions_nm, dtype=float)
+    x2 = x1.copy()
+    hyb_a = record["endpoints"]["A"]["hybrid_index_of_local_atom"]
+    c2, h4 = hyb_a[1], hyb_a[5]            # ethane C2 and H4, a physical neighbour of the anchor
+    x2[h4] = x1[c2] + 1.08 * (x1[h4] - x1[c2]) + np.array([0.02, -0.015, 0.01])
+    for h in (hyb_a[3], hyb_a[4]):         # H2, H3 on C1: move the torsion references
+        x2[h] = x1[h] + np.array([0.01, 0.02, -0.01])
+    kept = [_dummy_free_energy(record, x, group, frame, False, kt) for x in (x1, x2)]
+    everything = [_dummy_free_energy(record, x, group, frame, True, kt) for x in (x1, x2)]
+    print(f"dummy free energy, retained terms: {kept[0]:.6f} -> {kept[1]:.6f} kJ/mol; "
+          f"every term: {everything[0]:.6f} -> {everything[1]:.6f} kJ/mol")
+    assert abs(kept[1] - kept[0]) < 1e-9
+    # the OpenFE-style set: a conformation-dependent dummy free energy, well above sampling noise
+    assert abs(everything[1] - everything[0]) > 0.1, everything

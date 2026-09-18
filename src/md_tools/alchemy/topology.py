@@ -76,7 +76,8 @@ from typing import Any, Iterable, Optional, Sequence
 import numpy as np
 
 from ..ligands.mapping import LigandSelector
-from ..ligands.package import LigandPackage, compare_parameter_tables, subsystem_parameter_table, load_package
+from ..ligands.package import (LigandPackage, compare_parameter_tables, load_package,
+                               subsystem_parameter_table)
 from .topology_mapping import AtomMap, MapError, _bonds, _neighbours, _positions, validate_map
 
 __all__ = [
@@ -247,7 +248,8 @@ def _check_environment(environment: Environment, package_a: LigandPackage,
 
     c14, lj14 = package_a.conventions["coulomb14scale"], package_a.conventions["lj14scale"]
     try:
-        table, constrained = subsystem_parameter_table(system, package_a.mol, ligand_indices, c14, lj14)
+        table, constrained = subsystem_parameter_table(system, package_a.mol, ligand_indices,
+                                                       c14, lj14)
     except ValueError as exc:
         raise TopologyError(f"the environment ligand cannot be read as package "
                             f"{package_a.reference}: {exc}") from exc
