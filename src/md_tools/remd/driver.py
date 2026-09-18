@@ -221,7 +221,18 @@ class ReplicaRun:
     @staticmethod
     def compare_identity(before, now):
         keys = (set(before) | set(now)) - {"format"}
-        return [key for key in sorted(keys) if before.get(key) != now.get(key)]
+        return [key for key in sorted(keys)
+                if not ReplicaRun._identity_entry_agrees(key, before.get(key), now.get(key))]
+
+    @staticmethod
+    def _identity_entry_agrees(key, was, now):
+        """Equality, except a 0.6.0 (v2) `hamiltonian` entry, which goes through the ONE named
+        compatibility branch (`rest2.identity`, shared contract §3): accepted only for a legacy
+        selection with every v2 field matching. Every v3 entry is still compared whole."""
+        if (key == "hamiltonian" and isinstance(was, dict) and isinstance(now, dict)
+                and was.get("format") == hamiltonian_identity.LEGACY_FINGERPRINT_FORMAT):
+            return hamiltonian_identity.hamiltonian_identities_agree(was, now)
+        return was == now
 
     # -- the run -------------------------------------------------------------------------------------
 
