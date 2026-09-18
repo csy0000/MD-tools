@@ -171,6 +171,26 @@ def test_npt_without_a_box_is_refused_by_the_shared_preflight(model, tmp_path):
     assert not (tmp_path / "npt").exists()
 
 
+def test_check_creates_nothing(model, tmp_path, capsys):
+    res = _run(model, "w000", SHORT, out=tmp_path / "chk", check=True)
+    assert res["disposition"] == "checked"
+    assert "--check passed. Nothing was created." in capsys.readouterr().out
+    assert not (tmp_path / "chk").exists()
+
+
+def test_a_prepared_preflight_is_consumed_not_replanned(model, tmp_path, monkeypatch):
+    from md_tools.run import preflight as pf
+    out = tmp_path / "prep"
+    p = window_paths(out, "w001")
+    checked = pf.preflight_stage(
+        topology=model["pdb"], system=model["xml"], output=p["out"], log=p["record"],
+        restart=p["restart"], checkpoint=p["checkpoint"], cpu=True,
+        protocol="alchemical window w001", timestep_fs=2.0, ensemble="NVT")
+    monkeypatch.setattr(pf, "preflight_stage",
+                        lambda **kw: pytest.fail("re-planned a prepared preflight"))
+    assert _run(model, "w001", SHORT, out=out, prepared=checked)["rows"] == 21
+
+
 def test_settings_that_would_round_are_refused():
     with pytest.raises(WindowError, match="rounded"):
         WindowSettings(steps=1050, report_interval=100, checkpoint_interval=500)
