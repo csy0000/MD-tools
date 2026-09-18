@@ -72,6 +72,14 @@ class MissingAnalysisDependency(ImportError):
 
 
 def _pymbar():
+    # pymbar 4 imports JAX when it can, and JAX preallocates most of the memory of EVERY visible
+    # GPU -- on a shared machine an analysis step then holds cards other jobs were placed on. MBAR
+    # on a few thousand samples needs no accelerator, so pymbar's OWN switch is set: pymbar then
+    # never imports JAX. JAX_PLATFORMS is deliberately not touched -- that would be a process-wide
+    # device decision for every other JAX user. Which solver actually ran is recorded with the
+    # estimate (`pymbar_backend`), because an earlier import may already have chosen JAX.
+    import os
+    os.environ.setdefault("PYMBAR_DISABLE_JAX", "true")
     try:
         import pymbar  # noqa: F401
     except ImportError as exc:  # pragma: no cover - exercised only without the extra
@@ -79,6 +87,14 @@ def _pymbar():
             "MBAR needs pymbar (>=4,<5), part of the optional `alchemy` extra; EXP, BAR and TI "
             "do not") from exc
     return pymbar
+
+
+def _pymbar_backend() -> str:
+    try:
+        from pymbar import mbar_solvers
+    except ImportError:  # pragma: no cover
+        return "unknown"
+    return "numpy/scipy" if getattr(mbar_solvers, "force_no_jax", False) else "jax"
 
 
 @dataclass
@@ -310,7 +326,8 @@ def mbar_estimate(samples: SampleSet) -> Estimate:
                      "overlap_matrix": overlap, "neighbour_overlap": neighbour,
                      "min_neighbour_overlap": min(neighbour),
                      "poor_overlap": min(neighbour) < OVERLAP_WARNING,
-                     "pymbar_version": getattr(pymbar, "__version__", "unknown")})
+                     "pymbar_version": getattr(pymbar, "__version__", "unknown"),
+                     "pymbar_backend": _pymbar_backend()})
 
 
 # ---------------------------------------------------------------------- TI

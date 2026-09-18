@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -18,6 +19,9 @@ from md_tools.alchemy import estimators as est
 from md_tools.alchemy.paths import AlchemicalPath, Knot, PathError, linear_path, staged_path
 from md_tools.alchemy.samples import (SampleRecordError, SampleSet, concatenate, kt_kj_mol,
                                       window_states, BAR_NM3_TO_KJ_MOL, KJ_PER_KCAL)
+
+# pymbar imports JAX unless told not to, and JAX preallocates on every visible GPU.
+os.environ.setdefault("PYMBAR_DISABLE_JAX", "true")
 
 DATA = Path(__file__).resolve().parent / "data" / "alchemy_s4"
 
@@ -318,3 +322,9 @@ def test_gate_verdicts():
     assert est.agreement_gate(1.0, 0.0, 1.0 + 1e-9,
                               numerical_floor_kcal=1e-6)["verdict"] == "PASS"
     assert est.agreement_gate(1.0, 0.0, 1.6, numerical_floor_kcal=5.0)["verdict"] == "FAIL"
+
+
+def test_mbar_never_imports_jax(analysis):
+    """pymbar's own switch, not a process-wide JAX platform; and the record says which ran."""
+    assert "jax" not in sys.modules
+    assert analysis["estimates"]["MBAR"]["diagnostics"]["pymbar_backend"] == "numpy/scipy"

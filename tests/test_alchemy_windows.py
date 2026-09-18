@@ -7,14 +7,14 @@ is NOT CUDA evidence (see the S4 acceptance matrix).
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
-from pathlib import Path
+import os
 
 import numpy as np
 import pytest
 
+os.environ.setdefault("PYMBAR_DISABLE_JAX", "true")   # else pymbar -> JAX takes every GPU
 openmm = pytest.importorskip("openmm")
 from openmm import app, unit  # noqa: E402
 
