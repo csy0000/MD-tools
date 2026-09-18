@@ -84,6 +84,20 @@ Forces, by force group (`FORCE_GROUPS`):
     4  softcore_a_elec, 5 softcore_a_lj, 6 softcore_b_elec, 7 softcore_b_lj
     8  softcore_internal    U_unscaled
     9  bonded_mixed  bonded forces that differ between end states, (1-lam_b) A + lam_b B
+   10  dispersion    (1-lam_s) D_A(V) + lam_s D_B(V) - D_static(V), see below
+
+THE DISPERSION CORRECTION is each end state's OWN NonbondedForce correction, mixed linearly in
+lambda_sterics -- as pmemd weights each TI region's correction by its lambda weight and uses the
+plain, unsoftened tail for softcore atoms. It cannot be assembled from per-subset corrections:
+OpenMM's NonbondedForce correction counts pairs as N^2 / (N(N+1)/2) with self pairs, and a
+CustomNonbondedForce with interaction groups returns exactly N/(N+1) times the distinct-pair tail
+(both measured, OpenMM 8.6), so no split into static, changing and softcore subsets adds up to
+either end state's number. D_A, D_B and the static part NonbondedForce A already carries are
+therefore measured from OpenMM itself at construction, as coefficients of 1/V, and the remainder is
+carried by one CustomNonbondedForce whose pair energy is identically zero (`step(r - cutoff)`
+inside the cutoff) and whose long-range correction is the 1/V term, calibrated at construction.
+Its cost is one pair. The result: U(0) and U(1) reproduce the end-state Systems' energies with
+their dispersion corrections, at every box volume.
 
 A softcore electrostatic force is a DELTA on the NonbondedForce's own direct-space term for the same
 pair (see `softcore.pair_expressions`), because a NonbondedForce cannot skip a pair's direct space
@@ -119,7 +133,7 @@ _W_LJ = {"A": "mdt_alchemy_w_lj_a", "B": "mdt_alchemy_w_lj_b"}         # excepti
 FORCE_GROUPS: Mapping[str, int] = {
     "static": 0, "nonbonded_a": 1, "nonbonded_b": 2, "lj_common_changing": 3,
     "softcore_a_elec": 4, "softcore_a_lj": 5, "softcore_b_elec": 6, "softcore_b_lj": 7,
-    "softcore_internal": 8, "bonded_mixed": 9,
+    "softcore_internal": 8, "bonded_mixed": 9, "dispersion": 10,
 }
 
 #: Sigma given to an epsilon-zero particle inside a custom softcore expression. The pair epsilon is
@@ -319,9 +333,9 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
                                         "at the dummy end only: mixed with lambda_bonded; "
                                         "anything else refused",
             "a_only_x_b_only": "excluded",
-            "dispersion_correction": "LJ common to both end states: NonbondedForce correction; "
-                                     "changing and softcore LJ: CustomNonbondedForce long-range "
-                                     "correction of the interaction actually computed",
+            "dispersion_correction": "each end state's own NonbondedForce correction, mixed "
+                                     "linearly in lambda_sterics (pmemd per-region weighting); "
+                                     "softcore tails not softened",
             "amber18_path": "the diagonal lambda_electrostatics = lambda_sterics = lambda_bonded",
         },
         "nonbonded": dict(settings_a, kappa_nm_inv=kappa,
@@ -369,6 +383,16 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
     if internal is not None:
         system.addForce(internal)
 
+    if periodic and settings_a["use_dispersion_correction"] and settings_a["use_switching_function"]:
+        raise AlchemicalHamiltonianError(
+            "a dispersion correction together with a switching function is not implemented: the "
+            "switched correction's integral is not reproduced here yet, and an approximate one "
+            "would make neither end state recover its own energy")
+    if periodic and settings_a["use_dispersion_correction"]:
+        force, coefficients = _dispersion_force(system_a, A, B, static_lj, settings_a, pme)
+        if force is not None:
+            system.addForce(force)
+        record["nonbonded"]["dispersion_coefficients_kj_nm3_mol"] = coefficients
     record["bonded_mixed_forces"] = mixed_bonded
     return AlchemicalHamiltonian(system=system, record=record)
 
@@ -600,6 +624,88 @@ def _end_state_nonbonded(label, state: _EndState, region, unique, static_lj, int
     return f
 
 
+def _dispersion_coefficient(sigma, epsilon, cutoff: float) -> float:
+    """C in OpenMM's NonbondedForce dispersion correction E = C / V, for these LJ parameters.
+
+    OpenMM's formula (NonbondedForceImpl::calcDispersionCorrection, no switching function): group
+    particles into (sigma, epsilon) classes; over class pairs i <= j with count n_i n_j, or
+    n_i (n_i + 1) / 2 on the diagonal, accumulate count * eps_ij sigma_ij^12 and
+    count * eps_ij sigma_ij^6; divide both by N (N + 1) / 2; then
+    C = 8 pi N^2 (s12 / (9 rc^9) - s6 / (3 rc^3)). It is written out rather than measured because
+    measuring it means subtracting two large pair energies; `test_dispersion_coefficient_is_openmms`
+    holds this against OpenMM's own number.
+    """
+    classes: dict[tuple[float, float], int] = {}
+    for s_i, e_i in zip(sigma, epsilon):
+        classes[(s_i, e_i)] = classes.get((s_i, e_i), 0) + 1
+    keys = list(classes)
+    s12 = s6 = 0.0
+    for a, (s_a, e_a) in enumerate(keys):
+        for s_b, e_b in keys[a:]:
+            n_a, n_b = classes[(s_a, e_a)], classes[(s_b, e_b)]
+            count = n_a * (n_a + 1) / 2 if (s_a, e_a) == (s_b, e_b) else n_a * n_b
+            sig = 0.5 * (s_a + s_b)
+            eps = math.sqrt(e_a * e_b)
+            sig6 = sig ** 6
+            s12 += count * eps * sig6 * sig6
+            s6 += count * eps * sig6
+    n = len(sigma)
+    interactions = n * (n + 1) / 2
+    return 8 * n * n * math.pi * (s12 / interactions / (9 * cutoff ** 9)
+                                  - s6 / interactions / (3 * cutoff ** 3))
+
+
+def _dispersion_force(system_a, A, B, static_lj, nb_settings, pme):
+    """The part of (1-lam_s) D_A + lam_s D_B that NonbondedForce A's static correction lacks."""
+    mm = _mm()
+    n = len(A.charge)
+    cutoff = float(nb_settings["cutoff_nm"])
+    static_eps = [A.epsilon[i] if i in static_lj else 0.0 for i in range(n)]
+    c_static = _dispersion_coefficient(A.sigma, static_eps, cutoff)
+    c_a = _dispersion_coefficient(A.sigma, A.epsilon, cutoff)
+    c_b = _dispersion_coefficient(B.sigma, B.epsilon, cutoff)
+    coefficients = {"static": c_static, "A": c_a, "B": c_b}
+    k_a, k_b = c_a - c_static, c_b - c_static
+    if n < 2 or (k_a == 0.0 and k_b == 0.0):
+        return None, coefficients
+
+    def force(ka: float, kb: float):
+        # With ka == kb the term does not depend on lambda, and it must not SAY it does: OpenMM
+        # differentiates the long-range correction for an energy-parameter derivative, finds the
+        # derivative expression simplifies to 0, and aborts the process ("Cannot use long range
+        # correction with a force that does not depend on r") -- an abort, not an exception.
+        varies = ka != kb
+        weight = (f"((1-lambda_sterics)*{ka!r} + lambda_sterics*{kb!r})" if varies else f"{ka!r}")
+        f = mm.CustomNonbondedForce(f"{weight}*step(r-{cutoff!r})*({cutoff!r}/r)^6")
+        for _ in range(n):
+            f.addParticle([])
+        f.addInteractionGroup([0], [1])
+        f.setNonbondedMethod(mm.CustomNonbondedForce.CutoffPeriodic)
+        f.setCutoffDistance(cutoff)
+        f.setUseSwitchingFunction(False)
+        f.setUseLongRangeCorrection(True)
+        if varies:
+            f.addGlobalParameter(LAMBDA_STERICS, 0.0)
+            f.addEnergyParameterDerivative(LAMBDA_STERICS)
+        f.setForceGroup(FORCE_GROUPS["dispersion"])
+        return f
+
+    # Calibrate: this force's correction per unit coefficient, times V, as OpenMM computes it.
+    probe = mm.System()
+    for i in range(n):
+        probe.addParticle(1.0)
+    box = system_a.getDefaultPeriodicBoxVectors()
+    probe.setDefaultPeriodicBoxVectors(*box)
+    probe.addForce(force(1.0, 2.0))        # at lambda_sterics = 0 the weight is exactly 1.0
+    context = mm.Context(probe, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName("Reference"))
+    context.setPositions([[0.01 * i, 0.0, 0.0] for i in range(n)])    # the one pair: 0.01 nm
+    volume = box[0][0]._value * box[1][1]._value * box[2][2]._value
+    unit = context.getState(getEnergy=True).getPotentialEnergy()._value * volume
+    del context
+    coefficients["unit"] = unit
+    return force(k_a / unit, k_b / unit), coefficients
+
+
 def _custom_nonbonded(expression, nb_settings):
     mm = _mm()
     f = mm.CustomNonbondedForce(expression)
@@ -627,8 +733,7 @@ def _changing_lj_force(A, B, changing, static, exclusions, nb_settings):
         f.addExclusion(i, j)
     f.addInteractionGroup(sorted(changing), sorted(static))
     f.addInteractionGroup(sorted(changing), sorted(changing))
-    f.setUseLongRangeCorrection(bool(nb_settings["use_dispersion_correction"])
-                                and nb_settings["method"] == "PME")
+    f.setUseLongRangeCorrection(False)      # the tail is `_dispersion_force`'s, see there
     f.setForceGroup(FORCE_GROUPS["lj_common_changing"])
     return f
 
@@ -654,8 +759,7 @@ def _softcore_forces(label, state, region, common, exclusions, nb_settings, kapp
         for i, j in sorted(exclusions):
             f.addExclusion(i, j)
         f.addInteractionGroup(sorted(region), sorted(common))
-        f.setUseLongRangeCorrection(kind == "lj" and bool(nb_settings["use_dispersion_correction"])
-                                    and nb_settings["method"] == "PME")
+        f.setUseLongRangeCorrection(False)  # the tail is `_dispersion_force`'s, see there
         f.setForceGroup(FORCE_GROUPS[f"softcore_{label.lower()}_{kind}"])
         out.append(f)
     return out

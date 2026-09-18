@@ -309,3 +309,77 @@ def test_record_names_the_rules_and_the_end_states():
     assert r["nonbonded"]["kappa_nm_inv"] == pytest.approx(kw["kappa"], rel=1e-12)
     assert {m["type"] for m in r["bonded_mixed_forces"]} == {
         "HarmonicBondForce", "HarmonicAngleForce", "PeriodicTorsionForce"}
+
+
+# ------------------------------------------------------------------------------------------------
+# The dispersion correction
+# ------------------------------------------------------------------------------------------------
+
+def test_dispersion_coefficient_is_openmms():
+    """The written-out coefficient equals OpenMM's own correction on a probe with no pair inside
+    the cutoff, where the energy IS the correction. Several classes, a repeated class, eps = 0."""
+    from md_tools.alchemy.hamiltonian import _dispersion_coefficient
+    rng = np.random.default_rng(7)
+    sigma = [0.3, 0.3, 0.35, 0.28, 0.3, 0.4]
+    epsilon = [0.5, 0.5, 0.2, 0.0, 0.5, 0.9]
+    box, cutoff = 12.0, 1.0
+    s = openmm.System()
+    s.setDefaultPeriodicBoxVectors([box, 0, 0], [0, box, 0], [0, 0, box])
+    nb = openmm.NonbondedForce()
+    nb.setNonbondedMethod(openmm.NonbondedForce.CutoffPeriodic)
+    nb.setCutoffDistance(cutoff)
+    nb.setUseDispersionCorrection(True)
+    for sg, ep in zip(sigma, epsilon):
+        s.addParticle(1.0)
+        nb.addParticle(0.0, sg, ep)
+    s.addForce(nb)
+    x = np.array([[2.0 * k, 0.0, 0.0] for k in range(len(sigma))]) + rng.uniform(0, 0.1, (len(sigma), 3))
+    measured = _context(s, x).getState(getEnergy=True).getPotentialEnergy()._value * box ** 3
+    assert _dispersion_coefficient(sigma, epsilon, cutoff) == pytest.approx(measured, rel=1e-12)
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.08], ids=["built-box", "expanded-box"])
+def test_dispersion_mixes_the_end_states_own_corrections(scale):
+    """U_disp(lambda) = (1 - lam_s) D_A(V) + lam_s D_B(V), with D_X the correction OpenMM applies to
+    end-state System X, at the built box and at an expanded one (it is a 1/V term, as NPT needs)."""
+    sa, sb, a, b, x = fx.build(True, dispersion=True)
+    h = build_hamiltonian(sa, sb, a, b)
+    x = x * scale
+    vectors = [np.array(v._value) * scale for v in sa.getDefaultPeriodicBoxVectors()]
+
+    def energy(system, state=None, correction=True):
+        s = openmm.XmlSerializer.deserialize(openmm.XmlSerializer.serialize(system))
+        for f in s.getForces():
+            if isinstance(f, openmm.NonbondedForce):
+                f.setUseDispersionCorrection(correction)
+            if isinstance(f, openmm.CustomNonbondedForce) and not correction:
+                f.setUseLongRangeCorrection(False)
+        c = _context(s, x)
+        c.setPeriodicBoxVectors(*vectors)
+        if state is not None:
+            for name, value in h.context_parameters(state).items():
+                c.setParameter(name, value)
+        return c.getState(getEnergy=True).getPotentialEnergy()._value
+
+    d_a = energy(sa) - energy(sa, correction=False)
+    d_b = energy(sb) - energy(sb, correction=False)
+    assert abs(d_a - d_b) > 1e-3             # the end states' corrections really differ
+    for t in DIAGONAL + OFF_DIAGONAL:
+        state = _state(t)
+        mixed = energy(h.system, state) - energy(h.system, state, correction=False)
+        assert mixed == pytest.approx((1 - t[1]) * d_a + t[1] * d_b, abs=1e-8), t
+    c = _context(h.system, x)
+    c.setPeriodicBoxVectors(*vectors)
+    parts = h.derivative_components(c, _state((0.5, 0.5, 0.5)))
+    assert parts["lambda_sterics"]["dispersion"] == pytest.approx(d_b - d_a, abs=1e-8)
+    assert h.energy(c, _state((0, 0, 0))) == pytest.approx(energy(sa), abs=1e-7)
+    assert h.energy(c, _state((1, 1, 1))) == pytest.approx(energy(sb), abs=1e-7)
+
+
+def test_dispersion_with_a_switching_function_is_refused():
+    sa, sb, a, b, x = fx.build(True, dispersion=True)
+    for s in (sa, sb):
+        _nb(s).setUseSwitchingFunction(True)
+        _nb(s).setSwitchingDistance(0.8)
+    with pytest.raises(AlchemicalHamiltonianError, match="switching function"):
+        build_hamiltonian(sa, sb, a, b)
