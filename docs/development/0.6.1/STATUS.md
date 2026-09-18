@@ -34,6 +34,8 @@ None yet.
 
 ## Blockers
 
+- Registration: BLOCKED (sandbox). The user has put `$MD_DATA` out of reach of every session
+  (2026-09-19); the registration half of S1-G is reported BLOCKED, not passed.
 - S1-G: no GPU is available to this wave. Cards 0–4 are reserved by the user for the 0.6.0 gate
   and 5–8 belong to hpREST2. Blocked is not passed; the deterministic CPU work continues.
 - Integration: S1's selection record changes three runtime call sites outside its files —

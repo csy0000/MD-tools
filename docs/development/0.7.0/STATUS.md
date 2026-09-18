@@ -39,6 +39,8 @@ None yet.
 
 ## Blockers
 
+- Registration (A6): BLOCKED (sandbox). The user has put `$MD_DATA` out of reach of every
+  session (2026-09-19); registration is tested against temporary roots only.
 - The OpenFE adapter choice (A0) is not settled: which components are pinned, at which versions,
   under which license, and what is vendored. S0 owns closing this with S2 and S3.
 - No AMBER cross-engine reference environment has been identified yet for gate 4
