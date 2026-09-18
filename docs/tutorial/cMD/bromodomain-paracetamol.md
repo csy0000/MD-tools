@@ -1,9 +1,12 @@
 # cMD: a bromodomain with paracetamol, from a reused parameter package
 
 !!! note "Requires the md-tools release after 0.5.4"
-    This page uses `solute.kind: complex`, `ligands:`, `input.assembly`, `input.remove`,
-    `input.missing_atoms` and `protonation.method: propka`, none of which are in 0.5.4. It was run
-    with md-tools at commit `fa288ff`.
+    This page uses `solute.kind: complex`, `ligands:`, `input.assembly`, `input.missing_atoms`
+    and `protonation.method: propka`, none of which are in 0.5.4. It was run with md-tools at
+    commit `fa288ff`, whose configuration deleted the crystallisation additives through a section
+    that has since been retired; they are stripped from the structure file here instead. That
+    builds the same System byte for byte -- `built.xml` sha256 `f5908732...4e9c0df0`, the System
+    the production run below integrated -- so every number on this page still stands.
 
 A protein–ligand complex from a deposited crystal structure: the **CREBBP bromodomain with
 paracetamol** ([PDB 4A9K](https://www.rcsb.org/structure/4A9K), 1.81 Å), 10 ns of production. The
@@ -35,9 +38,23 @@ assembly:
 | 2 | chain B, 112 residues | TYL B:2198 | 1 K⁺, 117 waters |
 
 This tutorial builds **assembly 1**. EDO and SCN are crystallisation additives, not part of the
-biology, so they are **removed deliberately** -- one entry per residue, each with a reason, both
-recorded in the build log. Nothing is ever deleted silently: a non-standard residue that is neither
-mapped to a package nor removed here refuses the build.
+biology, so strip them from the structure file before building:
+
+```bash
+grep -v -E "^HETATM .* (EDO|SCN) " 4A9K.cif > 4A9K-prepared.cif   # sha256 a796ec9f...3535eeab
+```
+
+md-tools does not delete residues for you: removing an additive is an edit to your own file, and a
+non-standard residue that is neither mapped to a parameter package nor removed refuses the build by
+name. Two consequences worth knowing:
+
+* **The edit is on the deposited ids, before `input.assembly` expands anything.** Here that makes no
+  difference -- assembly 1 is one copy of chain A -- but for an assembly with several copies of a
+  chain, stripping a residue from the file removes it from every copy. That is usually what you want
+  for an additive.
+* **The build no longer records the removal, so you should.** Write down what you removed and why,
+  as this page does: three residues, `EDO A:2198`, `EDO A:2199` and `SCN A:2201`, 11 atoms in all,
+  none of them part of the biology.
 
 Four residues have alternate conformations (the first is kept, and they are recorded), and four
 residues lack heavy atoms: Lys1083, Ile1084, Gln1194 and the C-terminal Gly1197 (its OXT).
@@ -56,13 +73,6 @@ ligand_catalog:
   path: ../catalog
 input:
   assembly: "1"
-  remove:
-    - select: {chain: A, resid: "2198"}
-      reason: crystallisation additive (ethylene glycol, EDO)
-    - select: {chain: A, resid: "2199"}
-      reason: crystallisation additive (ethylene glycol, EDO)
-    - select: {chain: A, resid: "2201"}
-      reason: crystallisation additive (thiocyanate, SCN)
   missing_atoms: add
 protonation:
   method: propka
@@ -82,22 +92,20 @@ solvent:
   several, refuses the build.
 * `ligand_catalog.path` is where packages are looked up, searched before the shared catalog. Here
   it is a directory beside the dataset holding `CHEMBL112/param_e932f4c4f371/`.
-* The selectors and `input.remove` name the **expanded** chain ids; `build/assembly.json` maps each
-  back to its author chain and operator.
+* The selectors name the **expanded** chain ids; `build/assembly.json` maps each back to its author
+  chain and operator. (The additive strip above is the other way round: it edits the file before
+  expansion, so it names the deposited ids.)
 
 ## 3. Build
 
 ```bash
-md-openmm build-top -i 4A9K.cif \
+md-openmm build-top -i 4A9K-prepared.cif \
     -os built.xml -op built.pdb -log built.log --config build-top.config
 ```
 
 ```text
 Command
   assembly                    1: 1 chain(s), 0 on-axis copy(ies) dropped
-  removed                     EDO A:2198 (4 atom(s)): crystallisation additive (ethylene glycol, EDO)
-  removed                     EDO A:2199 (4 atom(s)): crystallisation additive (ethylene glycol, EDO)
-  removed                     SCN A:2201 (3 atom(s)): crystallisation additive (thiocyanate, SCN)
   missing atoms               12 atom(s) added to 4 residue(s) (input.missing_atoms: add)
 Input interpretation
   interpreted as              protein-ligand complex (.cif), 1 ligand instance(s) mapped to parameter packages
@@ -181,7 +189,7 @@ expected binding mode, which is what makes it a check on the preparation rather 
     the ligand in the image nearest the protein first (`mdtraj.Trajectory.image_molecules`); without
     that step the ligand RMSD and the contact counts are meaningless.
 
-**What 10 ns shows, and what it does not.** The prepared complex -- assembly 1, the removed
+**What 10 ns shows, and what it does not.** The prepared complex -- assembly 1, the stripped
 additives, the built side chains, the PROPKA protonation, the reused ligand parameters -- is stable
 in explicit water, and the ligand keeps its crystallographic binding mode. It is not a binding
 affinity, not a residence time, and not evidence that the pose is the global minimum.
@@ -191,8 +199,8 @@ affinity, not a residence time, and not evidence that the pose is the global min
 ```text
 4A9K/
 ├── catalog/    CHEMBL112/param_e932f4c4f371/    the package this build reuses (see below)
-├── build/      4A9K.cif  build-top.config  built.xml  built.pdb  built.solute.pdb  built.log
-│               built.prepared.pdb   the expanded, additive-free, completed structure
+├── build/      4A9K.cif  4A9K-prepared.cif  build-top.config  built.xml  built.pdb  built.solute.pdb  built.log
+│               built.prepared.pdb   the expanded and completed structure the build read
 │               assembly.json        the expanded chain and its operator
 │               ligand_mapping.json  the instance, its package and its atom map
 │               ligands/             a copy of every package used, so the build is self-contained

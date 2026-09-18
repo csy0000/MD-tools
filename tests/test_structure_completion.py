@@ -67,56 +67,19 @@ def test_an_unknown_policy_is_refused():
         inspect_structure(topology, positions, missing_atoms="guess")
 
 
-# --- input.remove ---------------------------------------------------------------------------------
+def test_an_old_configuration_naming_input_remove_is_refused(tmp_path):
+    """`input.remove` was deleted: removing an additive is the reader's edit to their own file.
 
-def _with_additive():
-    """ACE-ALA-NME plus one ethylene glycol residue (EDO) in chain B, as a deposited additive."""
-    from openmm import Vec3, app, unit
-    from openmm.app import element
-
-    topology, positions = _structure()
-    modeller = app.Modeller(topology, positions)
-    extra = app.Topology()
-    chain = extra.addChain("B")
-    residue = extra.addResidue("EDO", chain, "301")
-    for name, symbol in (("C1", element.carbon), ("O1", element.oxygen)):
-        extra.addAtom(name, symbol, residue)
-    modeller.add(extra, [Vec3(2.0, 2.0, 2.0), Vec3(2.14, 2.0, 2.0)] * unit.nanometer)
-    return modeller.topology, modeller.positions
-
-
-def test_a_named_additive_is_removed_and_recorded():
-    from md_tools.openmm.completion import remove_residues
-
-    topology, positions = _with_additive()
-    kept, _, record = remove_residues(topology, positions, [
-        {"select": {"chain": "B", "resid": "301"}, "reason": "crystallisation additive"}])
-    assert "EDO" not in {r.name for r in kept.residues()}
-    assert record == [{"chain": "B", "resid": "301", "insertion_code": "", "residue": "EDO",
-                       "n_atoms": 2, "reason": "crystallisation additive"}]
-
-
-@pytest.mark.parametrize("select, words", [
-    ({"chain": "B", "resid": "999"}, "matches 0 residues"),
-    ("ALA", "standard protein residue"),
-])
-def test_a_removal_that_is_not_one_non_protein_residue_is_refused(select, words):
-    from md_tools.openmm.completion import remove_residues
-
-    topology, positions = _with_additive()
-    if select == "ALA":
-        alanine = next(r for r in topology.residues() if r.name == "ALA")
-        select = {"chain": alanine.chain.id, "resid": str(alanine.id)}
-    with pytest.raises(CompletionError, match=words):
-        remove_residues(topology, positions, [{"select": select, "reason": "x"}])
-
-
-def test_a_removal_without_a_reason_is_refused_at_resolution(tmp_path):
+    An old configuration must REFUSE rather than be ignored -- a build that silently kept the
+    EDO and SCN a configuration asked to delete would parameterise residues nobody meant to keep,
+    or fail much later with a template error naming neither.
+    """
     from md_tools.build.strict import ConfigError
     from md_tools.build.top import resolve_build_config
 
     config = tmp_path / "c.config"
     config.write_text("solute:\n  kind: peptide\ninput:\n  remove:\n"
-                      "    - select: {chain: B, resid: \"301\"}\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="no reason"):
+                      "    - select: {chain: B, resid: \"301\"}\n      reason: additive\n",
+                      encoding="utf-8")
+    with pytest.raises(ConfigError, match="input.remove is retired"):
         resolve_build_config(config)
