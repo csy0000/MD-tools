@@ -212,6 +212,6 @@ interface; for either, the run length and the analysis are a study of their own.
 
 ## Next
 
-* a protein with a bound ligand, from its parameter package: 4A9K, CREBBP bromodomain with
-  paracetamol (in preparation)
+* a protein with a bound ligand, from its parameter package:
+  [cMD: a bromodomain with paracetamol (4A9K)](bromodomain-paracetamol.md)
 * register the finished directory as a dataset: [Registering a finished run](../../data_register/README.md)
