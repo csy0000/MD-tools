@@ -1,12 +1,16 @@
 # cMD: a bromodomain with paracetamol, from a reused parameter package
 
 !!! note "Requires the md-tools release after 0.5.4"
-    This page uses `solute.kind: complex`, `ligands:`, `input.assembly`, `input.missing_atoms`
-    and `protonation.method: propka`, none of which are in 0.5.4. It was run with md-tools at
-    commit `fa288ff`, whose configuration deleted the crystallisation additives through a section
-    that has since been retired; they are stripped from the structure file here instead. That
-    builds the same System byte for byte -- `built.xml` sha256 `f5908732...4e9c0df0`, the System
-    the production run below integrated -- so every number on this page still stands.
+    This page uses `solute.kind: complex`, a `ligands:` entry selecting by `resname` with the
+    package given as a path, `input.assembly`, `input.missing_atoms` and
+    `protonation.method: propka`, none of which are in 0.5.4.
+
+    The 10 ns run below was produced at commit `fa288ff`, whose configuration differed in two
+    ways that have since changed: it deleted the crystallisation additives through a retired
+    `input.remove` section, and it named the ligand by chain and residue id. Both commands on this
+    page were re-executed on the current tree and build the same System **byte for byte** --
+    `built.xml` sha256 `f5908732...4e9c0df0`, the System the production run integrated -- so every
+    number here still stands.
 
 A protein–ligand complex from a deposited crystal structure: the **CREBBP bromodomain with
 paracetamol** ([PDB 4A9K](https://www.rcsb.org/structure/4A9K), 1.81 Å), 10 ns of production. The
@@ -67,10 +71,7 @@ residues lack heavy atoms: Lys1083, Ile1084, Gln1194 and the C-terminal Gly1197 
 solute:
   kind: complex
 ligands:
-  - select: {chain: A, resid: "2200", insertion_code: ""}
-    parameters: CHEMBL112/param_e932f4c4f371
-ligand_catalog:
-  path: ../catalog
+  - {resname: TYL, parameter: ../catalog/CHEMBL112/param_e932f4c4f371}
 input:
   assembly: "1"
   missing_atoms: add
@@ -87,14 +88,21 @@ solvent:
 
 * `kind: complex` reads the structure as protein chains plus ligand instances. The protein takes
   ff14SB; each ligand instance takes the parameters of an existing package.
-* `ligands[].select` names **one** residue -- the chain id after assembly expansion, the residue id
-  and the insertion code -- and `parameters` the package. A selector that matches no residue, or
-  several, refuses the build.
-* `ligand_catalog.path` is where packages are looked up, searched before the shared catalog. Here
-  it is a directory beside the dataset holding `CHEMBL112/param_e932f4c4f371/`.
-* The selectors name the **expanded** chain ids; `build/assembly.json` maps each back to its author
-  chain and operator. (The additive strip above is the other way round: it edits the file before
-  expansion, so it names the deposited ids.)
+* `resname: TYL` selects the ligand by residue name, and `parameter` is a **path** to a package
+  directory, relative to this configuration. Nothing has to be registered and no catalog has to be
+  configured: the build reads that folder. To name a package in the shared catalog instead, write
+  `parameters: CHEMBL112/param_e932f4c4f371` -- one or the other, never both.
+* **A `resname` entry maps every residue of that name**, on the reasoning that copies of one
+  compound take the same parameters. Assembly 1 has a single TYL, so this entry selects exactly the
+  one ligand; had the page built both assemblies, the same entry would cover both copies. To name
+  one copy instead, select it by `{chain, resid, insertion_code}`, which must match exactly one
+  residue.
+* A selector by chain names the **expanded** chain ids; `build/assembly.json` maps each back to its
+  author chain and operator. (The additive strip above is the other way round: it edits the file
+  before expansion, so it names the deposited ids.)
+* **Where the package comes from.** This page reuses one that already exists. To make it yourself,
+  see [cMD: paracetamol](paracetamol.md), which parameterises the molecule from its SMILES string
+  and writes exactly this package -- same parameter id, same parameters, measured.
 
 ## 3. Build
 
@@ -109,11 +117,11 @@ Command
   missing atoms               12 atom(s) added to 4 residue(s) (input.missing_atoms: add)
 Input interpretation
   interpreted as              protein-ligand complex (.cif), 1 ligand instance(s) mapped to parameter packages
-  ligand TYL                  chain 'A' resid '2200' icode '' -> CHEMBL112/param_e932f4c4f371
+  ligand TYL                  resname 'TYL' -> CHEMBL112/param_e932f4c4f371
   coordinates                 the deposited pose; ligand hydrogens from each package
   small-molecule FF           not run: parameters loaded from the packages
 Preparation
-  ligand       : TYL chain 'A' resid '2200' icode '' -> CHEMBL112/param_e932f4c4f371
+  ligand       : TYL resname 'TYL' -> CHEMBL112/param_e932f4c4f371
   protonation  : pH 7.0, 9 -> 1265 hydrogens; 1 ligand instance(s) kept as packaged
   protonation  : method propka, PROPKA 3.5.1
   solvation    : 7200 waters, ions {'NA': 23, 'CL': 20}, box dodecahedron (255.4 nm^3)
@@ -216,8 +224,11 @@ identify them. A ligand-only build makes it once; this build loads it. The param
 of the parameters themselves, so the same chemical state and the same method always produce the
 same id, and a build that reuses it runs no charge generation at all.
 
-Until the shared catalog under `$MD_DATA/parameters/ligands` is populated, point
-`ligand_catalog.path` at a directory holding `<compound>/<parameter>/`, as here.
+A package is a folder, and `parameter:` above points straight at it -- nothing needs to be
+registered for this build to run. Registering it in the shared catalog under
+`$MD_DATA/parameters/ligands` is what makes it reusable by NAME from anywhere
+(`parameters: CHEMBL112/param_e932f4c4f371`, with no path); see
+[Ligand parameter packages](../../ligand-packages.md).
 
 ## Next
 
