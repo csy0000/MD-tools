@@ -202,7 +202,7 @@ def test_a_molecule_the_catalog_does_not_hold_is_parameterised(tmp_path):
     ("log inside", "inside the package directory"),
     ("with scaler", "two different jobs"),
     ("resname without the flag", "belongs to --parameterize"),
-    ("pdb input", "must be .sdf, .mol2, .smi"),
+    ("pdb input", "needs a molecular graph with BOND ORDERS"),
 ])
 def test_the_refusals(tmp_path, case, expected):
     work = tmp_path / "work"
