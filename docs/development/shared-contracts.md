@@ -132,8 +132,15 @@ atom set with different torsion and CMAP treatment, so the fingerprint moves to 
 the full version-2 selection record.
 
 `REST2_IMPLEMENTATION` (`src/md_tools/rest2/hamiltonian.py`), name `rest2-unscaled-torsions`,
-currently version 3, gains the selection semantics it now depends on and its version moves with
-them. `require_same_hamiltonian` keeps refusing a mismatch; the point of the version bump is that
+**stays at version 3** (decided 2026-09-19, on S1's deviation). It describes the per-term scaling
+rule, which selective REST2 does not change; the convention dict is embedded in every record and
+checked by `require_compatible_implementation`, so bumping it would refuse every 0.6.0
+continuation and defeat the legacy-resume ruling below. Selective semantics are versioned where
+they live instead: the selection policy `md-tools-selective-rest2/1` inside the
+`md-tools-solute-selection/2.0` record, and fingerprint v3. `scaler.yaml` carries `selection`,
+`selection_sha256` and `scaler_arguments` — exactly the `build_scaled_system` keyword arguments —
+and every consumer that rebuilds or identifies a state reads them from there rather than
+reconstructing them from `solute.atom_indices`. `require_same_hamiltonian` keeps refusing a mismatch; the point of the version bump is that
 a saved state built under other semantics is **refused**, not silently mixed into a ladder.
 
 **Decided 2026-09-19 (S0, on S1's proposal): a legacy run stays resumable.** A v3 fingerprint

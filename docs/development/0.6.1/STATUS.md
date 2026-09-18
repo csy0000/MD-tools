@@ -16,13 +16,13 @@ in [`handoffs/`](handoffs/) and never edit it.
 
 | | milestone | state | evidence |
 |---|---|---|---|
-| S1-A | mask parser and resolved selection record | NOT STARTED | — |
+| S1-A | mask parser and resolved selection record | IN PROGRESS | `work/0.6.1-selection` (local), handoffs/S1.md |
 | S1-B | backbone / sidechain membership and torsion ownership | NOT STARTED | — |
 | S1-C | partial-selection Hamiltonian construction | NOT STARTED | — |
 | S1-D | ligand instances and exclusion files | NOT STARTED | — |
 | S1-E | versioned CMAP rule | NOT STARTED | — |
 | S1-F | identity, resume and refusal | NOT STARTED | — |
-| S1-G | CUDA explicit-solvent ladders | NOT STARTED | — |
+| S1-G | CUDA explicit-solvent ladders | BLOCKED | no card: 0–4 reserved by the user for the 0.6.0 gate, 5–8 are hpREST2's (2026-09-19) |
 
 State values are NOT STARTED, IN PROGRESS, IMPLEMENTED (code and deterministic tests), VALIDATED
 (evidence on the required platform), or BLOCKED (with the blocker named). IMPLEMENTED is not
@@ -34,8 +34,14 @@ None yet.
 
 ## Blockers
 
-- None recorded. The CUDA ladders in S1-G need GPU allocation agreed with the other sessions and
-  with the hpREST2 project before they run.
+- S1-G: no GPU is available to this wave. Cards 0–4 are reserved by the user for the 0.6.0 gate
+  and 5–8 belong to hpREST2. Blocked is not passed; the deterministic CPU work continues.
+- Integration: S1's selection record changes three runtime call sites outside its files —
+  `ReplicaRun.compare_identity` (`remd/driver.py`), the identity callers in `run/preflight.py` and
+  `remd/driver.py`, and state rebuilding in `reference/export.py` and `reference/rest2_export.py`
+  — plus a passthrough in `remd/protocol.py` (`c39b5da`). S1 submits them as separate patch
+  commits; S0 reviews and lands them at integration. Until then, resume and export of a
+  selective ladder do not work on any branch.
 
 ## Notes
 
