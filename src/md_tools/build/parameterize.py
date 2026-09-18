@@ -150,8 +150,11 @@ def parameterize_ligand(*, input_path: Path, config_path: Optional[Path], out_pd
         raise ConfigError(f"-i {input_path}: no such file")
     if input_path.suffix.lower() not in PARAMETERIZE_SUFFIXES:
         raise ConfigError(
-            f"-i {input_path}: --parameterize reads a molecular graph with coordinates, so the "
-            f"input must be {', '.join(PARAMETERIZE_SUFFIXES)}, not {input_path.suffix}.")
+            f"-i {input_path}: --parameterize needs a molecular graph with BOND ORDERS, so the "
+            f"input must be {', '.join(PARAMETERIZE_SUFFIXES)}, not {input_path.suffix}. A .sdf "
+            f"or .mol2 supplies the coordinates too; a .smi states the chemistry and the "
+            f"conformer is embedded. A structure alone -- a .pdb, a .cif -- carries no bond "
+            f"orders, and they cannot be recovered from coordinates.")
     if not re.fullmatch(r"[A-Za-z0-9]{3}", str(residue_name)):
         raise ConfigError(f"--resname {residue_name!r} must be three letters or digits: it is the "
                           f"PDB residue-name field, and it names the files beside the package.")

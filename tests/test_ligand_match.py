@@ -261,3 +261,47 @@ def test_the_directory_identity_is_checked_whatever_the_declaration_says(tmp_pat
     renamed = package.path.rename(package.path.with_name("param_000000000000"))
     with pytest.raises(PackageError, match="a directory label is not an identity"):
         load_package(renamed)
+
+
+def test_resolve_package_reads_a_reference_or_a_path(tmp_path):
+    """The one resolver every configuration goes through, tested by name.
+
+    `solute.parameters`, `ligands[].parameters` and `ligands[].parameter` all end here, so the
+    distinction it draws -- a catalog reference against a path -- is worth exercising directly
+    rather than only through the four call sites that happen to use it.
+    """
+    import shutil
+
+    from md_tools.ligands import PackageError
+    from md_tools.ligands.catalog import is_catalog_reference, resolve_package
+
+    package = _package(tmp_path, "CCO", "CHEMBL545", "EOH")
+    catalog = tmp_path / "catalog"
+
+    assert is_catalog_reference(package.reference)
+    assert not is_catalog_reference("./parameter")
+    assert not is_catalog_reference(str(package.path))
+
+    # A catalog reference, found in the catalogs.
+    assert resolve_package(package.reference, roots=[catalog]).reference == package.reference
+
+    # A LOCAL directory, named whatever its build named it rather than param_<id>.
+    local = tmp_path / "build" / "parameter"
+    local.parent.mkdir()
+    shutil.copytree(package.path, local)
+    assert resolve_package(str(local), roots=[]).reference == package.reference
+    assert resolve_package("parameter", roots=[], base_dir=local.parent).reference \
+        == package.reference
+    assert resolve_package("./build/parameter", roots=[], base_dir=tmp_path).reference \
+        == package.reference
+
+    # A path that is not there says WHICH reading it took, because a mistyped catalog reference
+    # is exactly a path that does not exist.
+    with pytest.raises(PackageError, match="is not a directory"):
+        resolve_package("./not-there", roots=[catalog], base_dir=tmp_path)
+    with pytest.raises(PackageError, match="read as a path"):
+        resolve_package("CHEMBL545/param_typoooooooo", roots=[catalog], base_dir=tmp_path)
+
+    # A reference that IS well formed but absent is a catalog miss, and says so.
+    with pytest.raises(PackageError, match="was not found in"):
+        resolve_package("CHEMBL545/param_000000000000", roots=[catalog], base_dir=tmp_path)

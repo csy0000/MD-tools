@@ -12,6 +12,18 @@ generates itself, without a seed (`docs/backlog.md`, entry 6), so a flexible mol
 twice can get two different sets of charges. Before packages, a ligand build ran AM1-BCC again at
 each preparation step: hydrogens, solvent and System.
 
+**What reproducing looks like when it works.** Paracetamol has now been parameterised by three
+routes that share no code path: imported from a 0.5.3 System without generating a charge,
+generated from an SDF with `--parameterize`, and generated from a SMILES with the conformer
+embedded. All three give parameter id `param_e932f4c4f371`, the same `parameters.ffxml` bytes and
+charges equal to 0.0 in every atom, while `molecule.sdf` differs between the routes that embed
+their own conformer -- coordinates are not part of the identity. That is the behaviour a package
+is for, measured rather than assumed.
+
+**It is one compound, not a guarantee.** Paracetamol is small and nearly rigid, which is why it
+lands on the same charges every time. The unseeded-conformer warning above is still the honest
+statement for a flexible ligand, and it is the reason a package is saved rather than a recipe.
+
 ## What a package is
 
 ```text
