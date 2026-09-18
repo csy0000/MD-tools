@@ -11,6 +11,12 @@ and the specific 0.7.0 exception permitting `md-openmm combine-topology` under t
 executable. The four-command rule below describes the current 0.6.0 baseline; it must not block
 that explicitly requested future subcommand. Other runtime and scientific invariants still apply.
 
+The branch aims, the shared records the branches must agree on, and where each one stands are in
+[docs/development/](docs/development/README.md). **Nothing under that directory describes the
+installed package**; the guide below does. A worker session reads its own branch's `AIMS.md` and
+[shared-contracts.md](docs/development/shared-contracts.md) before touching code, and changes a
+shared contract by asking the coordinator, never with a private variant.
+
 ## The package
 
 One installed executable, `md-openmm`. Exactly four public work commands:

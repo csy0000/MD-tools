@@ -748,6 +748,23 @@ Related: entry 13, which concerns the same `peptide-like` classification route.
 
 ---
 
+## Moved to a development branch
+
+Requirements that were deferred rather than done, now carried by a branch with aims and acceptance
+criteria of its own. They left this list because something owns them, not because they were closed.
+
+| requirement | filed by | now |
+|---|---|---|
+| selected-residue REST2 — backbone and sidechain selection, chain-aware residue identity, torsion versus nonbonded membership, cross-boundary interactions | [20260917 instruction](history/claudecode-instructions/20260917_next-release-reusable-ligands-propka-cuda-ais.md) §9 | [0.6.1 aims](development/0.6.1/AIMS.md) |
+| thermodynamic integration — lambda schedules, window sampling, dU/dlambda, quadrature, uncertainty | same, §9 | [0.7.0 aims](development/0.7.0/AIMS.md) |
+| free-energy perturbation — supported transformations, BAR/MBAR, overlap diagnostics, atom mapping, softcore, charge-changing corrections | same, §9 | [0.7.0 aims](development/0.7.0/AIMS.md) |
+| bidirectional switching and alchemical transformations | same, §9 | [0.7.0 aims](development/0.7.0/AIMS.md), with AIS's own contract unchanged |
+| OpenMMTools-compatible AIS Langevin splitting | same, §9 | still deferred; no branch owns it |
+| more advanced protonation and tautomer preparation | same, §9 | still deferred; no branch owns it |
+
+The two "still deferred" rows are listed so that archiving their instruction does not lose them.
+Nothing above is implemented, and an aims page is not an implementation.
+
 ## Cross-references
 
 - `docs/release-notes/20260907-cv-validation-final-evidence.md` — the evidence behind the
