@@ -284,6 +284,9 @@ cost accounting. Specifically:
   including its own logs.
 - A checkpoint commit is a generation transaction. `md_tools.openmm.checkpoint` is the one
   implementation, for alchemical windows as for everything else.
+- No session reads or writes the machine's `$MD_DATA` (the user, 2026-09-19). Package and
+  catalog code is exercised against a temporary root with `MD_DATA` set to it; a registered
+  package is never a fixture.
 - Alchemical support is **optional** for existing cMD installations: an install without the
   alchemy extra keeps working unchanged.
 - Reused OpenFE / OpenMMTools components are pinned, with their license, version and commit
@@ -333,6 +336,9 @@ platform, command, evidence path, and a verdict of PASS / FAIL / BLOCKED / NOT R
 6. **CUDA and runtime** — real propagation, correct exchange state mapping, interruption and
    resume, changed-state rejection, installed-wheel execution outside the checkout, export
    reconstruction, full dataset registration.
+   *Registration is BLOCKED (sandbox) for this wave:* no session may touch the machine's
+   `$MD_DATA`. Registration code paths are tested against a temporary `MD_DATA` root only, and
+   the real registration row stays BLOCKED until the user lifts the restriction.
 7. **Regression** — existing cMD, whole-solute REST2 and two-state AIS keep their contracts, on
    the candidate integration commit.
 
