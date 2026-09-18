@@ -143,6 +143,67 @@ def test_md_run_refuses_ng_on_a_cmd_stage_and_writes_nothing(tmp_path):
         f"the rule fired without -ng: {accepted.stderr}"
 
 
+def test_md_run_check_creates_nothing_not_even_the_output_directory(tmp_path):
+    """`--check` printed "Nothing was created." and created `-odir` and `resolved.config`.
+
+    The message was false as it was printed. Each RUNTIME already returned read-only for `--check`;
+    `md-run` created both before dispatching to them, so the public surface produced what the
+    runtimes decline to -- and a `-odir` holding a `resolved.config` is what this project's contract
+    calls indistinguishable from a run that happened.
+
+    Three cases, because the third is what a guard on the first two could silently break.
+    """
+    fixture = _a_real_stage(tmp_path)
+
+    checked = subprocess.run(CLI + ["md-run", *fixture["argv"], "-odir", "fresh", "--check"],
+                             cwd=fixture["cwd"], capture_output=True, text=True, timeout=300)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "Nothing was created" in checked.stdout, checked.stdout
+    assert not (tmp_path / "fresh").exists(), \
+        f"--check created -odir: {sorted(p.name for p in (tmp_path / 'fresh').iterdir())}"
+
+    # AN EXISTING `-odir` is the same violation with the directory already supplied: `--check` must
+    # not add `resolved.config` to a tree it was asked only to report on.
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    (existing / "marker.txt").write_text("kept", encoding="utf-8")
+    again = subprocess.run(CLI + ["md-run", *fixture["argv"], "-odir", "existing", "--check"],
+                           cwd=fixture["cwd"], capture_output=True, text=True, timeout=300)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert sorted(p.name for p in existing.iterdir()) == ["marker.txt"], \
+        sorted(p.name for p in existing.iterdir())
+
+    # AND A REAL RUN IS UNCHANGED. The fix routes `resolved.config` through a temporary directory
+    # under `--check`; if that leaked into the ordinary path, nothing would be written at all.
+    real = subprocess.run(CLI + ["md-run", *fixture["argv"], "-odir", "real"],
+                          cwd=fixture["cwd"], capture_output=True, text=True, timeout=600)
+    assert real.returncode == 0, real.stdout[-2000:] + real.stderr[-2000:]
+    assert (tmp_path / "real" / "resolved.config").is_file(), \
+        f"a real run wrote nothing: {sorted(p.name for p in (tmp_path / 'real').iterdir())}"
+
+
+def test_md_run_check_on_a_chain_does_not_demand_what_only_running_produces(tmp_path):
+    """A whole-workflow `--check` was refused BY CONSTRUCTION.
+
+    Stage 2's `-c <odir>/min.xml` is stage 1's own output. Under `--check` nothing runs, so it
+    cannot exist -- and the command that answers "would this start?" refused because the work had
+    not been done. `_continuation_inputs` already carries the one legitimate exception, a NAMED
+    earlier stage that writes the file, and `validate_generated_chain` states it at generation time.
+    `md-run` never stated it.
+    """
+    fixture = _a_real_stage(tmp_path)
+    (tmp_path / "chain.in").write_text("&cntrl\n  protocol = cMD,\n/\n", encoding="utf-8")
+
+    done = subprocess.run(
+        CLI + ["md-run", "-i", "chain.in", "-p", "built.pdb", "-s", "built.xml",
+               "-odir", "chain", "--check"],
+        cwd=fixture["cwd"], capture_output=True, text=True, timeout=600)
+
+    assert "does not exist" not in done.stderr, \
+        f"a chain --check still demands an artefact only running produces:\n{done.stderr}"
+    assert not (tmp_path / "chain").exists(), "--check created -odir for a chain"
+
+
 # --- 2. one MPI authority ----------------------------------------------------------------------
 
 def test_no_permissive_mpi_import_survives_outside_the_one_authority():

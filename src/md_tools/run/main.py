@@ -517,25 +517,48 @@ def md_run_main(argv: list[str] | None = None) -> int:
         return 2
 
     # Only now. Everything above touched nothing.
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        config_path = _write_resolved(out_dir, run_input, overwrite=bool(args.overwrite))
-    except SystemExit as refusal:
-        print(f"md-run: {refusal}", file=sys.stderr)
-        return 2
+    #
+    # `--check` CREATES NOTHING, NOT EVEN `-odir` -- and it used to create both the directory and
+    # `resolved.config` on the next two lines, immediately under that sentence, and then print
+    # "Nothing was created." The message was false as it was printed, and what it left behind is
+    # what this project's contract calls indistinguishable from a run that happened.
+    #
+    # Every RUNTIME already returns read-only for `--check` (`md/stage.py`, `remd/generated.py`,
+    # `ais/run.py`, each via `report_check`). `md-run` reached this point BEFORE dispatching to
+    # them, so the public surface created what the runtimes correctly decline to -- the same gap as
+    # `-ng`, in the same file.
+    #
+    # The resolved document is still written, because every runtime reads it back by path and binds
+    # its digest, but into a temporary directory that is discarded. `-odir` is untouched, and
+    # nothing below is skipped, shortened or weakened: each stage still runs its own preflight and
+    # still refuses.
+    import tempfile
 
-    # `stage` decides, not `protocol`. A REST2 workflow's minimisation and equilibration are
-    # ordinary stages of that workflow: an input that names one asks for that stage, and only an
-    # input that names none asks for the ladder itself. Dispatching on the protocol alone sent
-    # `min.in` to the replica executor, which had no coordinates and refused.
-    if run_input.stage is not None:
-        return _run_stages(args, resolved, run_input.stage, config_path)
-    if protocol == "REST2":
-        return _run_ladder(args, resolved, protocol, config_path)
-    if protocol == "AIS":
-        return _run_ais(args, resolved, config_path)
-    return _run_stages(args, resolved, None, config_path)
+    checking = tempfile.TemporaryDirectory(prefix="md-run-check-") if args.check else None
+    out_dir = Path(checking.name) if checking is not None else Path(args.out_dir)
+    if checking is None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        try:
+            config_path = _write_resolved(out_dir, run_input, overwrite=bool(args.overwrite))
+        except SystemExit as refusal:
+            print(f"md-run: {refusal}", file=sys.stderr)
+            return 2
+
+        # `stage` decides, not `protocol`. A REST2 workflow's minimisation and equilibration are
+        # ordinary stages of that workflow: an input that names one asks for that stage, and only an
+        # input that names none asks for the ladder itself. Dispatching on the protocol alone sent
+        # `min.in` to the replica executor, which had no coordinates and refused.
+        if run_input.stage is not None:
+            return _run_stages(args, resolved, run_input.stage, config_path)
+        if protocol == "REST2":
+            return _run_ladder(args, resolved, protocol, config_path)
+        if protocol == "AIS":
+            return _run_ais(args, resolved, config_path)
+        return _run_stages(args, resolved, None, config_path)
+    finally:
+        if checking is not None:
+            checking.cleanup()
 
 
 # ---------------------------------------------------------------------------------------------
@@ -546,6 +569,7 @@ def _run_stages(args, resolved: dict[str, Any], stage: str | None, config_path: 
     """One named stage, or the whole workflow in order when the input names none."""
     from ..build.md import stage_plan
     from ..md.stage import stage_main
+    from .preflight import PendingParent
 
     plan = stage_plan(resolved)
     names = [entry["name"] for entry in plan]
@@ -557,6 +581,18 @@ def _run_stages(args, resolved: dict[str, Any], stage: str | None, config_path: 
     chosen = [entry for entry in plan if stage is None or entry["name"] == stage]
     out_dir = Path(args.out_dir)
     previous = args.coordinates
+    # THE PARENT THIS CHAIN WILL PRODUCE, STATED rather than inferred from its absence.
+    #
+    # Under `--check` nothing runs, so stage 2's `-c <out_dir>/min.xml` cannot exist, and a whole
+    # chain was therefore refused BY CONSTRUCTION: the command that answers "would this start?"
+    # demanded an artefact that only starting produces. `_continuation_inputs` already carries the
+    # one legitimate exception -- a NAMED earlier stage that writes the file -- and
+    # `validate_generated_chain` states it at generation time for exactly this reason. `md-run`
+    # never stated it, so the mechanism existed and this surface did not use it.
+    #
+    # A real run is unaffected: stage 1 writes the file before stage 2 reads it, so the path exists
+    # and the pending case is never consulted. If stage 1 fails, the loop returns before stage 2.
+    previous_name = None
     for entry in chosen:
         name = entry["name"]
         # The name this stage's artefacts are FILED under. See the flags below.
@@ -592,13 +628,20 @@ def _run_stages(args, resolved: dict[str, Any], stage: str | None, config_path: 
             # flag that is not listed here does not reach the stage at all -- which is how
             # `--resume` and `--overwrite` were accepted by `md-run` and silently dropped.
             resume=args.resume, overwrite=args.overwrite)
-        code = stage_main(dict(entry, resolved_config=str(config_path)),
+        pending = (PendingParent(path=Path(previous), produced_by=previous_name)
+                   if previous_name is not None and previous else None)
+        code = stage_main(dict(entry, resolved_config=str(config_path),
+                               pending_parent=pending),
                           _forward(forwarded, names=("coordinates", "trajectory", "restart",
                                                      "log", "output", "checkpoint", "device")))
         if code != 0:
             print(f"md-run: stage {name} failed with exit code {code}", file=sys.stderr)
             return code
         previous = forwarded.restart
+        # THE STAGE THAT PRODUCES THE NEXT STAGE'S `-c`. Without this, `previous_name` stayed None
+        # for the whole chain and every `PendingParent` above evaluated to None -- the statement was
+        # constructed and never had anything to state.
+        previous_name = name
     return 0
 
 
