@@ -37,7 +37,26 @@ def _classified(fx, region, tmp_path=None):
     return unscaled_torsions(fx.topology, region["classification_atoms"], residue_sdfs=sdfs)
 
 
+#: The package every LGA instance is recorded as, in a synthetic `ligand_mapping.json`.
+LGA_PACKAGE = "LOCAL-ABCDEFGHIJKLMN/param_0123456789ab"
+
+
+def mapping_for(fixture):
+    """A `ligand_mapping.json`-shaped record naming each LGA/LGB residue's package."""
+    instances = []
+    for residue in fixture.topology.residues():
+        if residue.name in ("LGA", "LGB"):
+            parameter = "param_0123456789ab" if residue.name == "LGA" else "param_ba9876543210"
+            instances.append({"residue_name": residue.name,
+                              "package": {"compound_id": "LOCAL-ABCDEFGHIJKLMN",
+                                          "parameter_id": parameter,
+                                          "residue_name": residue.name},
+                              "resolved": {"residue_index": residue.index}})
+    return {"schema": "md-tools-ligand-mapping/1", "instances": instances}
+
+
 def _select(fx, config, tmp_path=None, **kwargs):
+    kwargs.setdefault("ligand_mapping", mapping_for(fx))
     region = resolve_region(fx.topology, config, config_dir=tmp_path, **kwargs)
     return region, explicit_selection(fx.topology, fx.system, region,
                                       _classified(fx, region, tmp_path))
@@ -236,11 +255,14 @@ def test_two_distinct_ligands_are_selected_independently(fx, tmp_path):
     assert [i["label"] for i in region["ligand_instances"]] == ["A", "B"]
 
 
-def _exclusions(path, pairs, residue_name="LGA"):
+def _exclusions(path, pairs, residue_name="LGA", parameters=LGA_PACKAGE):
     import yaml
 
-    path.write_text(yaml.safe_dump({"format": EXCLUSIONS_FORMAT, "residue_name": residue_name,
-                                    "central_bonds": [list(p) for p in pairs]}), encoding="utf-8")
+    document = {"format": EXCLUSIONS_FORMAT, "residue_name": residue_name,
+                "central_bonds": [list(p) for p in pairs]}
+    if parameters is not None:
+        document["parameters"] = parameters
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
     return path
 
 
@@ -260,18 +282,49 @@ def test_an_exclusion_file_is_mapped_by_package_local_names_and_saved_by_content
     assert len(block["sha256"]) == 64
 
 
-@pytest.mark.parametrize("pairs, residue_name, words", [
-    ([("C1", "H1")], "LGA", "not a central bond"),
-    ([("C2", "C9")], "LGA", "does not have"),
-    ([("C2", "C3")], "LGB", "written for residue"),
+@pytest.mark.parametrize("pairs, residue_name, parameters, words", [
+    ([("C1", "H1")], "LGA", LGA_PACKAGE, "not a central bond"),
+    ([("C2", "C9")], "LGA", LGA_PACKAGE, "does not have"),
+    ([("C2", "C3")], "LGB", LGA_PACKAGE, "written for residue"),
+    ([("C2", "C3")], "LGA", None, "must name the parameter package"),
+    ([("C2", "C3")], "LGA", "LOCAL-ABCDEFGHIJKLMN/param_ba9876543210", "mean nothing"),
 ])
-def test_an_exclusion_file_that_protects_nothing_is_refused(fx, tmp_path, pairs, residue_name,
-                                                            words):
-    _exclusions(tmp_path / "L01.yaml", pairs, residue_name)
+def test_an_exclusion_file_that_protects_nothing_or_is_unbound_is_refused(
+        fx, tmp_path, pairs, residue_name, parameters, words):
+    _exclusions(tmp_path / "L01.yaml", pairs, residue_name, parameters)
     config = {"ligand_scaling_dict": {"L01": {"mask": f":{RESIDUE['LGA#1']}",
                                               "torsion_exclusions": "L01.yaml"}}}
     with pytest.raises(SelectionError, match=words):
         _select(fx, config, tmp_path)
+
+
+def test_an_exclusion_file_on_an_instance_with_no_recorded_package_is_refused(fx, tmp_path):
+    _exclusions(tmp_path / "L01.yaml", [("C2", "C3")])
+    config = {"ligand_scaling_dict": {"L01": {"mask": f":{RESIDUE['LGA#1']}",
+                                              "torsion_exclusions": "L01.yaml"}}}
+    with pytest.raises(SelectionError, match="no recorded parameter package"):
+        _select(fx, config, tmp_path, ligand_mapping=None)
+
+
+def test_an_exclusion_on_a_bond_with_no_torsion_term_is_refused(fx, tmp_path):
+    """A candidate bond (both ends have neighbours) whose force field gave it no proper term."""
+    from openmm import PeriodicTorsionForce, XmlSerializer
+
+    first = RESIDUE["LGA#1"]
+    target = {fx.atom(first, "N1"), fx.atom(first, "C4")}
+    stripped = XmlSerializer.deserialize(XmlSerializer.serialize(fx.system))
+    force = next(f for f in stripped.getForces() if isinstance(f, PeriodicTorsionForce))
+    for term in range(force.getNumTorsions()):
+        i, j, k, l, n, phase, kv = force.getTorsionParameters(term)
+        if {j, k} == target:
+            force.setTorsionParameters(term, i, l, k, j, n, phase, kv)   # no longer across it
+    _exclusions(tmp_path / "L01.yaml", [("N1", "C4")])
+    config = {"ligand_scaling_dict": {"L01": {"mask": f":{first}",
+                                              "torsion_exclusions": "L01.yaml"}}}
+    region = resolve_region(fx.topology, config, config_dir=tmp_path,
+                            ligand_mapping=mapping_for(fx))
+    with pytest.raises(SelectionError, match="central bond of no proper torsion"):
+        explicit_selection(fx.topology, stripped, region, _classified(fx, region, tmp_path))
 
 
 def test_a_mutated_exclusion_file_is_detected_and_the_record_still_holds_what_ran(fx, tmp_path):
@@ -299,6 +352,7 @@ def test_reordered_atoms_keep_the_named_exclusion_on_the_same_chemical_bond(tmp_
     first = RESIDUE["LGA#1"]
     selections = []
     for fixture, where in ((straight, tmp_path / "a"), (reversed_, tmp_path / "b")):
+        # The mapping record is per fixture: residue indices are the fixture's own.
         where.mkdir()
         _exclusions(where / "L01.yaml", [("C2", "C3")])
         config = {"ligand_scaling_dict": {"L01": {"mask": f":{first}",

@@ -229,9 +229,16 @@ def load_torsion_exclusions(path: Path, *, where: str) -> dict[str, Any]:
         found = document.get("format") if isinstance(document, dict) else type(document).__name__
         raise SelectionError(f"{where}: {path} is not a {EXCLUSIONS_FORMAT} file (format: "
                              f"{found!r})")
-    unknown = sorted(set(document) - {"format", "residue_name", "central_bonds", "note"})
+    unknown = sorted(set(document) - {"format", "parameters", "residue_name", "central_bonds",
+                                      "note"})
     if unknown:
         raise SelectionError(f"{where}: {path}: unknown key(s) {unknown}")
+    parameters = document.get("parameters")
+    if not isinstance(parameters, str) or "/param_" not in parameters:
+        raise SelectionError(
+            f"{where}: {path} must name the parameter package its atom names belong to, as "
+            f"`parameters: <compound>/param_<id>` (got {parameters!r}). A residue name cannot "
+            f"bind it: two packages can share one, and names from one mean nothing in the other.")
     bonds = document.get("central_bonds")
     if not isinstance(bonds, list) or not all(
             isinstance(b, list) and len(b) == 2 and all(isinstance(n, str) for n in b)
@@ -239,7 +246,8 @@ def load_torsion_exclusions(path: Path, *, where: str) -> dict[str, Any]:
         raise SelectionError(f"{where}: {path}: central_bonds is a list of [atom name, atom name] "
                              f"pairs in the package's own atom names")
     return {"file": str(path), "sha256": hashlib.sha256(raw).hexdigest(),
-            "contents": raw.decode("utf-8"), "residue_name": document.get("residue_name"),
+            "contents": raw.decode("utf-8"), "parameters": parameters,
+            "residue_name": document.get("residue_name"),
             "central_bonds": [list(b) for b in bonds]}
 
 
@@ -381,6 +389,21 @@ def resolve_region(topology, config: Mapping[str, Any], *, config_dir: Path | No
             if not path.is_absolute() and config_dir is not None:
                 path = Path(config_dir) / path
             loaded = load_torsion_exclusions(path, where=f"{where}.torsion_exclusions")
+            package = instance["package"] or {}
+            bound = (f"{package.get('compound_id')}/{package.get('parameter_id')}"
+                     if package.get("parameter_id") else None)
+            if bound is None:
+                raise SelectionError(
+                    f"{where}.torsion_exclusions: {path} is bound to package "
+                    f"{loaded['parameters']}, and residue {number} {residue.name} has no recorded "
+                    f"parameter package (no ligand_mapping.json instance resolves to it), so its "
+                    f"atom names cannot be shown to be that package's. Use `auto`, or build the "
+                    f"structure from a registered package with `md-openmm build-top`.")
+            if loaded["parameters"] != bound:
+                raise SelectionError(
+                    f"{where}.torsion_exclusions: {path} is written for package "
+                    f"{loaded['parameters']}, and instance {label} (residue {number}) is package "
+                    f"{bound}. Package-local atom names from one package mean nothing in another.")
             if loaded["residue_name"] not in (None, residue.name):
                 raise SelectionError(
                     f"{where}.torsion_exclusions: {path} is written for residue "
@@ -396,6 +419,7 @@ def resolve_region(topology, config: Mapping[str, Any], *, config_dir: Path | No
                                               instance["atoms"][second])))
             instance["torsion_exclusions"] = {
                 "mode": "file", "file": block["torsion_exclusions"], "sha256": loaded["sha256"],
+                "parameters": loaded["parameters"],
                 "contents": loaded["contents"], "central_bonds": loaded["central_bonds"],
                 "resolved_central_bonds": resolved_pairs}
         instances.append(instance)
@@ -543,6 +567,27 @@ def explicit_selection(topology, system, region: Mapping[str, Any],
                     f"say a rotation keeps its barrier when no such rotation exists.")
             from_files[pair] = instance["label"]
 
+    # ...and it must be the central bond of a PROPER torsion the System actually has. A bond a
+    # torsion could run across but that the force field gave no term protects nothing either.
+    if from_files:
+        from openmm import PeriodicTorsionForce
+
+        from .hamiltonian import system_bond_graph, torsion_kind
+
+        graph = system_bond_graph(system)
+        with_terms = set()
+        for force in system.getForces():
+            if isinstance(force, PeriodicTorsionForce):
+                for term in range(force.getNumTorsions()):
+                    i, j, k, l = (int(x) for x in force.getTorsionParameters(term)[:4])
+                    if torsion_kind((i, j, k, l), graph) == "proper":
+                        with_terms.add(tuple(sorted((j, k))))
+        for pair, label in from_files.items():
+            if pair not in with_terms:
+                raise SelectionError(
+                    f"ligand_scaling_dict.{label}.torsion_exclusions names bond {list(pair)}, "
+                    f"which is the central bond of no proper torsion in this System: the "
+                    f"exclusion would protect nothing, and the record would say otherwise.")
     excluded = sorted((set(candidates) & protected) | set(from_files))
     selected = sorted(set(candidates) - set(excluded))
     reasons = {tuple(sorted(e["bond"])): e["class"] for e in classified.get("central_bonds", [])}

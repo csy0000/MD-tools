@@ -108,7 +108,11 @@ class REST2Scaler:
         return identity_record(self.scaled_system(tau), tau=float(tau),
                                temperature_k=float(temperature_k), ensemble=str(ensemble),
                                solute_indices=arguments["solute_indices"],
-                               excluded_bonds=arguments["excluded_bonds"], extra=extra)
+                               excluded_bonds=arguments["excluded_bonds"],
+                               unscaled_impropers=arguments["unscaled_impropers"],
+                               selection=(self.selection.to_document()
+                                          if self.selection.explicit else None),
+                               extra=extra)
 
     def scaling_factors(self, tau: float) -> tuple[float, float]:
         """`(s, sqrt(s))` for this tau. Derived on demand; never persisted."""
