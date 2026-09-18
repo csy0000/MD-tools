@@ -83,9 +83,9 @@ class REST2Scaler:
 
     def scaled_system(self, tau: float):
         """A new System at this tau. The base System is never mutated."""
-        arguments = self.selection.as_scaler_arguments()
-        return build_scaled_system(self.base_system, arguments["solute_indices"], float(tau),
-                                   excluded_bonds=arguments["excluded_bonds"])
+        arguments = dict(self.selection.as_scaler_arguments())
+        return build_scaled_system(self.base_system, arguments.pop("solute_indices"),
+                                   float(tau), **arguments)
 
     def ladder(self, n_states: int, tau_max: float) -> list[float]:
         """The linear tau ladder. State 0 is always the unmodified physical Hamiltonian."""

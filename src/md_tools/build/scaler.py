@@ -64,6 +64,25 @@ def _check_residue_settings(resolved: dict[str, Any]) -> None:
     resolved["proline_like_residues"] = list(names)
 
 
+def _check_selectors(resolved: dict[str, Any]) -> None:
+    """Parse the selective-REST2 masks here, so a grammar error is a configuration error."""
+    from ..rest2.regions import has_selectors, parse_selectors
+    from ..rest2.selection import SelectionError
+
+    if not has_selectors(resolved):
+        return
+    try:
+        parse_selectors(resolved)
+    except SelectionError as refusal:
+        raise ConfigError(str(refusal)) from None
+    if not resolved["unscaled_torsions"]:
+        raise ConfigError(
+            "a selective REST2 region (backbone_scaling_list, sidechain_scaling_list, "
+            "ligand_scaling_dict) keeps every improper unscaled, and an improper has no central "
+            "bond by which a region could own it; `unscaled_torsions: false` is supported only "
+            "for the legacy full-solute selection. Remove it, or remove every selector.")
+
+
 SCALER_SCHEMA = Schema(
     "scaler.config",
     doc="Scaled Hamiltonians from a built System, for `md-openmm build-top --rest2-scaler`.",
@@ -86,6 +105,18 @@ SCALER_SCHEMA = Schema(
         Field("max_proline_ring_size", int, default=7, minimum=3, maximum=12,
               doc="From bond orders, an amide nitrogen in a ring of at most this many atoms is "
                   "proline-like. The bound is what keeps a macrocycle's omegas ordinary."),
+        Field("backbone_scaling_list", str, default=None, nullable=True,
+              doc="Selective REST2 (explicit solvent): residues whose BACKBONE is hot, as a "
+                  "quoted AMBER residue mask of one-based topology residue indices, e.g. "
+                  "\":45,46,59\" or \":45-50\". Any selector present means only the named "
+                  "categories are hot; none present is the whole solute."),
+        Field("sidechain_scaling_list", str, default=None, nullable=True,
+              doc="Selective REST2: residues whose SIDECHAIN is hot, same mask grammar. Chi1 "
+                  "belongs to the sidechain."),
+        Field("ligand_scaling_dict", dict, default=None, nullable=True,
+              doc="Selective REST2: hot ligand INSTANCES, label -> {mask: \":<one residue>\", "
+                  "torsion_exclusions: auto | <md-tools-torsion-exclusions/1 file>}. One entry "
+                  "per copy; selecting one copy never selects its twin."),
     ],
     sections=[
         Section("schedule", [
@@ -99,7 +130,7 @@ SCALER_SCHEMA = Schema(
                   doc="tau of the last state."),
         ], doc="The tau of every state."),
     ],
-    checks=[_check_schedule, _check_residue_settings],
+    checks=[_check_schedule, _check_residue_settings, _check_selectors],
 )
 
 
@@ -507,15 +538,35 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
     taus = schedule_taus(config["schedule"])
     state0_is_physical = taus[0] == 0.0
 
+    # SELECTIVE REST2 (0.6.1): any selector present resolves an EXPLICIT region; none present is
+    # the legacy full solute, through exactly the code below as it was. `classified` is the set of
+    # atoms the torsion classifier must see: the whole solute, or the residues the region touches.
+    from ..rest2.regions import explicit_selection, has_selectors, resolve_region
+    from ..rest2.selection import LEGACY_MODE, ScalingSelection, SelectionError, topology_digest
+
+    explicit = has_selectors(config)
+    region = None
+    classified_atoms = solute
+    if explicit:
+        mapping_path = parent / "ligand_mapping.json"
+        ligand_mapping = (json.loads(mapping_path.read_text(encoding="utf-8"))
+                          if mapping_path.is_file() else None)
+        try:
+            region = resolve_region(topology, config, config_dir=config_path.parent,
+                                    ligand_mapping=ligand_mapping, implicit=loaded.implicit)
+        except SelectionError as refusal:
+            raise ConfigError(f"{method} states for {topology_path.name}: {refusal}") from None
+        classified_atoms = region["classification_atoms"]
+
     enabled = config["unscaled_torsions"]
     residue_sdfs: dict[str, Path] = {}
     if enabled:
         residue_sdfs = resolve_residue_sdfs(
-            topology, solute, system_dir=parent, config_dir=config_path.parent,
+            topology, classified_atoms, system_dir=parent, config_dir=config_path.parent,
             sdf_filelist=config["sdf_filelist"],
             proline_like_residues=config["proline_like_residues"])
         try:
-            unscaled = unscaled_torsions(topology, solute, residue_sdfs=residue_sdfs,
+            unscaled = unscaled_torsions(topology, classified_atoms, residue_sdfs=residue_sdfs,
                                          proline_like_residues=config["proline_like_residues"],
                                          max_proline_ring_size=config["max_proline_ring_size"])
         except UnclassifiedTorsionError as refusal:
@@ -527,16 +578,35 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
                                         "torsion is scaled, impropers and ordinary amide omegas "
                                         "included",
                     "amide_detail": {"unscaled": [], "proline_like_scaled": []}}
-    excluded = [tuple(int(a) for a in bond) for bond in unscaled["unscaled_central_bonds"]]
-    impropers = bool(unscaled["unscaled_impropers"])
+    if explicit:
+        try:
+            selection = explicit_selection(topology, loaded.system, region, unscaled)
+        except SelectionError as refusal:
+            raise ConfigError(f"{method} states for {topology_path.name}: {refusal}") from None
+    else:
+        selection = ScalingSelection(
+            solute_atoms=tuple(int(i) for i in solute),
+            excluded_bonds=tuple(tuple(int(a) for a in bond)
+                                 for bond in unscaled["unscaled_central_bonds"]),
+            topology_sha256=topology_digest(topology), detection=unscaled["detection_method"],
+            mode=LEGACY_MODE, unscaled_impropers=bool(unscaled["unscaled_impropers"]),
+            detector_version=unscaled.get("detector_version"))
+    arguments = selection.as_scaler_arguments()
+    excluded = [tuple(int(a) for a in bond) for bond in arguments["excluded_bonds"]]
+    impropers = bool(arguments["unscaled_impropers"])
+    hot = arguments["solute_indices"]
 
     try:
-        systems, audit = build_rung_systems(loaded.system, solute, tuple(taus),
-                                            excluded_bonds=excluded, unscaled_impropers=impropers)
+        systems, audit = build_rung_systems(
+            loaded.system, hot, tuple(taus), excluded_bonds=excluded,
+            unscaled_impropers=impropers,
+            torsion_central_bonds=arguments["torsion_central_bonds"],
+            cmap_terms=arguments["cmap_terms"])
     except Exception as broken:
         raise ConfigError(f"the scaled Systems could not be constructed: "
                           f"{type(broken).__name__}: {broken}") from None
-    report = torsion_exclusion_report(loaded.system, solute, excluded, impropers)
+    report = torsion_exclusion_report(loaded.system, hot, excluded, impropers,
+                                      arguments["torsion_central_bonds"])
     counts = {kind: sum(1 for e in unscaled["central_bonds"] if e["class"] == kind)
               for kind in ("amide_omega", "aromatic_ring", "double_bond")}
 
@@ -554,6 +624,15 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
                    # The exact list, so a reference bundle can re-derive the state from the built
                    # System with OpenMM alone rather than trusting a range to be contiguous.
                    "atom_indices": [int(i) for i in solute]},
+        # WHICH region is hot, and how it was chosen (md-tools-solute-selection/2.0). `solute`
+        # above stays the whole solute: it is what trajectories and restraints are about. The
+        # scaled states are exactly `build_scaled_system(built, **selection arguments, tau)`.
+        "selection": selection.to_document(),
+        "selection_sha256": selection.digest(),
+        "scaler_arguments": {key: (None if value is None else
+                                   [list(v) if isinstance(v, tuple) else v for v in value])
+                             if key != "unscaled_impropers" else value
+                             for key, value in arguments.items()},
         "unscaled_torsions": {
             "enabled": enabled,
             "classes": ["amide_omega", "aromatic_ring", "double_bond", "improper"] if enabled
@@ -598,15 +677,15 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
                         "solute_solute_expression": "(1 - tau)^2",
                         "solute_environment_expression": "1 - tau"}})
     pictures = optional_residue_sdfs(
-        topology, solute, system_dir=parent, config_dir=config_path.parent,
+        topology, classified_atoms, system_dir=parent, config_dir=config_path.parent,
         sdf_filelist=config["sdf_filelist"],
         proline_like_residues=config["proline_like_residues"])
     pictures.update(residue_sdfs)
     centres = _improper_centres(loaded.system, report["unscaled_improper_indices"])
     depictions = depict_unscaled_torsions(
-        topology, solute, pictures, excluded, staging, enabled=enabled,
+        topology, classified_atoms, pictures, excluded, staging, enabled=enabled,
         improper_centres=centres)
-    depictions.update(depict_protein_unscaled(topology, solute, excluded, staging,
+    depictions.update(depict_protein_unscaled(topology, classified_atoms, excluded, staging,
                                               enabled=enabled, improper_centres=centres))
     record["unscaled_torsions"]["depictions"] = {
         name: (dict(facts, sha256=_sha256(staging / facts["file"])) if "file" in facts
@@ -634,6 +713,23 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
         log(f"  state 0 is at tau = {taus[0]}: it is NOT the physical Hamiltonian. REST2 recovers "
             f"the physical ensemble only from an unscaled state, so no state here samples it.")
     log.field("solute", f"{len(solute)} atom(s)")
+    if explicit:
+        from ..rest2.regions import print_residue_map
+
+        document = record["selection"]
+        log.field("selection", f"EXPLICIT ({document['policy']}): "
+                               f"{len(document['selected_nonbonded_atoms'])} nonbonded atom(s), "
+                               f"{len(document['selected_torsion_central_bonds'])} torsion "
+                               f"central bond(s), {len(document['scaled_cmap_terms'])} CMAP "
+                               f"term(s) scaled")
+        print_residue_map(document, echo=log)
+        for entry in document["partially_owned_central_bonds"] or []:
+            log(f"  NOT scaled: bond {entry['bond']} -- {entry['reason']}")
+        for entry in document["cmap_decisions"] or []:
+            if entry["reason"].startswith("MIXED"):
+                log(f"  CMAP term {entry['term']}: {entry['reason']}")
+    else:
+        log.field("selection", "legacy full solute (no selector present)")
     section = record["unscaled_torsions"]
     if enabled:
         log.field("unscaled torsions",
