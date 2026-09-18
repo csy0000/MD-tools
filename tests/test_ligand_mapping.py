@@ -209,11 +209,11 @@ def test_selectors_that_do_not_name_exactly_one_residue_are_refused(tmp_path):
     pdb = _write_structure(tmp_path / "dup.pdb", [("B", "201", "TYL", tyl, (2.5, 0, 0)),
                                                   ("B", "201", "TYL", tyl, (0, 2.5, 0))])
     packages = {tyl.reference: tyl}
-    with pytest.raises(MappingError, match="matches 2 residues"):
+    with pytest.raises(MappingError, match="matches 2 residues; a stated residue number"):
         map_ligands(pdb.topology, pdb.positions,
                     [{"select": {"chain": "B", "resid": "201"}, "parameters": tyl.reference}],
                     packages)
-    with pytest.raises(MappingError, match="matches 0 residues"):
+    with pytest.raises(MappingError, match="matches no residue"):
         map_ligands(pdb.topology, pdb.positions,
                     [{"select": {"chain": "Z", "resid": "201"}, "parameters": tyl.reference}],
                     packages)
@@ -318,3 +318,58 @@ def test_unmapped_non_standard_residues_are_listed(tmp_path):
     known = {"ACE", "ALA", "NME", "HOH"}
     left = unmapped_residues(pdb.topology, [LigandSelector("B", "201")], known_residue_names=known)
     assert left == [{"chain": "C", "resid": "201", "insertion_code": "", "residue_name": "TYL"}]
+
+
+def test_a_resname_selector_maps_every_copy_to_one_package(tmp_path):
+    """Four copies of one compound in a structure take the same parameters; say it once.
+
+    A residue NAME may match several residues and all of them are mapped. A stated residue NUMBER
+    still names exactly one, because two residues answering to it is an ambiguous structure rather
+    than an instruction to map both.
+    """
+    from md_tools.ligands.mapping import MappingError, map_ligands
+
+    tyl = _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    eth = _package(tmp_path, "CCO", "CHEMBL545", "EOH")
+    pdb = _write_structure(tmp_path / "many.pdb", [
+        ("B", "201", "TYL", tyl, (2.5, 0, 0)),
+        ("C", "201", "TYL", tyl, (0, 2.5, 0)),
+        ("D", "301", "TYL", tyl, (0, 0, 2.5)),
+        ("B", "202", "EOH", eth, (2.5, 2.5, 0)),
+    ])
+    packages = {tyl.reference: tyl, eth.reference: eth}
+
+    mapped = map_ligands(pdb.topology, pdb.positions,
+                         [{"resname": "TYL", "parameters": tyl.reference},
+                          {"resname": "EOH", "parameters": eth.reference}], packages)
+    assert [i.key for i in mapped.instances] == [("B", "201", ""), ("C", "201", ""),
+                                                 ("D", "301", ""), ("B", "202", "")]
+    assert {i.package.reference for i in mapped.instances[:3]} == {tyl.reference}
+
+    # Composing narrows it: every TYL of chain B.
+    one = map_ligands(pdb.topology, pdb.positions,
+                      [{"resname": "TYL", "chain": "B", "parameters": tyl.reference},
+                       {"resname": "EOH", "parameters": eth.reference}], packages)
+    assert [i.key for i in one.instances] == [("B", "201", ""), ("B", "202", "")]
+
+    # Two entries naming one residue is refused: a residue takes its parameters from one entry.
+    with pytest.raises(MappingError, match="already names"):
+        map_ligands(pdb.topology, pdb.positions,
+                    [{"resname": "TYL", "parameters": tyl.reference},
+                     {"select": {"chain": "B", "resid": "201"}, "parameters": tyl.reference},
+                     {"resname": "EOH", "parameters": eth.reference}], packages)
+
+    # A selector that names nothing is refused whichever spelling it is written in.
+    with pytest.raises(MappingError, match="matches no residue"):
+        map_ligands(pdb.topology, pdb.positions,
+                    [{"resname": "ZZZ", "parameters": tyl.reference}], packages)
+
+
+def test_a_package_may_be_named_by_path_instead_of_a_catalog_reference(tmp_path):
+    """`parameter: <path>` is for a build that has a package folder and no catalog at all."""
+    from md_tools.ligands.mapping import entry_selector_and_reference
+
+    tyl = _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    selector, reference = entry_selector_and_reference(
+        {"resname": "TYL", "parameter": str(tyl.path)}, where="ligands[0]")
+    assert selector.resname == "TYL" and reference == str(tyl.path)

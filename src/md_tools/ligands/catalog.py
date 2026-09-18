@@ -92,8 +92,14 @@ def find_package(reference: str, roots: Iterable[Path]) -> LigandPackage:
 
 
 def register_package(package_dir: Path, catalog_root: Path) -> tuple[LigandPackage, Path, bool]:
-    """Copy a verified package into the catalog. Returns (package, destination, newly_written)."""
-    package = load_package(Path(package_dir))
+    """Copy a verified package into the catalog. Returns (package, destination, newly_written).
+
+    The SOURCE directory may be named anything: a local package folder is `build/parameter/`, not
+    `param_<id>/`, and registration is what gives it the catalog's shape. The DESTINATION is built
+    from the package's own identity by `copy_into`, so `<compound>/param_<id>/` is still what the
+    catalog holds -- and the copy placed there is loaded again, with its name checked.
+    """
+    package = load_package(Path(package_dir), expected_directory_name=False)
     destination = Path(catalog_root) / package.compound_id / package.parameter_id
     if destination.exists():
         # The same identity was registered before, typically by another build of the same

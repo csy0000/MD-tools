@@ -43,15 +43,57 @@ def cmd_build_top(args) -> int:
     from ..build.strict import ConfigError
     from ..build.top import build_topology
 
-    # TWO MODES, and each refuses the other's flags by name rather than ignoring them.
-    #   build-top -i STRUCTURE ...                         builds a System
+    # THREE MODES, and each refuses the others' flags by name rather than ignoring them.
+    #   build-top -i STRUCTURE ...                          builds a System
     #   build-top --rest2-scaler -s SYSTEM -p PDB --config  scales a built System
+    #   build-top --parameterize -i MOLECULE --resname NAME writes a parameter package
     # The output paths have documented defaults, so "given" means "not the default".
     structure_flags = {"-i": args.input,
                        "-os": None if args.out_system == "./built.xml" else args.out_system,
                        "-op": None if args.out_pdb == "./built.pdb" else args.out_pdb,
                        "-log": None if args.out_log == "./built.log" else args.out_log}
     scaler_flags = {"-s": args.system, "-p": args.topology}
+    parameterize_only = {"--resname": args.resname, "--register": args.register or None}
+    if args.rest2_scaler and args.parameterize:
+        print("build-top: --rest2-scaler and --parameterize are two different jobs: one scales a "
+              "built System, the other writes a parameter package from a molecule. Run them "
+              "separately.", file=sys.stderr)
+        return 2
+    if args.parameterize:
+        given = [flag for flag, value in scaler_flags.items() if value is not None]
+        if given or args.resname is None:
+            print("build-top: --parameterize writes a parameter package from ONE molecule, so it "
+                  "takes -i, --resname, --config, -op, -os and --register"
+                  + (f"; refused: {' '.join(given)}" if given else "")
+                  + ("; missing: --resname" if args.resname is None else ""), file=sys.stderr)
+            return 2
+        if args.input is None:
+            print("build-top: --parameterize needs -i MOLECULE (.sdf or .mol2)", file=sys.stderr)
+            return 2
+        from ..build.parameterize import parameterize_ligand
+
+        try:
+            parameterize_ligand(
+                input_path=Path(args.input),
+                config_path=Path(args.config) if args.config else None,
+                out_pdb=Path(args.out_pdb), out_system=Path(args.out_system),
+                out_log=Path(args.out_log), residue_name=args.resname,
+                register=bool(args.register), overwrite=bool(args.overwrite),
+                user_config=args.user_config if hasattr(args, "user_config") else None,
+                md_data=args.md_data if hasattr(args, "md_data") else None)
+        except ConfigError as exc:
+            print(f"build-top: {exc}", file=sys.stderr)
+            return 2
+        except Exception as exc:
+            print(f"build-top: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+        return 0
+    refused = [flag for flag, value in parameterize_only.items() if value is not None]
+    if refused and not args.rest2_scaler:
+        print(f"build-top: {' '.join(refused)} belongs to --parameterize, which writes a parameter "
+              f"package from one molecule; without it build-top builds a System from -i",
+              file=sys.stderr)
+        return 2
     if args.rest2_scaler:
         given = [flag for flag, value in structure_flags.items() if value is not None]
         missing = [flag for flag, value in scaler_flags.items() if value is None]
@@ -311,6 +353,23 @@ def build_parser() -> argparse.ArgumentParser:
     top.add_argument("--config", default=None, metavar="PATH",
                      help="build configuration (YAML syntax, .config suffix); built-in defaults "
                           "are used when omitted")
+    top.add_argument("--parameterize", action="store_true",
+                     help="parameterise ONE molecule (-i a .sdf or .mol2) into a reusable "
+                          "parameter package, written into the directory that -op and -os name, "
+                          "with readable <RESNAME>.sdf/.pdb/.xml copies beside it. Charges are "
+                          "generated once, or an existing package is reused when the catalog "
+                          "holds a matching one. See docs/ligand-packages.md.")
+    top.add_argument("--resname", default=None, metavar="NAME",
+                     help="with --parameterize: the three-character residue name the molecule "
+                          "takes, which also names the readable copies")
+    top.add_argument("--register", action="store_true",
+                     help="with --parameterize: register the package afterwards, through the "
+                          "same write-once path as `data-register --ligand-package`")
+    top.add_argument("--user-config", default=None, metavar="PATH",
+                     help="with --parameterize --register: the user configuration to resolve "
+                          "$MD_DATA from")
+    top.add_argument("--md-data", default=None, metavar="DIR",
+                     help="with --parameterize --register: the managed storage root")
     top.add_argument("--overwrite", action="store_true",
                      help="replace existing outputs instead of refusing (with --rest2-scaler, the "
                           "previous build/<method>/ is moved aside, never deleted)")

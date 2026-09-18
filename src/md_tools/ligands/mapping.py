@@ -48,6 +48,7 @@ from .package import LigandPackage
 
 __all__ = [
     "LigandInstance",
+    "entry_selector_and_reference",
     "LigandSelector",
     "MappedStructure",
     "MappingError",
@@ -81,39 +82,101 @@ class MappingError(ValueError):
 
 @dataclass(frozen=True)
 class LigandSelector:
-    """One residue in the input structure, named the way the structure names it."""
+    """WHICH residues an entry is about, named the way the structure names them.
 
-    chain: str
-    resid: str
+    Two ways to say it, and they differ in how many residues they may name:
+
+      `{resname: TYL}`                 every residue with that name. Four copies of one ligand in
+                                       an asymmetric unit is ordinary, and they take the same
+                                       parameters, so this is the shape that says so once.
+      `{chain: B, resid: "201"}`       exactly one residue. `resid` is an identifier, so it is a
+                                       quoted string.
+
+    They compose: any key that is stated must match, so `{resname: TYL, chain: B}` is every TYL of
+    chain B. What decides whether several matches are allowed is whether `resid` was stated -- a
+    residue number names ONE residue, and two residues answering to it is an ambiguous structure,
+    not an instruction to map both. A selector that matches nothing is always refused.
+    """
+
+    chain: str = ""
+    resid: str = ""
     insertion_code: str = ""
+    resname: str = ""
+
+    KEYS = ("resname", "chain", "resid", "insertion_code")
 
     @classmethod
     def from_mapping(cls, block: Mapping[str, Any], *, where: str) -> "LigandSelector":
-        unknown = sorted(set(block) - {"chain", "resid", "insertion_code"})
+        unknown = sorted(set(block) - set(cls.KEYS))
         if unknown:
             raise MappingError(f"{where}: unknown selector key(s) {unknown}; a selector is "
-                               f"{{chain, resid, insertion_code}}")
-        for key in ("chain", "resid"):
-            if key not in block:
-                raise MappingError(f"{where}: selector needs `{key}`")
-        resid = block["resid"]
-        if not isinstance(resid, str):
+                               f"{{resname}} or {{chain, resid, insertion_code}}, or any "
+                               f"combination of them")
+        if not any(block.get(key) for key in ("resname", "chain", "resid")):
+            raise MappingError(f"{where}: selector needs `resname`, or `chain` and `resid`; an "
+                               f"empty selector would name every residue in the structure")
+        if "resid" in block and "chain" not in block:
+            raise MappingError(f"{where}: `resid` without `chain` does not identify a residue -- "
+                               f"the same number occurs in every chain. Add `chain`, or select by "
+                               f"`resname`.")
+        if "insertion_code" in block and "resid" not in block:
+            raise MappingError(f"{where}: `insertion_code` distinguishes residues that share a "
+                               f"number, so it belongs with `resid`.")
+        resid = block.get("resid", "")
+        if "resid" in block and not isinstance(resid, str):
             raise MappingError(
                 f"{where}: resid must be a quoted string (\"201\"), got {resid!r}. Residue numbers "
                 f"are identifiers, not integers: '0201' and '201' may be different residues in a "
                 f"file, and a hybrid-36 number is not an integer at all.")
-        return cls(chain=str(block["chain"]), resid=resid,
-                   insertion_code=str(block.get("insertion_code", "") or ""))
+        return cls(chain=str(block.get("chain", "") or ""), resid=str(resid or ""),
+                   insertion_code=str(block.get("insertion_code", "") or ""),
+                   resname=str(block.get("resname", "") or ""))
+
+    @property
+    def names_one_residue(self) -> bool:
+        """Whether this selector may match only one residue: a residue NUMBER was stated."""
+        return bool(self.resid)
 
     def label(self) -> str:
-        return f"chain {self.chain!r} resid {self.resid!r} icode {self.insertion_code!r}"
+        parts = []
+        if self.resname:
+            parts.append(f"resname {self.resname!r}")
+        if self.chain:
+            parts.append(f"chain {self.chain!r}")
+        if self.resid:
+            parts.append(f"resid {self.resid!r}")
+            parts.append(f"icode {self.insertion_code!r}")
+        return " ".join(parts)
 
     def matches(self, residue) -> bool:
-        return (residue.chain.id == self.chain and str(residue.id).strip() == self.resid
-                and (residue.insertionCode or "").strip() == self.insertion_code)
+        if self.resname and residue.name.strip().upper() != self.resname.strip().upper():
+            return False
+        if self.chain and residue.chain.id != self.chain:
+            return False
+        if self.resid:
+            if str(residue.id).strip() != self.resid:
+                return False
+            if (residue.insertionCode or "").strip() != self.insertion_code:
+                return False
+        return True
+
+    def residues(self, topology) -> list:
+        """Every residue this selector names, or a refusal saying how many it found."""
+        found = [r for r in topology.residues() if self.matches(r)]
+        if not found:
+            raise MappingError(
+                f"{self.label()} matches no residue. Check the residue name, the chain id (the "
+                f"AUTHOR chain for mmCIF) and the residue number.")
+        if len(found) > 1 and self.names_one_residue:
+            raise MappingError(
+                f"{self.label()} matches {len(found)} residues; a stated residue number names "
+                f"one. Chain ids must be unique across the structure -- an expanded assembly "
+                f"whose copies reuse a chain id is ambiguous. Select by `resname` to map every "
+                f"copy of a ligand with the same parameters.")
+        return found
 
     def as_dict(self) -> dict[str, str]:
-        return {"chain": self.chain, "resid": self.resid, "insertion_code": self.insertion_code}
+        return {key: getattr(self, key) for key in self.KEYS}
 
 
 @dataclass
@@ -121,6 +184,11 @@ class LigandInstance:
     """One mapped ligand, bound to its residue identity and the package's atom names."""
 
     selector: LigandSelector
+    #: THE RESIDUE this instance is, as the structure identifies it. Not the selector: a
+    #: `resname` selector names several residues, so the selector cannot identify one of them,
+    #: and everything downstream -- freezing, re-finding after a step that shifts indices,
+    #: templates -- is about a residue rather than about the line that selected it.
+    residue_key: tuple[str, str, str]
     residue_name: str
     package: LigandPackage = field(repr=False)
     heavy_atom_map: list[dict[str, Any]]
@@ -132,7 +200,16 @@ class LigandInstance:
 
     @property
     def key(self) -> tuple[str, str, str]:
-        return (self.selector.chain, self.selector.resid, self.selector.insertion_code)
+        return self.residue_key
+
+    def label(self) -> str:
+        chain, resid, icode = self.residue_key
+        return (f"{self.residue_name} chain {chain!r} resid {resid!r}"
+                + (f" icode {icode!r}" if icode else ""))
+
+    def is_this_residue(self, residue) -> bool:
+        return (residue.chain.id, str(residue.id).strip(),
+                (residue.insertionCode or "").strip()) == self.residue_key
 
     @property
     def template_name(self) -> str:
@@ -140,20 +217,24 @@ class LigandInstance:
 
     def find(self, topology):
         """The residue carrying this instance in *topology*, verified by atom names; or a refusal."""
-        found = [r for r in topology.residues() if self.selector.matches(r)]
+        found = [r for r in topology.residues() if self.is_this_residue(r)]
         if len(found) != 1:
-            raise MappingError(f"ligand instance {self.selector.label()}: {len(found)} residues "
+            raise MappingError(f"ligand instance {self.label()}: {len(found)} residues "
                                f"match in this topology, expected exactly 1")
         residue = found[0]
         names = tuple(a.name for a in residue.atoms())
         if names != tuple(self.package.atom_names):
-            raise MappingError(f"ligand instance {self.selector.label()}: its atoms are {names}, "
+            raise MappingError(f"ligand instance {self.label()}: its atoms are {names}, "
                                f"not the package's {tuple(self.package.atom_names)}")
         return residue
 
     def record(self, topology=None) -> dict[str, Any]:
         record: dict[str, Any] = {
             "selector": self.selector.as_dict(),
+            # WHICH residue the selector resolved to. A `resname` selector names several, so the
+            # selector alone does not say which one this instance is.
+            "residue": {"chain": self.residue_key[0], "resid": self.residue_key[1],
+                        "insertion_code": self.residue_key[2]},
             "residue_name": self.residue_name,
             "package": self.package.summary(),
             "heavy_atom_map": self.heavy_atom_map,
@@ -434,6 +515,44 @@ def _check_stereo(package: LigandPackage, positions_nm: np.ndarray, where: str) 
 # ------------------------------------------------------------------------------------------------
 # mapping
 # ------------------------------------------------------------------------------------------------
+def entry_selector_and_reference(entry: Mapping[str, Any], *,
+                                 where: str) -> tuple[LigandSelector, str]:
+    """The selector and the package an entry names, in either spelling it may be written in.
+
+    Two shapes, because they say the same thing:
+
+        - select: {chain: B, resid: "201"}       a selector under `select`, with the package
+          parameters: CHEMBL112/param_...        beside it as a catalog reference;
+        - {resname: TYL, parameter: /path/...}   the selector keys written directly in the entry,
+                                                 with the package as a path to its directory.
+
+    `parameters` is a catalog reference, resolved against the configured catalogs; `parameter` is a
+    filesystem path to a package directory, for a build that has one locally and no catalog.
+    Exactly one of them, because two would have to agree and nothing would check that they do.
+    """
+    keys = set(entry)
+    known = {"select", "parameters", "parameter", "atom_map", *LigandSelector.KEYS}
+    unknown = sorted(keys - known)
+    if unknown:
+        raise MappingError(f"{where}: unknown key(s) {unknown}")
+    references = [key for key in ("parameters", "parameter") if entry.get(key)]
+    if len(references) != 1:
+        raise MappingError(
+            f"{where}: needs exactly one of `parameters` (a <compound>/param_<id> catalog "
+            f"reference) or `parameter` (a path to a package directory); "
+            f"{'both are set' if references else 'neither is set'}.")
+    inline = {key: entry[key] for key in LigandSelector.KEYS if key in entry}
+    if "select" in entry and inline:
+        raise MappingError(f"{where}: the selector is written both under `select` and directly in "
+                           f"the entry ({sorted(inline)}); write it once.")
+    block = entry["select"] if "select" in entry else inline
+    if not isinstance(block, Mapping):
+        raise MappingError(f"{where}.select: expected a mapping of selector keys")
+    selector = LigandSelector.from_mapping(block, where=f"{where}.select" if "select" in entry
+                                           else where)
+    return selector, str(entry[references[0]])
+
+
 def unmapped_residues(topology, selectors: Iterable[LigandSelector], *,
                       known_residue_names: Iterable[str]) -> list[dict[str, str]]:
     """Residues no force-field template names and no selector covers: they cannot be built."""
@@ -540,7 +659,10 @@ def _map_one(topology, positions_nm: np.ndarray, residue, selector: LigandSelect
                   "deposited_serial": getattr(heavy[d], "id", None)}
                  for p, d in sorted(match.items())]
     instance = LigandInstance(
-        selector=selector, residue_name=residue.name, package=package, heavy_atom_map=heavy_map,
+        selector=selector,
+        residue_key=(residue.chain.id, str(residue.id).strip(),
+                     (residue.insertionCode or "").strip()),
+        residue_name=residue.name, package=package, heavy_atom_map=heavy_map,
         hydrogen_source=hydrogen_source, symmetry=symmetry, coordination_contacts=[],
         dropped_bonds=[], positions_nm=placed)
     return instance, placed, heavy
@@ -586,31 +708,24 @@ def map_ligands(topology, positions, entries: Sequence[Mapping[str, Any]],
 
     positions_nm = np.array(positions.value_in_unit(unit.nanometer)
                             if hasattr(positions, "value_in_unit") else positions, dtype=float)
-    selectors: list[LigandSelector] = []
     plans = []
+    claimed: dict[int, str] = {}
     for n, entry in enumerate(entries):
         where = f"ligands[{n}]"
-        unknown = sorted(set(entry) - {"select", "parameters", "atom_map"})
-        if unknown:
-            raise MappingError(f"{where}: unknown key(s) {unknown}")
-        if "select" not in entry or "parameters" not in entry:
-            raise MappingError(f"{where}: needs `select` and `parameters`")
-        selector = LigandSelector.from_mapping(entry["select"], where=f"{where}.select")
-        if selector in selectors:
-            raise MappingError(f"{where}: {selector.label()} is selected twice")
-        selectors.append(selector)
-        found = [r for r in topology.residues() if selector.matches(r)]
-        if len(found) != 1:
-            raise MappingError(
-                f"{where}: {selector.label()} matches {len(found)} residues; exactly one is "
-                f"required. " + ("Chain ids must be unique across the structure -- an expanded "
-                                 "assembly whose copies reuse a chain id is ambiguous."
-                                 if found else "Check the chain id (the author chain for mmCIF), "
-                                               "the residue number and the insertion code."))
-        reference = str(entry["parameters"])
+        selector, reference = entry_selector_and_reference(entry, where=where)
         if reference not in packages:
             raise MappingError(f"{where}: package {reference!r} is not loaded")
-        plans.append((selector, found[0], packages[reference], entry.get("atom_map"), where))
+        # EVERY residue the selector names. A `resname` selector maps every copy of that ligand to
+        # the same package, which is what four copies of one compound in an asymmetric unit need;
+        # a stated residue number still names exactly one, and `residues` refuses anything else.
+        for residue in selector.residues(topology):
+            if residue.index in claimed:
+                raise MappingError(
+                    f"{where}: {selector.label()} names residue {residue.name} "
+                    f"{residue.chain.id}:{str(residue.id).strip()}, which {claimed[residue.index]} "
+                    f"already names. One residue takes its parameters from one entry.")
+            claimed[residue.index] = where
+            plans.append((selector, residue, packages[reference], entry.get("atom_map"), where))
 
     instances: dict[int, tuple[LigandInstance, np.ndarray, list]] = {}
     for selector, residue, package, atom_map, where in plans:
@@ -662,7 +777,7 @@ def map_ligands(topology, positions, entries: Sequence[Mapping[str, Any]],
                           "single-residue package; the metal site model owns it"})
             continue
         raise MappingError(
-            f"ligand {instance.selector.label()}: the input declares a covalent bond from "
+            f"ligand {instance.label()}: the input declares a covalent bond from "
             f"{mapped_atom.name} to {_atom_label(other)}. A covalently attached ligand is not "
             f"supported by a single-residue package; it needs an explicit validated "
             f"representation of the linkage.")
@@ -792,13 +907,13 @@ def assert_instances_unchanged(before: MappedStructure, topology, positions, *,
         atoms = list(residue.atoms())
         expected_elements = [a.GetSymbol() for a in instance.package.mol.GetAtoms()]
         if [a.element.symbol for a in atoms] != expected_elements:
-            raise MappingError(f"after {step}: ligand {instance.selector.label()} elements changed")
+            raise MappingError(f"after {step}: ligand {instance.label()} elements changed")
         expected_bonds = {tuple(sorted((instance.package.atom_names[b.GetBeginAtomIdx()],
                                         instance.package.atom_names[b.GetEndAtomIdx()])))
                           for b in instance.package.mol.GetBonds()}
         if bonds_by_residue.get(residue.index, set()) != expected_bonds:
-            raise MappingError(f"after {step}: ligand {instance.selector.label()} bonds changed")
+            raise MappingError(f"after {step}: ligand {instance.label()} bonds changed")
         moved = np.max(np.abs(xyz[[a.index for a in atoms]] - instance.positions_nm))
         if moved > POSITION_TOLERANCE_NM:
-            raise MappingError(f"after {step}: ligand {instance.selector.label()} atoms moved by "
+            raise MappingError(f"after {step}: ligand {instance.label()} atoms moved by "
                                f"up to {moved:.2e} nm")

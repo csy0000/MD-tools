@@ -174,6 +174,46 @@ not match, and a build record keeps it.
 
 ## Making a package
 
+**With `build-top --parameterize`**, which exists to produce a package and nothing else:
+
+```bash
+md-openmm build-top --parameterize -i TYL.sdf --config para.config \
+    -op build/parameter/TYL.pdb -os build/parameter/TYL.xml \
+    -log build/parameterize.log --resname TYL [--register]
+```
+
+`-i` reads a `.sdf` or a `.mol2` -- the only place `.mol2` is accepted, because parameterisation
+needs a molecular graph with bond orders and that is what several docking and preparation tools
+write. `-op` and `-os` must name files in ONE directory, and that directory is what is written:
+
+```text
+build/parameter/  molecule.sdf       the package
+                  parameters.ffxml   the package
+                  metadata.json      the package
+                  parameter.config   the package
+                  TYL.sdf            a readable copy of the molecule, named for --resname
+                  TYL.pdb            the molecule as a topology (-op)
+                  TYL.xml            the molecule ALONE as a serialised System (-os)
+```
+
+The first four ARE a package, so the directory registers and a catalog search finds it. The last
+three are what a person, a tutorial and a later command line point at; they are declared in the
+metadata with their digests, and a package whose copies were modified is refused. `-log` must be
+written OUTSIDE the directory, because a package holds nothing it does not declare.
+
+`TYL.xml` is the molecule alone: no solvent, no box, no cutoff, no constraints. It is a parameters
+artefact for reading and comparing, not a system to integrate -- a run's Hamiltonian comes from a
+`build-top` build that loads this package.
+
+The directory needs no particular name: `build/parameter/` is a perfectly good local package, and
+`<compound>/param_<id>/` is only what the CATALOG requires. `--register` is optional and goes
+through the same write-once path as `data-register --ligand-package`; it is not a second
+registration.
+
+`solute.parameters` applies here too, so a molecule the catalog already holds in this exact state,
+with these charges and this force field, is REUSED rather than charged again. What the mode
+guarantees is a package directory, not a charge calculation.
+
 **In a build.** A single-molecule build (`solute.kind: ligand` or `peptide-like`) with no
 `solute.parameters` creates a package from its prepared molecule before any force field is built.
 The charges are generated once, and every step of that build loads the saved parameters:
@@ -245,26 +285,42 @@ took 86 s.
 solute:
   kind: complex
 ligands:
-  - select: {chain: B, resid: "201", insertion_code: ""}
-    parameters: CHEMBL112/param_e932f4c4f371
-  - select: {chain: D, resid: "201"}
-    parameters: CHEMBL112/param_e932f4c4f371      # a second copy: same package
-  - select: {chain: B, resid: "202"}
-    parameters: LOCAL-XXXXXXXXXXXXXX/param_...    # a different species
+  # Every copy of a ligand, by residue NAME, taking one package. The common case.
+  - {resname: TYL, parameters: CHEMBL112/param_e932f4c4f371}
+  # A package that is not in any catalog: a path to its directory, relative to this file.
+  - {resname: EOH, parameter: ../build/parameter}
+  # Or one named residue, when copies must differ.
+  - select: {chain: B, resid: "202", insertion_code: ""}
+    parameters: LOCAL-XXXXXXXXXXXXXX/param_...
 solvent:
   model: TIP3P
 ```
+
+An entry says WHICH residues and WHICH package:
+
+* the selector is `{resname: TYL}`, `{chain: B, resid: "201"}`, or any combination of them -- each
+  stated key narrows. It may be written directly in the entry or under `select`, but not both.
+  **A `resname` selector maps EVERY residue of that name**, which is what several copies of one
+  compound need. A stated `resid` still names exactly one residue: two residues answering to one
+  number is an ambiguous structure, not an instruction to map both, and it is refused. A selector
+  that matches nothing is refused, and two entries naming one residue are refused;
+* the package is `parameters: <compound>/param_<id>` (looked up in the catalogs) or
+  `parameter: <path to a package directory>` (for a build that has one locally and no catalog).
+  Exactly one of the two. A local directory need not be named `param_<id>`; that shape is what the
+  CATALOG requires, and `<system>/build/parameter/` is a perfectly good local package.
 
 `-i` is a `.pdb` or a `.cif`. Before anything is written, the build does the following, in order,
 and refuses on the first failure:
 
 1. **Packages.** Every `parameters` reference is loaded from `ligand_catalog.path`, then from
-   `$MD_DATA/parameters/ligands`, and verified.
-2. **Selectors.** Each selector names exactly one residue. `chain` is the chain id the file
-   carries; for mmCIF that is the AUTHOR chain (`auth_asym_id`), which is what OpenMM reads. The
-   label chain is not accepted in its place. `resid` is a quoted string. A structure whose chains
-   reuse an id (an assembly expanded without new chain ids) makes the selector ambiguous and is
-   refused.
+   `$MD_DATA/parameters/ligands`; every `parameter` path is loaded from where it points. Both are
+   verified.
+2. **Selectors.** Each selector names at least one residue, and one whose `resid` is stated names
+   exactly one. `chain` is the chain id the file carries; for mmCIF that is the AUTHOR chain
+   (`auth_asym_id`), which is what OpenMM reads. The label chain is not accepted in its place.
+   `resid` is a quoted string. A structure whose chains reuse an id (an assembly expanded without
+   new chain ids) makes a `chain`/`resid` selector ambiguous and is refused; `resname` is the way
+   to map every copy deliberately.
 3. **Coverage.** Every residue that is not a standard protein residue, water or ion must be
    covered by an entry. An unmapped one is refused, never guessed and never deleted.
 4. **Graph match.** The residue's heavy atoms must have the package's elements and connectivity.

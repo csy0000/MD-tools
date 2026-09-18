@@ -720,9 +720,18 @@ def _check_ligand_settings(resolved: dict[str, Any]) -> None:
                         f"charges; a second statement could only agree with it or be "
                         f"ignored. Remove solute.{key}.")
         for n, entry in enumerate(entries):
-            if not isinstance(entry, dict) or "parameters" not in entry:
-                raise ConfigError(f"ligands[{n}] must be a mapping with `select` and `parameters`")
-            parse_reference(entry["parameters"])
+            if not isinstance(entry, dict):
+                raise ConfigError(f"ligands[{n}] must be a mapping")
+            from ..ligands.mapping import MappingError, entry_selector_and_reference
+
+            try:
+                _selector, reference = entry_selector_and_reference(entry, where=f"ligands[{n}]")
+            except MappingError as exc:
+                raise ConfigError(str(exc)) from exc
+            # A catalog REFERENCE is checked for its shape here; a PATH is checked where it is
+            # loaded, because whether a directory holds a package is not a question about syntax.
+            if "parameters" in entry:
+                parse_reference(reference)
     except (CompoundIdError, PackageError) as exc:
         raise ConfigError(str(exc)) from exc
 
@@ -1539,14 +1548,25 @@ def _map_complex_ligands(structure_path: Path, resolved: dict[str, Any], config_
     roots = catalog_roots(resolved, config_path)
     entries = resolved["ligands"]
     try:
+        from ..ligands.mapping import entry_selector_and_reference
+        from ..ligands.package import load_package
+
         packages = {}
-        for entry in entries:
-            reference = entry["parameters"]
-            if reference not in packages:
+        selectors = []
+        for n, entry in enumerate(entries):
+            selector, reference = entry_selector_and_reference(entry, where=f"ligands[{n}]")
+            selectors.append(selector)
+            if reference in packages:
+                continue
+            if "parameter" in entry:
+                # A PATH, relative to the configuration that names it, so a build works from a
+                # package directory beside it with no catalog configured at all.
+                path = Path(reference).expanduser()
+                if not path.is_absolute() and config_path is not None:
+                    path = Path(config_path).parent / path
+                packages[reference] = load_package(path)
+            else:
                 packages[reference] = find_package(reference, roots)
-        selectors = [LigandSelector.from_mapping(entry.get("select") or {},
-                                                 where=f"ligands[{n}].select")
-                     for n, entry in enumerate(entries)]
         known = set(PROTEIN_RESIDUES) | set(WATER_RESIDUE_NAMES) | set(ION_RESIDUE_NAMES)
         left = unmapped_residues(structure.topology, selectors, known_residue_names=known)
         if left:
