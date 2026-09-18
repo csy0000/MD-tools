@@ -161,12 +161,12 @@ def test_dummies_interact_with_nothing(hybrid, side):
     dummies = sorted(hybrid.dummies(side))
     x0 = hybrid.positions_nm
     rng = np.random.default_rng(11)
-    base = _energies_by_class(hybrid.system(side), x0, "Reference")
+    base = _energies_by_class(hybrid.system(side), x0)
     base_dummy = sum(dummy_energy(hybrid.record, side, x0).values())
     for trial in range(3):
         x = x0.copy()
         x[dummies] = x[8 + 3 * trial] + rng.normal(scale=0.05, size=(len(dummies), 3))
-        moved = _energies_by_class(hybrid.system(side), x, "Reference")
+        moved = _energies_by_class(hybrid.system(side), x)
         moved_dummy = sum(dummy_energy(hybrid.record, side, x).values())
         assert abs(moved["NonbondedForce"] - base["NonbondedForce"]) < ENERGY_TOL_KJ
         bonded = sum(moved[k] - base[k] for k in ("HarmonicBondForce", "HarmonicAngleForce",
@@ -478,8 +478,8 @@ def test_a_written_plan_moves_and_reloads_with_identical_energies(hybrid, tmp_pa
     assert loaded.common == hybrid.common and loaded.b_only == hybrid.b_only
     assert np.array_equal(loaded.positions_nm, hybrid.positions_nm)
     for side in ("A", "B"):
-        assert _energies_by_class(loaded.system(side), loaded.positions_nm, "Reference") == \
-               _energies_by_class(hybrid.system(side), hybrid.positions_nm, "Reference")
+        assert _energies_by_class(loaded.system(side), loaded.positions_nm) == \
+               _energies_by_class(hybrid.system(side), hybrid.positions_nm)
 
 
 @pytest.mark.parametrize("damage", ["system_b.xml", "plan.json", "extra-file"])
@@ -567,3 +567,16 @@ def test_a_plan_rewritten_from_a_loaded_plan_is_the_same_plan(hybrid, tmp_path):
     digest = hybrid.record["numbering"]["combined_topology_sha256"]
     assert topology_digest(hybrid.topology) == topology_digest(second.topology) == digest
     assert second.sha256 == hybrid.sha256
+
+
+def test_recovery_has_no_platform_choice(hybrid, water, eta):
+    """Recovery Contexts are Reference by construction: there is no second platform policy."""
+    import inspect
+
+    from md_tools.alchemy import topology_recovery as recovery
+
+    for function in (recovery.endpoint_accounting, recovery.audit_plan,
+                     recovery._energies_by_class, recovery._dispersion):
+        assert "platform" not in inspect.signature(function).parameters, function.__name__
+    assert _accounting(hybrid, water, eta, "A")["platform"] == recovery.RECOVERY_PLATFORM == \
+        "Reference"
