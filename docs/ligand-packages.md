@@ -245,26 +245,42 @@ took 86 s.
 solute:
   kind: complex
 ligands:
-  - select: {chain: B, resid: "201", insertion_code: ""}
-    parameters: CHEMBL112/param_e932f4c4f371
-  - select: {chain: D, resid: "201"}
-    parameters: CHEMBL112/param_e932f4c4f371      # a second copy: same package
-  - select: {chain: B, resid: "202"}
-    parameters: LOCAL-XXXXXXXXXXXXXX/param_...    # a different species
+  # Every copy of a ligand, by residue NAME, taking one package. The common case.
+  - {resname: TYL, parameters: CHEMBL112/param_e932f4c4f371}
+  # A package that is not in any catalog: a path to its directory, relative to this file.
+  - {resname: EOH, parameter: ../build/parameter}
+  # Or one named residue, when copies must differ.
+  - select: {chain: B, resid: "202", insertion_code: ""}
+    parameters: LOCAL-XXXXXXXXXXXXXX/param_...
 solvent:
   model: TIP3P
 ```
+
+An entry says WHICH residues and WHICH package:
+
+* the selector is `{resname: TYL}`, `{chain: B, resid: "201"}`, or any combination of them -- each
+  stated key narrows. It may be written directly in the entry or under `select`, but not both.
+  **A `resname` selector maps EVERY residue of that name**, which is what several copies of one
+  compound need. A stated `resid` still names exactly one residue: two residues answering to one
+  number is an ambiguous structure, not an instruction to map both, and it is refused. A selector
+  that matches nothing is refused, and two entries naming one residue are refused;
+* the package is `parameters: <compound>/param_<id>` (looked up in the catalogs) or
+  `parameter: <path to a package directory>` (for a build that has one locally and no catalog).
+  Exactly one of the two. A local directory need not be named `param_<id>`; that shape is what the
+  CATALOG requires, and `<system>/build/parameter/` is a perfectly good local package.
 
 `-i` is a `.pdb` or a `.cif`. Before anything is written, the build does the following, in order,
 and refuses on the first failure:
 
 1. **Packages.** Every `parameters` reference is loaded from `ligand_catalog.path`, then from
-   `$MD_DATA/parameters/ligands`, and verified.
-2. **Selectors.** Each selector names exactly one residue. `chain` is the chain id the file
-   carries; for mmCIF that is the AUTHOR chain (`auth_asym_id`), which is what OpenMM reads. The
-   label chain is not accepted in its place. `resid` is a quoted string. A structure whose chains
-   reuse an id (an assembly expanded without new chain ids) makes the selector ambiguous and is
-   refused.
+   `$MD_DATA/parameters/ligands`; every `parameter` path is loaded from where it points. Both are
+   verified.
+2. **Selectors.** Each selector names at least one residue, and one whose `resid` is stated names
+   exactly one. `chain` is the chain id the file carries; for mmCIF that is the AUTHOR chain
+   (`auth_asym_id`), which is what OpenMM reads. The label chain is not accepted in its place.
+   `resid` is a quoted string. A structure whose chains reuse an id (an assembly expanded without
+   new chain ids) makes a `chain`/`resid` selector ambiguous and is refused; `resname` is the way
+   to map every copy deliberately.
 3. **Coverage.** Every residue that is not a standard protein residue, water or ion must be
    covered by an entry. An unmapped one is refused, never guessed and never deleted.
 4. **Graph match.** The residue's heavy atoms must have the package's elements and connectivity.
