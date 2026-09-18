@@ -640,7 +640,9 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
             "method": unscaled["detection_method"],
             "central_bonds": unscaled["central_bonds"],
             "counts": dict(counts, improper_terms=report["n_unscaled_impropers"]),
-            "unscaled_central_bonds": [list(bond) for bond in unscaled["unscaled_central_bonds"]],
+            # What the scaler actually protected: the classifier's bonds (legacy), or those of
+            # the region's candidate bonds it protects plus any exclusion file's (explicit).
+            "unscaled_central_bonds": [list(bond) for bond in excluded],
             "unscaled_impropers": impropers,
             "proline_like_scaled_bonds": [list(bond)
                                           for bond in unscaled["proline_like_scaled_bonds"]],

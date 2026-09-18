@@ -163,7 +163,10 @@ def identity_record(system, *, tau, temperature_k, ensemble, solute_indices=(),
     by the three lists. An explicit selection MUST be passed: from the three lists alone an
     explicit region is indistinguishable from the whole solute.
     """
-    if selection is None:
+    # A LEGACY document is ignored in favour of the three lists: a legacy Hamiltonian's identity
+    # must not depend on whether its `scaler.yaml` was written before or after 0.6.1 recorded one.
+    if selection is None or selection.get("selection_mode", LEGACY_SELECTION_MODE) == \
+            LEGACY_SELECTION_MODE:
         selection = _legacy_selection_document(solute_indices, excluded_bonds,
                                                unscaled_impropers)
     mode = selection.get("selection_mode", LEGACY_SELECTION_MODE)
