@@ -177,8 +177,15 @@ def _place(positions_nm: np.ndarray, centre: np.ndarray) -> np.ndarray:
     return positions_nm - positions_nm.mean(axis=0) + centre
 
 
+#: Protein force fields the fixture can be built with. ff19SB carries CMAP and NO periodic
+#: torsion across N-CA or CA-C (phi and psi live entirely in its CMAP); ff14SB has no CMAP and
+#: does carry them. A backbone selection is only fully exercised by both.
+FORCEFIELDS = {"ff19SB": ("amber19/protein.ff19SB.xml", "amber19/tip3p.xml"),
+               "ff14SB": ("amber14/protein.ff14SB.xml", "amber14/tip3p.xml")}
+
+
 def build_fixture(*, padding_nm: float = 0.6, ligand_order=("LGA", "LGB", "LGA"),
-                  reverse_lga_atoms: bool = False) -> Fixture:
+                  reverse_lga_atoms: bool = False, forcefield: str = "ff19SB") -> Fixture:
     """Build the fixture from the committed peptide coordinates. Deterministic.
 
     `ligand_order` and `reverse_lga_atoms` build the REORDERED variants: the same chemistry with
@@ -234,10 +241,9 @@ def build_fixture(*, padding_nm: float = 0.6, ligand_order=("LGA", "LGB", "LGA")
         where = _place(mol.GetConformer().GetPositions() / 10.0, centre + spot)
         modeller.add(top, unit.Quantity([tuple(p) for p in where], unit.nanometer))
 
-    forcefield = app.ForceField("amber19/protein.ff19SB.xml", "amber19/tip3p.xml",
-                                *[StringIO(text) for text in ffxml.values()])
-    modeller.addSolvent(forcefield, model="tip3p", padding=padding_nm * unit.nanometer)
-    system = forcefield.createSystem(modeller.topology, nonbondedMethod=app.PME,
+    field = app.ForceField(*FORCEFIELDS[forcefield], *[StringIO(text) for text in ffxml.values()])
+    modeller.addSolvent(field, model="tip3p", padding=padding_nm * unit.nanometer)
+    system = field.createSystem(modeller.topology, nonbondedMethod=app.PME,
                                      nonbondedCutoff=0.9 * unit.nanometer,
                                      constraints=app.HBonds, rigidWater=True)
     return Fixture(topology=modeller.topology, positions=modeller.positions, system=system,
