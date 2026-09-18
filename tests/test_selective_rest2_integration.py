@@ -362,3 +362,103 @@ def test_a_selective_stage_bundle_verifies_and_an_altered_region_does_not(select
     (copy / "input" / "scaler.yaml").write_text(yaml.safe_dump(record), encoding="utf-8")
     bad = _run(["input/verify_state.py"], cwd=copy, env=env, ok=False)
     assert bad.returncode == 1 and "DIFFERS" in bad.stdout, bad.stdout + bad.stderr
+
+
+# --- direct exchange energies at stored coordinates ------------------------------------------------
+
+#: Tolerance on a recomputed reduced potential, in kT, CALIBRATED before the comparison was made
+#: final. The CPU platform (and CUDA mixed) holds positions in single precision: re-evaluating one
+#: stored configuration on a fresh Context of the same platform reproduces the ladder's u only to
+#: that precision. Measured on this fixture (2026-09-19, CPU platform): rounding the stored float64
+#: coordinates to float32 moves u by 0.002 kT, and the recomputed values differ from the recorded
+#: ones by at most 0.0077 kT absolute and 0.0055 kT in the cross-Hamiltonian differences. 0.05 kT
+#: is ~10x that floor. The quantity the test must resolve is a WRONG Hamiltonian, which misses by
+#: 8.4 kT (the region's nonbonded set without its torsions and CMAP) to 32 kT (the whole solute)
+#: here, and the test checks it does. (A first tolerance of 1e-3 kT was a guess made before this
+#: calibration, for a double-precision recomputation; it is not the platform's precision.)
+EXCHANGE_ENERGY_TOLERANCE_KT = 0.05
+
+
+def stored_exchange_energies(run: Path):
+    """`(u[k], positions[walker], box[walker], k)` of the last committed exchange, in float64:
+    the ladder checkpoint stores each walker's coordinates after exchange k, and an exchange moves
+    no coordinate, so they are the configurations `u[k][i][w]` was evaluated at."""
+    import netCDF4
+    import numpy as np
+
+    checkpoint = netCDF4.Dataset(run / "REST2_checkpoint.nc")
+    k = int(checkpoint.getncattr("exchange_index"))
+    positions = np.array(checkpoint["positions"][:], dtype=float)
+    box = np.array(checkpoint["box"][:], dtype=float)
+    checkpoint.close()
+    analysis = netCDF4.Dataset(run / "REST2.nc")
+    u = np.array(analysis["u"][k], dtype=float)
+    analysis.close()
+    return u, positions, box, k
+
+
+def reduced_potentials(systems, positions, box, *, platform: str):
+    """u_i(x_w) for every System i and stored walker w, in kT at 300 K, on `platform`."""
+    import numpy as np
+    import openmm
+    from openmm import unit
+
+    kt = (unit.MOLAR_GAS_CONSTANT_R * 300.0 * unit.kelvin).value_in_unit(unit.kilojoule_per_mole)
+    out = np.zeros((len(systems), len(positions)))
+    for i, system in enumerate(systems):
+        context = openmm.Context(system, openmm.VerletIntegrator(0.001),
+                                 openmm.Platform.getPlatformByName(platform))
+        for w in range(len(positions)):
+            context.setPeriodicBoxVectors(*box[w])
+            context.setPositions(positions[w])
+            out[i, w] = context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
+                unit.kilojoule_per_mole) / kt
+        del context
+    return out
+
+
+def exchange_energy_discrepancy(run: Path, systems, *, platform: str):
+    """Worst |recomputed - recorded| over u and over u_i - u_0 (per walker), in kT."""
+    import numpy as np
+
+    u, positions, box, _k = stored_exchange_energies(run)
+    mine = reduced_potentials(systems, positions, box, platform=platform)
+    return (float(np.abs(mine - u).max()),
+            float(np.abs((mine - mine[0]) - (u - u[0])).max()), mine.size)
+
+
+def _saved_states(root: Path, n: int):
+    from openmm import XmlSerializer
+
+    return [XmlSerializer.deserialize((root / "build" / "REST2" / f"system_state{i}.xml")
+                                      .read_text(encoding="utf-8")) for i in range(n)]
+
+
+def _whole_solute_states(root: Path, n: int):
+    """The WRONG Hamiltonian for a selective ladder: the same taus over the whole solute."""
+    from openmm import XmlSerializer
+
+    from md_tools.rest2.hamiltonian import build_scaled_system
+
+    record = yaml.safe_load((root / "build" / "REST2" / "scaler.yaml").read_text(encoding="utf-8"))
+    base = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
+    return [build_scaled_system(base, record["solute"]["atom_indices"], state["tau"],
+                                excluded_bonds=[tuple(b) for b in
+                                                record["unscaled_torsions"]["unscaled_central_bonds"]])
+            for state in record["states"][:n]]
+
+
+def test_a_selective_ladders_exchange_energies_are_its_saved_states_energies(selective_ladder):
+    """u[k][i][w], recorded by the ladder, against the saved state i evaluated here at walker w's
+    stored coordinates, on the platform the ladder ran on (CPU)."""
+    root, run, _env_ = selective_ladder
+    absolute, cross, compared = exchange_energy_discrepancy(run, _saved_states(root, STATES),
+                                                            platform="CPU")
+    print(f"exchange energies: {compared} values, worst |u| {absolute:.3g} kT, worst "
+          f"cross-Hamiltonian {cross:.3g} kT")
+    assert compared == STATES * STATES
+    assert absolute < EXCHANGE_ENERGY_TOLERANCE_KT and cross < EXCHANGE_ENERGY_TOLERANCE_KT
+    # ...and the check can fail: the whole-solute Hamiltonian at the same taus is caught.
+    _, wrong, _ = exchange_energy_discrepancy(run, _whole_solute_states(root, STATES),
+                                              platform="CPU")
+    assert wrong > 20 * EXCHANGE_ENERGY_TOLERANCE_KT, wrong
