@@ -142,8 +142,14 @@ BUILD_SCHEMA = Schema(
                       "force field. Reuse on a match, parameterise on any difference; a near "
                       "match is a difference. Which package matched, on what, and what else was "
                       "considered, are recorded in built.log.\n"
-                      "  <compound id>/param_<12 hex> -- reuse exactly that package, and search "
-                      "nothing.\n"
+                      "  <compound id>/param_<12 hex> -- reuse exactly that package from the "
+                      "catalogs, and search nothing.\n"
+                      "  a PATH to a package directory -- reuse the package there, and search "
+                      "nothing. Absolute, or relative to this configuration file, so a build "
+                      "works from `build-top --parameterize` output beside it with no catalog "
+                      "configured at all: `parameters: ./parameter`. The directory is named "
+                      "whatever its build named it; `<compound>/param_<id>/` is what the CATALOG "
+                      "requires, and registration is what gives it that shape.\n"
                       "  generate -- parameterise the molecule whatever the catalog holds.\n"
                       "On either kind of reuse the prepared molecule must be the package's exact "
                       "chemical state (every hydrogen, charge and bond order, and the "
@@ -650,7 +656,7 @@ def _check_residue_name(resolved: dict[str, Any]) -> None:
 
 def _check_ligand_settings(resolved: dict[str, Any]) -> None:
     """Package and instance settings, refused where they cannot apply. Nothing is loaded here."""
-    from ..ligands.catalog import parse_reference
+    from ..ligands.catalog import is_catalog_reference, parse_reference
     from ..ligands.identity import CompoundIdError, check_compound_id
     from ..ligands.package import PackageError
 
@@ -700,7 +706,7 @@ def _check_ligand_settings(resolved: dict[str, Any]) -> None:
     try:
         if solute.get("compound_id") is not None:
             check_compound_id(solute["compound_id"])
-        if stated_reference:
+        if stated_reference and is_catalog_reference(solute["parameters"]):
             parse_reference(solute["parameters"])
             for key in ("ligand_forcefield", "ligand_charge_method"):
                 if key in stated:
@@ -1054,12 +1060,13 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         # thing to read the package was several steps into the build, so a package that could not
         # be loaded -- one written before it recorded which implementation charged it, say --
         # failed after the output directory and its log already existed.
-        from ..ligands.catalog import find_package
+        from ..ligands.catalog import resolve_package
         from ..ligands.package import PackageError
 
         try:
-            find_package(resolved["solute"]["parameters"],
-                         catalog_roots(resolved, config_path))
+            resolve_package(resolved["solute"]["parameters"],
+                            roots=catalog_roots(resolved, config_path),
+                            base_dir=(Path(config_path).parent if config_path else Path.cwd()))
         except PackageError as exc:
             raise ConfigError(f"solute.parameters: {exc}") from exc
     out_ligands = out_system.parent / "ligands"
@@ -1198,6 +1205,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             "aliases": list(resolved["solute"]["aliases"] or []),
             "parameters": resolved["solute"]["parameters"],
             "catalog_roots": roots,
+            "config_dir": (Path(config_path).parent if config_path else Path.cwd()),
             "residue_name": residue_name,
             "input_name": input_path.name,
             "input_sha256": file_facts(input_path)["sha256"],
@@ -1550,7 +1558,7 @@ def _map_complex_ligands(structure_path: Path, resolved: dict[str, Any], config_
     """
     from openmm import app
 
-    from ..ligands.catalog import find_package
+    from ..ligands.catalog import resolve_package
     from ..ligands.mapping import LigandSelector, MappingError, map_ligands, unmapped_residues
     from ..ligands.package import PackageError
     from ..openmm.system import ION_RESIDUE_NAMES, PROTEIN_RESIDUES, WATER_RESIDUE_NAMES
@@ -1565,7 +1573,6 @@ def _map_complex_ligands(structure_path: Path, resolved: dict[str, Any], config_
     entries = resolved["ligands"]
     try:
         from ..ligands.mapping import entry_selector_and_reference
-        from ..ligands.package import load_package
 
         packages = {}
         selectors = []
@@ -1574,15 +1581,11 @@ def _map_complex_ligands(structure_path: Path, resolved: dict[str, Any], config_
             selectors.append(selector)
             if reference in packages:
                 continue
-            if "parameter" in entry:
-                # A PATH, relative to the configuration that names it, so a build works from a
-                # package directory beside it with no catalog configured at all.
-                path = Path(reference).expanduser()
-                if not path.is_absolute() and config_path is not None:
-                    path = Path(config_path).parent / path
-                packages[reference] = load_package(path)
-            else:
-                packages[reference] = find_package(reference, roots)
+            # ONE resolver for both spellings: `parameters` is a catalog reference, `parameter` a
+            # path relative to the configuration that names it.
+            packages[reference] = resolve_package(
+                reference, roots=roots,
+                base_dir=(Path(config_path).parent if config_path else Path.cwd()))
         known = set(PROTEIN_RESIDUES) | set(WATER_RESIDUE_NAMES) | set(ION_RESIDUE_NAMES)
         left = unmapped_residues(structure.topology, selectors, known_residue_names=known)
         if left:

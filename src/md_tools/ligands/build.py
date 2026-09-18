@@ -115,7 +115,7 @@ def attach_ligand_package(*, prepared_sdf: Path, prepared_pdb: Path, settings: d
     from rdkit import Chem
 
     from ..openmm.ligand_forcefield import is_gaff
-    from .catalog import find_package, search_for_match
+    from .catalog import resolve_package, search_for_match
     from .identity import local_compound_id
     from .match import requested_criteria
     from .package import create_package, load_package
@@ -137,7 +137,7 @@ def attach_ligand_package(*, prepared_sdf: Path, prepared_pdb: Path, settings: d
     search: Optional[dict[str, Any]] = None
     package = None
     if mode not in ("search", "generate"):
-        package = find_package(mode, roots)
+        package = resolve_package(mode, roots=roots, base_dir=settings.get("config_dir"))
         positions, permutation = order_like_package(mol, package, where="solute.parameters")
         package = load_package(package.copy_into(root))
         how = "reused (stated reference)"
