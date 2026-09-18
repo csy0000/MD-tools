@@ -255,3 +255,25 @@ def test_legs_at_different_temperatures_are_refused():
     s = cy.Leg("s", "solvent", "coupled", "decoupled", 2.0, 0.1, 310.0, "MBAR", "decouple")
     with pytest.raises(cy.CycleError, match="one cycle, one T"):
         cy.absolute_hydration(vacuum=v, solvent=s)
+
+
+def test_restraint_in_a_periodic_box_uses_the_minimum_image():
+    """Anchors wrapped into different images: the periodic force sees the true 0.5 nm, a
+    non-periodic one would see ~2.5 nm."""
+    openmm = pytest.importorskip("openmm")
+    r = _restraint()
+    x = np.array([[0.1, 0.1, 0.1], [0.1, 0.5, 0.1], [0.4, 0.6, 0.2],
+                  [2.9, 0.1, 0.1], [2.9, 0.1, 0.25], [2.9, 0.2, 0.3]])   # L1 at -0.2 nm, wrapped
+    s = openmm.System()
+    s.setDefaultPeriodicBoxVectors(openmm.Vec3(3, 0, 0), openmm.Vec3(0, 3, 0), openmm.Vec3(0, 0, 3))
+    for _ in range(6):
+        s.addParticle(12.0)
+    s.addForce(r.openmm_force(periodic=True))
+    ctx = openmm.Context(s, openmm.VerletIntegrator(0.001),
+                         openmm.Platform.getPlatformByName("Reference"))
+    ctx.setPositions(x)
+    unwrapped = x.copy()
+    unwrapped[3:, 0] -= 3.0
+    e = ctx.getState(getEnergy=True).getPotentialEnergy()._value
+    assert e == pytest.approx(r.energy_kj_mol(unwrapped), rel=1e-9)
+    assert e != pytest.approx(r.energy_kj_mol(x), rel=1e-3)

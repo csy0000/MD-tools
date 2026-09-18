@@ -150,8 +150,12 @@ class BoreschRestraint:
             e += 0.5 * getattr(self, f"k_{n}_kj_mol_rad2") * d * d
         return lam * e
 
-    def openmm_force(self):
+    def openmm_force(self, *, periodic: bool = False):
         """A CustomCompoundBondForce whose energy is `lambda_restraints * U`.
+
+        `periodic` must be the System's own: in a periodic box the receptor and ligand anchors
+        can be wrapped into different images, and a non-periodic restraint then measures the
+        distance across the box.
 
         The energy is linear in `lambda_restraints`, so its parameter derivative -- requested
         here -- is the complete dU/d lambda_restraints for this force: U itself.
@@ -181,7 +185,7 @@ class BoreschRestraint:
                    self.k_phi_a_kj_mol_rad2, self.phi_a0_rad,
                    self.k_phi_b_kj_mol_rad2, self.phi_b0_rad,
                    self.k_phi_c_kj_mol_rad2, self.phi_c0_rad])
-        f.setUsesPeriodicBoundaryConditions(False)
+        f.setUsesPeriodicBoundaryConditions(bool(periodic))
         f.setName("BoreschRestraint")
         return f
 

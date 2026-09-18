@@ -177,7 +177,7 @@ class ComposedHamiltonian:
         self.inner = inner
         self.restraint = restraint
         system = XmlSerializer.deserialize(XmlSerializer.serialize(inner.system))
-        force = restraint.openmm_force()
+        force = restraint.openmm_force(periodic=system.usesPeriodicBoundaryConditions())
         force.setForceGroup(RESTRAINT_FORCE_GROUP)
         system.addForce(force)
         self.system = system
