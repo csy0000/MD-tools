@@ -32,8 +32,8 @@ import numpy as np
 
 from .package import LigandPackage, PackageError
 
-__all__ = ["LIGANDS_DIRNAME", "attach_ligand_package", "order_like_package",
-           "write_prepared_molecule"]
+__all__ = ["LIGANDS_DIRNAME", "aliases_not_applied_notice", "attach_ligand_package",
+           "order_like_package", "write_prepared_molecule"]
 
 #: Where a build keeps the packages it used, beside built.xml.
 LIGANDS_DIRNAME = "ligands"
@@ -164,6 +164,14 @@ def attach_ligand_package(*, prepared_sdf: Path, prepared_pdb: Path, settings: d
             source={"input": settings.get("input_name"), "input_sha256": settings.get("input_sha256")})
         positions, permutation = order_like_package(mol, package, where="the prepared molecule")
         how = "created"
+    # STATED ALIASES THAT DID NOT LAND. Aliases are written only into a package this build
+    # creates; a reused one keeps the names it was written with, because they are not part of its
+    # identity. A stated reference with aliases is refused at resolution, so the one way here is a
+    # catalog match -- and the same configuration would have applied them had nothing matched.
+    # Reuse is the feature, so this is said, never refused.
+    stated_aliases = sorted(set(str(a) for a in settings.get("aliases") or ()))
+    aliases_not_applied = ([a for a in stated_aliases if a not in package.summary()["aliases"]]
+                           if how != "created" else [])
     rewritten = not _already_in_package_order(mol, package, Path(prepared_pdb))
     if rewritten:
         write_prepared_molecule(package, positions, residue_name, Path(prepared_sdf),
@@ -177,6 +185,7 @@ def attach_ligand_package(*, prepared_sdf: Path, prepared_pdb: Path, settings: d
                        if how == "reused (catalog search)" else None,
                        "copied_to": f"{LIGANDS_DIRNAME}/{package.compound_id}/{package.parameter_id}",
                        "charges_generated_in_this_build": how == "created",
+                       "stated_aliases_not_applied": aliases_not_applied,
                        "prepared_atom_for_package_atom": permutation,
                        "prepared_files_rewritten_in_package_order": rewritten}}
 
@@ -204,6 +213,21 @@ def packages_from_dirs(paths: Sequence[str]) -> list[LigandPackage]:
     from .package import load_package
 
     return [load_package(Path(p)) for p in paths]
+
+
+def aliases_not_applied_notice(record: Optional[dict[str, Any]]) -> Optional[str]:
+    """The sentence a build prints when stated aliases did not reach the package it used, or None.
+
+    One wording for `build-top` and `--parameterize`, which both reach a catalog match.
+    """
+    missing = (record or {}).get("stated_aliases_not_applied") or []
+    if not missing:
+        return None
+    return (f"solute.aliases {missing} were NOT applied: {record['reference']} was "
+            f"{record['how']}, and a reused package keeps the aliases it was written with "
+            f"({record['aliases'] or 'none'}). Aliases are names, not identity, so the "
+            f"parameters are unaffected; to search by these names, register a catalog entry "
+            f"that carries them.")
 
 
 def attach_for_build(cfg: dict[str, Any], staging: Path, *, solute_sdf: Path,

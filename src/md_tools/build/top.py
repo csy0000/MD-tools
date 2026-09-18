@@ -131,7 +131,12 @@ BUILD_SCHEMA = Schema(
                       "Left null, the LOCAL form is derived from the molecule and recorded."),
             Field("aliases", list, default=[],
                   doc="Searchable names stored with a package this build creates: "
-                      "`[paracetamol, acetaminophen, TYL]`. Names, not identities."),
+                      "`[paracetamol, acetaminophen, TYL]`. Names, not identities, so they "
+                      "never decide whether a catalog package is reused. A REUSED package keeps "
+                      "the aliases it was written with; any stated here that it lacks are "
+                      "reported on stderr and recorded in built.log as "
+                      "`stated_aliases_not_applied`. Refused beside a stated `parameters` "
+                      "reference, where they could never apply."),
             Field("parameters", str, default="search", nullable=True,
                   doc="Where this molecule's parameters come from. Four kinds of value:\n"
                       "  search (the default) -- look in the catalog for a package whose declared "
@@ -1474,6 +1479,12 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         if placed_packages:
             log.field("ligand packages", ", ".join(
                 f"{p['reference']} ({p['how']})" for p in placed_packages))
+        from ..ligands.build import aliases_not_applied_notice
+
+        notice = aliases_not_applied_notice(record.get("ligand_package"))
+        if notice is not None:
+            print(f"build-top: NOTE: {notice}", file=sys.stderr)
+            log(f"  NOTE: {notice}")
         written_outputs = {"system_xml": file_facts(out_system),
                            "topology_pdb": file_facts(out_pdb),
                            "solute_topology_pdb": file_facts(out_solute)}
