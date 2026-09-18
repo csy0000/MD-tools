@@ -40,22 +40,54 @@ class SelectionError(ValueError):
     """A selection file that does not describe the topology it is being used with."""
 
 
-def topology_digest(topology) -> str:
-    """A digest of the atom and bond identity a selection is only valid against.
+#: How `topology_digest` is computed, recorded in every 2.0 record beside the digest.
+TOPOLOGY_DIGEST_SCHEME = "atoms-in-index-order+sorted-bond-set/1"
 
-    Over element, name, residue and index -- the things an atom index MEANS -- rather than over the
-    file's bytes, so the same chemistry written by a different writer still matches, and a
-    renumbered or re-ordered topology does not.
-    """
-    hasher = hashlib.sha256()
+
+def _hash_atoms(hasher, topology) -> None:
     for atom in topology.atoms():
         element = atom.element.symbol if atom.element is not None else "?"
         hasher.update(f"{atom.index}:{atom.name}:{element}:"
                       f"{atom.residue.index}:{atom.residue.name}\n".encode())
+
+
+def topology_digest(topology) -> str:
+    """A digest of the atom and bond identity a selection is only valid against
+    (`TOPOLOGY_DIGEST_SCHEME`).
+
+    Over element, name, residue and index -- the things an atom index MEANS -- rather than over the
+    file's bytes, so the same chemistry written by a different writer still matches, and a
+    renumbered or re-ordered topology does not.
+
+    The bonds are hashed as a SORTED SET of sorted pairs. They used to be hashed in the order the
+    Topology iterates them, and that order comes from the file: OpenMM's PDB writer emits CONECT
+    records for a non-standard residue in its own order, so a read-write-read cycle of a structure
+    with a cross-residue CONECT bond made the digest alternate between two values forever
+    (shared contract §2, 2026-09-19). The bond SET is the identity; its order is an accident.
+    """
+    hasher = hashlib.sha256()
+    _hash_atoms(hasher, topology)
+    for first, second in sorted(tuple(sorted((bond.atom1.index, bond.atom2.index)))
+                                for bond in topology.bonds()):
+        hasher.update(f"bond:{first}-{second}\n".encode())
+    return hasher.hexdigest()
+
+
+def _legacy_iteration_order_digest(topology) -> str:
+    """The 1.0 digest, bonds in iteration order. Used ONLY by `_legacy_digest_agrees`, so a
+    0.6.0 record keeps validating; nothing new is ever written with it."""
+    hasher = hashlib.sha256()
+    _hash_atoms(hasher, topology)
     for bond in topology.bonds():
         first, second = sorted((bond.atom1.index, bond.atom2.index))
         hasher.update(f"bond:{first}-{second}\n".encode())
     return hasher.hexdigest()
+
+
+def _legacy_digest_agrees(stored: str, topology) -> bool:
+    """THE COMPATIBILITY BRANCH for a 1.0 record's digest (shared contract §2): it validates when
+    it equals EITHER the canonical digest of this topology or the legacy iteration-order one."""
+    return stored in (topology_digest(topology), _legacy_iteration_order_digest(topology))
 
 
 @dataclass(frozen=True)
@@ -78,6 +110,9 @@ class ScalingSelection:
     #: The rest of the 2.0 record (policy, masks, residue map, owners, CMAP decisions, ligand
     #: instances), kept verbatim: it is provenance, and part of what the identity hashes.
     details: tuple[tuple[str, Any], ...] = field(default=())
+    #: The format of the record this was READ from: 1.0 digests may use the legacy scheme. Not
+    #: part of what the selection IS, so it takes no part in equality.
+    record_format: str = field(default=SELECTION_FORMAT, compare=False)
 
     @property
     def explicit(self) -> bool:
@@ -139,6 +174,7 @@ class ScalingSelection:
             "format": SELECTION_FORMAT,
             "selection_mode": self.mode,
             "topology_sha256": self.topology_sha256,
+            "topology_digest_scheme": TOPOLOGY_DIGEST_SCHEME,
             # 1.0's name, kept: the atoms carrying the nonbonded factors.
             "solute_atoms": list(self.solute_atoms),
             "selected_nonbonded_atoms": list(self.solute_atoms),
@@ -195,6 +231,12 @@ class ScalingSelection:
         if mode == EXPLICIT_MODE and set(atoms) != set(
                 int(i) for i in document.get("selected_nonbonded_atoms") or ()):
             raise SelectionError(f"{source}: solute_atoms and selected_nonbonded_atoms disagree")
+        if fmt == SELECTION_FORMAT and document.get("topology_digest_scheme") != \
+                TOPOLOGY_DIGEST_SCHEME:
+            raise SelectionError(
+                f"{source}: topology_digest_scheme is {document.get('topology_digest_scheme')!r}, "
+                f"not {TOPOLOGY_DIGEST_SCHEME!r}. A {SELECTION_FORMAT} record carries only the "
+                f"canonical digest.")
         policy = document.get("improper_policy") or {}
         details = tuple((key, document.get(key)) for key in (
             "policy", "masks", "residue_map", "torsion_bond_owners", "cmap_decisions",
@@ -208,7 +250,7 @@ class ScalingSelection:
                    cmap_terms=None if cmap is None else tuple(int(i) for i in cmap),
                    unscaled_impropers=bool(policy.get("unscaled_impropers", True)),
                    detector_version=document.get("detector_policy_version"),
-                   details=details if fmt == SELECTION_FORMAT else ())
+                   details=details if fmt == SELECTION_FORMAT else (), record_format=fmt)
 
     def write(self, path: str | Path) -> Path:
         from ..openmm.yaml_io import write_yaml
@@ -240,7 +282,17 @@ class ScalingSelection:
     def validate_against(self, topology, *, source: str = "the selection") -> None:
         """Refuse a selection that cannot be true of this topology."""
         actual = topology_digest(topology)
-        if self.topology_sha256 and self.topology_sha256 != actual:
+        if self.topology_sha256 and self.record_format == LEGACY_SELECTION_FORMAT:
+            agrees = _legacy_digest_agrees(self.topology_sha256, topology)
+        else:
+            agrees = self.topology_sha256 == actual
+            if not agrees and self.topology_sha256 == _legacy_iteration_order_digest(topology):
+                raise SelectionError(
+                    f"{source}: a {SELECTION_FORMAT} record carries the LEGACY iteration-order "
+                    f"topology digest ({self.topology_sha256[:12]}...). {SELECTION_FORMAT} records "
+                    f"carry only the canonical digest ({TOPOLOGY_DIGEST_SCHEME}); this one was not "
+                    f"written by the code that defines that format.")
+        if self.topology_sha256 and not agrees:
             raise SelectionError(
                 f"{source}: topology_sha256 {self.topology_sha256[:12]}... does not match the "
                 f"topology being used ({actual[:12]}...). The selection was derived against a "
