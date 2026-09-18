@@ -65,8 +65,25 @@ near-fixed per-STEP charge for having such a construct at all: five CustomCVForc
 tabulated bias expressed as a CustomCompoundBondForce instead costs +0.006.
 
 Their escape does not transfer -- a bias over four particles is expressible in a force kernel and a
-mix of two complete Hamiltonians, PME reciprocal sums included, is not -- so no cheaper arrangement
-is known here. It does mean the overhead is a WRAPPER cost that some future construction might
+mix of two complete Hamiltonians, PME reciprocal sums included, is not.
+
+ONE ALTERNATIVE WAS MEASURED AND DOES NOT PAY (2026-09-18, same card). A `CustomIntegrator` can read
+per-force-group forces and energies, so the mixture can be assembled without any `CustomCVForce`:
+V0's forces in one group, V1's in another, `fmix = (1-lam)*f0` then `fmix + lam*f1` -- two steps,
+because one step may not depend on two groups -- and `dV = energy1 - energy0` accumulated on device.
+The arithmetic is right: V(lambda) matched a host-side per-group evaluation to 1.6e-10 relative and
+the mixed force to 2e-4 kJ/mol/nm. The timing does not help:
+
+    the mixture (CustomCVForce)                     0.347 ms/step
+    groups, shared forces once, forces only         0.262     -- but AIS needs dV every update
+    groups, shared forces once, with the work reads 0.343     -- no gain
+    groups, everything duplicated, with work reads  0.295     -- 14% at best
+
+Per-GROUP evaluation carries its own cost, and asking for two or three group energies every step
+brings most of the wrapper's price back. The best arrangement found is about 14% faster than what is
+here, for a hand-written Langevin integrator whose equivalence to `LangevinMiddleIntegrator` would
+then have to be established -- correctness work out of all proportion to 14%. So the current shape
+stands, and the route is recorded as measured rather than left for someone to rediscover. It does mean the overhead is a WRAPPER cost that some future construction might
 avoid, not a price the physics demands. Moving lambda every step adds 2-5% on top, so the parameter
 change is not the expense; the evaluation is.
 
