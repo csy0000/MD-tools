@@ -85,7 +85,6 @@ __all__ = [
     "TopologyError",
     "TopologyPlan",
     "build_topology_plan",
-    "combined_topology_sha256",
     "load_plan",
 ]
 
@@ -125,24 +124,6 @@ def _sha256_text(text: str) -> str:
 
 def _positions_sha256(positions_nm: np.ndarray) -> str:
     return hashlib.sha256(np.ascontiguousarray(positions_nm, dtype="<f8").tobytes()).hexdigest()
-
-
-def combined_topology_sha256(topology) -> str:
-    """Atoms in index order (element, name, residue) and the bond SET, sorted.
-
-    `rest2.selection.topology_digest` hashes bonds in iteration order, and a PDB round trip
-    reorders a bond between two residues, so the combined topology is hashed with its bonds
-    sorted: the same topology read back from `combined.pdb` gives the same digest.
-    """
-    hasher = hashlib.sha256()
-    for atom in topology.atoms():
-        element = atom.element.symbol if atom.element is not None else "?"
-        hasher.update(f"{atom.index}:{atom.name}:{element}:{atom.residue.index}:"
-                      f"{atom.residue.name}\n".encode())
-    for first, second in sorted(tuple(sorted((b.atom1.index, b.atom2.index)))
-                                for b in topology.bonds()):
-        hasher.update(f"bond:{first}-{second}\n".encode())
-    return hasher.hexdigest()
 
 
 def _clone(obj):
@@ -379,6 +360,10 @@ class TopologyPlan:
     system_b: Any = field(repr=False)
     topology: Any = field(repr=False)
     positions_nm: np.ndarray = field(repr=False)
+    #: The exact `combined.pdb` text `topology` was read from. `write` writes these bytes rather
+    #: than re-serialising: an OpenMM PDB write/read round trip reorders bonds between two
+    #: HETATM residues on every pass, so a re-written file would read back with another digest.
+    pdb_text: Optional[str] = field(default=None, repr=False)
 
     @property
     def mode(self) -> str:
@@ -422,9 +407,13 @@ class TopologyPlan:
             "system_a.xml": XmlSerializer.serialize(self.system_a).encode(),
             "system_b.xml": XmlSerializer.serialize(self.system_b).encode(),
         }
-        pdb = io.StringIO()
-        PDBFile.writeFile(self.topology, self.positions_nm * 10.0, pdb, keepIds=True)
-        blobs["combined.pdb"] = pdb.getvalue().encode()
+        if self.pdb_text is None:
+            pdb = io.StringIO()
+            PDBFile.writeFile(self.topology, self.positions_nm * 10.0, pdb, keepIds=True)
+            text = pdb.getvalue()
+        else:
+            text = self.pdb_text
+        blobs["combined.pdb"] = text.encode()
         npy = io.BytesIO()
         np.save(npy, np.ascontiguousarray(self.positions_nm, dtype="<f8"), allow_pickle=False)
         blobs["positions.npy"] = npy.getvalue()
@@ -504,8 +493,11 @@ def load_plan(directory: Path, *, package_roots: Iterable[Path] = ()) -> Topolog
             raise TopologyError(f"package {endpoint['reference']} at {found[0]} is not the one "
                                 f"this plan was built from")
     positions = np.load(directory / "positions.npy", allow_pickle=False)
-    topology = PDBFile(str(directory / "combined.pdb")).topology
-    if combined_topology_sha256(topology) != record["numbering"]["combined_topology_sha256"]:
+    pdb_text = (directory / "combined.pdb").read_text(encoding="utf-8")
+    topology = PDBFile(io.StringIO(pdb_text)).topology
+    from ..rest2.selection import topology_digest
+
+    if topology_digest(topology) != record["numbering"]["combined_topology_sha256"]:
         raise TopologyError(f"{directory}/combined.pdb does not read back as the topology the "
                             f"plan recorded")
     if positions.shape != (record["particles"]["n_total"], 3):
@@ -514,7 +506,7 @@ def load_plan(directory: Path, *, package_roots: Iterable[Path] = ()) -> Topolog
         record=record,
         system_a=XmlSerializer.deserialize((directory / "system_a.xml").read_text("utf-8")),
         system_b=XmlSerializer.deserialize((directory / "system_b.xml").read_text("utf-8")),
-        topology=topology, positions_nm=positions)
+        topology=topology, positions_nm=positions, pdb_text=pdb_text)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -993,14 +985,23 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
     if [a.index for a in topology.atoms()] != list(range(n_total)):
         raise AssertionError("combined topology order does not match the index space")
 
+    # Normalized through the file, as the record is through JSON: the plan keeps the PDB TEXT and
+    # the Topology read from it, `write` writes that text verbatim and `load_plan` reads it, so a
+    # built plan and a loaded one have the same bond order and one digest authority
+    # (rest2.selection.topology_digest) serves both.
+    from openmm.app import PDBFile
+
     from ..rest2.selection import topology_digest
+
+    buffer = io.StringIO()
+    PDBFile.writeFile(topology, positions * 10.0, buffer, keepIds=True)
+    pdb_text = buffer.getvalue()
+    topology = PDBFile(io.StringIO(pdb_text)).topology
 
     numbering = {
         "scheme": "topology-residue-index-1based",
         "source_topology_sha256": topology_digest(environment.topology),
-        "combined_topology_sha256": combined_topology_sha256(topology),
-        "combined_topology_digest_scheme": "atoms in index order, bonds sorted "
-                                           "(alchemy.topology.combined_topology_sha256)",
+        "combined_topology_sha256": topology_digest(topology),
         "source_residues_unchanged": environment.topology.getNumResidues(),
         "source_particles_unchanged": n_env,
         "appended_residue": appended_residue,
@@ -1065,4 +1066,4 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
     record = json.loads(_canonical(record))
     record["plan_sha256"] = _record_digest(record)
     return TopologyPlan(record=record, system_a=system_a, system_b=system_b, topology=topology,
-                        positions_nm=positions)
+                        positions_nm=positions, pdb_text=pdb_text)

@@ -549,3 +549,21 @@ def test_a_plan_from_packages_registered_in_a_temporary_catalog(tmp_path, monkey
     from md_tools.alchemy.topology import load_plan
 
     assert load_plan(written, package_roots=[catalog]).sha256 == plan.sha256
+
+
+def test_a_plan_rewritten_from_a_loaded_plan_is_the_same_plan(hybrid, tmp_path):
+    """write -> load -> write -> load keeps combined.pdb byte-identical and its digest fixed.
+
+    An OpenMM PDB write/read round trip reorders the bond between the ligand and the appended
+    residue on every pass, so a plan that re-serialised its topology would flip digests forever.
+    """
+    from md_tools.alchemy.topology import load_plan
+    from md_tools.rest2.selection import topology_digest
+
+    first = load_plan(hybrid.write(tmp_path / "one"))
+    second = load_plan(first.write(tmp_path / "two"))
+    assert (tmp_path / "one" / "combined.pdb").read_bytes() == \
+           (tmp_path / "two" / "combined.pdb").read_bytes()
+    digest = hybrid.record["numbering"]["combined_topology_sha256"]
+    assert topology_digest(hybrid.topology) == topology_digest(second.topology) == digest
+    assert second.sha256 == hybrid.sha256

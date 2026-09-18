@@ -129,6 +129,50 @@ The tests build the reference endpoint from scratch with `ForceField("amber14/ti
 the package's ffxml, and hold every force class to 1e-7 kJ/mol on the Reference platform, after
 asserting the raw difference is large enough that the check cannot pass by accident.
 
+## Proposed `combine-topology` input (PROPOSED -- S0 owns the final schema)
+
+A YAML file, unknown keys refused, paths relative to the file:
+
+```yaml
+format: md-tools-combine-topology/1     # proposed
+mode: hybrid                            # single | hybrid | dual; `separated` is refused by name
+endpoints:
+  A:
+    parameters: LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4   # catalog reference, or a package path,
+  B:                                                       # resolved by ligands.catalog.resolve_package
+    parameters: ./chloroethane/parameter
+environment:                            # ONE environment, holding endpoint A; B never has its own
+  system: build/built.xml
+  topology: build/built.pdb
+  ligand: {resname: ETA}                # a LigandSelector naming exactly one residue:
+                                        # {resname} or {chain, resid, insertion_code}
+map:
+  file: ethane-chloroethane.map.yaml    # explicit pairs, or a stored map record (below)
+  # automatic: {...}                    # NOT IMPLEMENTED; reserved for a proposal checked by
+                                        # validate_map and written out for review
+dual:
+  restraint_k_kj_mol_nm2: 1000.0        # dual mode only; refused in the other modes
+b_pose: null                            # optional .sdf with B's pose in B package order; default:
+                                        # superpose B's reference conformer on the mapped A atoms
+output: plan/                           # a NEW directory; an existing one is refused
+```
+
+The map file is either explicit pairs, by package atom name or index,
+
+```yaml
+pairs:
+  - [C1, C1]
+  - [C2, C2]
+  - [H1, H1]
+```
+
+or a map record as `AtomMap.record` writes it (schema `md-tools-alchemical-atom-map/1`, both
+directions and a digest), which `AtomMap.from_record` re-verifies against the two packages.
+
+The command maps onto the callable layer as: resolve both packages, `Environment.from_files`,
+`AtomMap.from_pairs` / `from_record`, `build_topology_plan(..., mode=...)`, `plan.write(output)`.
+Every refusal happens in `build_topology_plan`, before anything is written.
+
 ## Fixtures
 
 `tests/data/alchemy/v1/` (see its README): ethane, chloroethane and ethanol packages (AM1-BCC,
