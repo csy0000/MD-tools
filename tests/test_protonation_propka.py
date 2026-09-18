@@ -1,6 +1,6 @@
 """PROPKA3 protonation: prediction, the deterministic variant rule, overrides and histidine warnings.
 
-Plan section 4 (docs/claudecode-instructions/20260917_next-release-reusable-ligands-propka-cuda-ais.md).
+Plan section 4 (docs/history/claudecode-instructions/20260917_next-release-reusable-ligands-propka-cuda-ais.md).
 The rule tests feed `assign_variants` stated predictions, so each branch is checked against a pKa
 chosen to land on it rather than against whatever PROPKA happens to return for a fixture. One test
 runs the real PROPKA on a small tleap peptide with a zinc ion placed at a histidine, end to end.

@@ -61,3 +61,23 @@ maps every old hash to its new one. The ones those records cite most:
 | `c7e7265` | `3fc244f` | `main` at 0.5.1 |
 
 The original history is kept in a private archive.
+
+## Completed release instructions
+
+Instructions that were carried out, moved here when their work landed. They are kept for the
+reasoning and the evidence trail, not as a description of current behaviour. Each row says where
+it came from, what shows it was done, and what replaced it.
+
+| instruction | origin | completion evidence | replaced by |
+|---|---|---|---|
+| [20260913 GPU tests for 0.5.3](claudecode-instructions/20260913_gpu-tests-for-0.5.3.md) | the hpREST2 campaign's three findings on `fix/hprest2-findings` | [its results page](claudecode-instructions/20260913_gpu-tests-for-0.5.3-results.md), and `tests/test_hprest2_gpu_evidence.py` | — |
+| [20260913 GPU test results](claudecode-instructions/20260913_gpu-tests-for-0.5.3-results.md) | the answer to the row above | itself: four CUDA tests on GPUs 7 and 8 | — |
+| [20260913 PR body for 0.5.3](claudecode-instructions/20260913_pr-body-0.5.3.md) | the 0.5.3 release PR | [v0.5.3 release notes](../release-notes/v0.5.3.md) | — |
+| [20260917 reusable ligands, PROPKA, concurrent CUDA, AIS](claudecode-instructions/20260917_next-release-reusable-ligands-propka-cuda-ais.md) | the user's next-release scope, 2026-09-17 | [v0.6.0 release notes](../release-notes/v0.6.0.md); 0.6.0 is still under the user's testing, so its *release* is not claimed | [20260918 parallel 0.6.1–0.7.2 development](../claudecode-instructions/20260918_parallel-0.6.1-0.7.x-development.md) |
+| [20260917 AIS schedules and frames evidence](claudecode-instructions/20260917_evidence-ais-schedules-and-frames.md) | the companion evidence for two rows of the instruction above | itself | — |
+
+The 20260917 instruction calls the release **v6.0.0**. The shipped numbering is **0.6.0**; the
+label was never reconciled while it was active. Its wording is left as written, as everything in
+this directory is. Active documents use 0.6.0, and the work it deferred — selected-residue REST2,
+TI, FEP — is now carried by the branch aims under
+[`docs/development/`](../development/README.md), not by that archived section 9.
