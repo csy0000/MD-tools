@@ -40,6 +40,23 @@ update with its work read and one step takes 1.40 ms, against 7.77 ms for the pr
 dynamics alone take 0.48 ms against 0.17 ms for plain V0, because the differing NonbondedForce is
 evaluated twice -- as Amber computes the reciprocal sum twice.
 
+AND WHERE THAT COST COMES FROM, measured on 2026-09-18 (RTX A5000, mixed precision, 3000 steps
+after 200 warm-up, best of 3, on an idle card), as ms/step for plain V0 against the mixture:
+
+    1796 atoms, explicit TIP3P/PME, 4 fs    0.104 -> 0.306   2.94x   +0.202 ms/step
+    1800 atoms, explicit TIP3P/PME, 4 fs    0.103 -> 0.302   2.93x   +0.199 ms/step
+      22 atoms, implicit GBn2, 2 fs         0.063 -> 0.345   5.45x   +0.282 ms/step
+
+Two parts. One is INTRINSIC: the mixture evaluates the differing forces twice, so an explicit run
+pays a second PME reciprocal sum whatever the implementation. The other is the per-evaluation cost
+of `CustomCVForce` itself -- an inner Context and a chain rule each time an energy is asked for --
+which hpREST2 measured independently as roughly fixed and INDEPENDENT OF HOW MANY CVs the force
+holds (collapsing five forces into one recovered 1.09x). The delta above is roughly constant across
+systems two orders of magnitude apart in size while the RATIO swings from 2.9x to 5.5x, which is
+that fixed cost against a collapsing denominator: quote the delta, never the ratio, and never
+compare two ratios measured against different baselines. Moving lambda every step adds 2-5% on top,
+so the parameter change is not the expense; the evaluation is.
+
 WHAT IT CANNOT DO: resume bit-for-bit on CUDA. The inner Contexts of a `CustomCVForce` keep atom
 ordering state that no checkpoint captures, so a force differs in its last bits the moment a run
 resumes. A resume restores the committed generation exactly -- lambda, accumulated work, counters,
