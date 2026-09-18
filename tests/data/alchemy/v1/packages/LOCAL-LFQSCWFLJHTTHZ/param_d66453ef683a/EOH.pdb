@@ -1,0 +1,14 @@
+COMPND    EOH
+HETATM    1 C1   EOH     1       0.869   0.243   0.056  1.00  0.00           C  
+HETATM    2 C2   EOH     1      -0.414  -0.546  -0.100  1.00  0.00           C  
+HETATM    3 O1   EOH     1      -1.481   0.326  -0.444  1.00  0.00           O  
+HETATM    4 H1   EOH     1       0.768   0.994   0.846  1.00  0.00           H  
+HETATM    5 H2   EOH     1       1.705  -0.418   0.305  1.00  0.00           H  
+HETATM    6 H3   EOH     1       1.106   0.781  -0.867  1.00  0.00           H  
+HETATM    7 H4   EOH     1      -0.312  -1.290  -0.896  1.00  0.00           H  
+HETATM    8 H5   EOH     1      -0.671  -1.067   0.827  1.00  0.00           H  
+HETATM    9 H6   EOH     1      -1.570   0.977   0.274  1.00  0.00           H  
+CONECT    1    2    4    5    6
+CONECT    2    3    7    8
+CONECT    3    9
+END

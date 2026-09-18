@@ -1,0 +1,85 @@
+<ForceField>
+  <AtomTypes>
+    <Type name="MDT_param_d66453ef683a-0" mass="12.01078" class="MDT_param_d66453ef683a-0" element="C" />
+    <Type name="MDT_param_d66453ef683a-1" mass="12.01078" class="MDT_param_d66453ef683a-1" element="C" />
+    <Type name="MDT_param_d66453ef683a-2" mass="15.99943" class="MDT_param_d66453ef683a-2" element="O" />
+    <Type name="MDT_param_d66453ef683a-3" mass="1.007947" class="MDT_param_d66453ef683a-3" element="H" />
+    <Type name="MDT_param_d66453ef683a-4" mass="1.007947" class="MDT_param_d66453ef683a-4" element="H" />
+    <Type name="MDT_param_d66453ef683a-5" mass="1.007947" class="MDT_param_d66453ef683a-5" element="H" />
+    <Type name="MDT_param_d66453ef683a-6" mass="1.007947" class="MDT_param_d66453ef683a-6" element="H" />
+    <Type name="MDT_param_d66453ef683a-7" mass="1.007947" class="MDT_param_d66453ef683a-7" element="H" />
+    <Type name="MDT_param_d66453ef683a-8" mass="1.007947" class="MDT_param_d66453ef683a-8" element="H" />
+  </AtomTypes>
+  <NonbondedForce coulomb14scale="0.8333333333333334" lj14scale="0.5">
+    <UseAttributeFromResidue name="charge" />
+    <Atom sigma="0.337953176162662" epsilon="0.45538911611061844" class="MDT_param_d66453ef683a-0" />
+    <Atom sigma="0.337953176162662" epsilon="0.45538911611061844" class="MDT_param_d66453ef683a-1" />
+    <Atom sigma="0.2997159987248637" epsilon="0.8764372596155737" class="MDT_param_d66453ef683a-2" />
+    <Atom sigma="0.26445434132681245" epsilon="0.06602135607582665" class="MDT_param_d66453ef683a-3" />
+    <Atom sigma="0.26445434132681245" epsilon="0.06602135607582665" class="MDT_param_d66453ef683a-4" />
+    <Atom sigma="0.26445434132681245" epsilon="0.06602135607582665" class="MDT_param_d66453ef683a-5" />
+    <Atom sigma="0.2583225710839196" epsilon="0.068656285380106" class="MDT_param_d66453ef683a-6" />
+    <Atom sigma="0.2583225710839196" epsilon="0.068656285380106" class="MDT_param_d66453ef683a-7" />
+    <Atom sigma="0.053453923088366904" epsilon="5.157198260534728e-05" class="MDT_param_d66453ef683a-8" />
+  </NonbondedForce>
+  <HarmonicBondForce>
+    <Bond class1="MDT_param_d66453ef683a-0" class2="MDT_param_d66453ef683a-1" length="0.15336821898359998" k="180110.9017334405" />
+    <Bond class1="MDT_param_d66453ef683a-0" class2="MDT_param_d66453ef683a-3" length="0.10939788916649999" k="299455.7843479737" />
+    <Bond class1="MDT_param_d66453ef683a-0" class2="MDT_param_d66453ef683a-4" length="0.10939788916649999" k="299455.7843479737" />
+    <Bond class1="MDT_param_d66453ef683a-0" class2="MDT_param_d66453ef683a-5" length="0.10939788916649999" k="299455.7843479737" />
+    <Bond class1="MDT_param_d66453ef683a-1" class2="MDT_param_d66453ef683a-2" length="0.14262664915129997" k="216673.36455356522" />
+    <Bond class1="MDT_param_d66453ef683a-1" class2="MDT_param_d66453ef683a-6" length="0.10939788916649999" k="299455.7843479737" />
+    <Bond class1="MDT_param_d66453ef683a-1" class2="MDT_param_d66453ef683a-7" length="0.10939788916649999" k="299455.7843479737" />
+    <Bond class1="MDT_param_d66453ef683a-2" class2="MDT_param_d66453ef683a-8" length="0.09753748052379" k="450525.9685402585" />
+  </HarmonicBondForce>
+  <HarmonicAngleForce>
+    <Angle class1="MDT_param_d66453ef683a-0" class2="MDT_param_d66453ef683a-1" class3="MDT_param_d66453ef683a-2" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_d66453ef683a-0" class2="MDT_param_d66453ef683a-1" class3="MDT_param_d66453ef683a-6" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_d66453ef683a-0" class2="MDT_param_d66453ef683a-1" class3="MDT_param_d66453ef683a-7" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_d66453ef683a-1" class2="MDT_param_d66453ef683a-0" class3="MDT_param_d66453ef683a-3" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_d66453ef683a-1" class2="MDT_param_d66453ef683a-0" class3="MDT_param_d66453ef683a-4" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_d66453ef683a-1" class2="MDT_param_d66453ef683a-0" class3="MDT_param_d66453ef683a-5" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_d66453ef683a-1" class2="MDT_param_d66453ef683a-2" class3="MDT_param_d66453ef683a-8" angle="1.9697232386066315" k="1004.8576790352176" />
+    <Angle class1="MDT_param_d66453ef683a-2" class2="MDT_param_d66453ef683a-1" class3="MDT_param_d66453ef683a-6" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_d66453ef683a-2" class2="MDT_param_d66453ef683a-1" class3="MDT_param_d66453ef683a-7" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_d66453ef683a-3" class2="MDT_param_d66453ef683a-0" class3="MDT_param_d66453ef683a-4" angle="1.8908789677076112" k="306.81862462732323" />
+    <Angle class1="MDT_param_d66453ef683a-3" class2="MDT_param_d66453ef683a-0" class3="MDT_param_d66453ef683a-5" angle="1.8908789677076112" k="306.81862462732323" />
+    <Angle class1="MDT_param_d66453ef683a-4" class2="MDT_param_d66453ef683a-0" class3="MDT_param_d66453ef683a-5" angle="1.8908789677076112" k="306.81862462732323" />
+    <Angle class1="MDT_param_d66453ef683a-6" class2="MDT_param_d66453ef683a-1" class3="MDT_param_d66453ef683a-7" angle="1.8908789677076112" k="306.81862462732323" />
+  </HarmonicAngleForce>
+  <PeriodicTorsionForce ordering="smirnoff">
+    <Proper class1="MDT_param_d66453ef683a-0" class2="MDT_param_d66453ef683a-1" class3="MDT_param_d66453ef683a-2" class4="MDT_param_d66453ef683a-8" periodicity1="3" phase1="0.0" k1="1.6670304047707225" periodicity2="1" phase2="0.0" k2="0.2981864197367191" />
+    <Proper class1="MDT_param_d66453ef683a-2" class2="MDT_param_d66453ef683a-1" class3="MDT_param_d66453ef683a-0" class4="MDT_param_d66453ef683a-3" periodicity1="3" phase1="0.0" k1="0.6090737910961704" periodicity2="1" phase2="0.0" k2="2.0859084374775785" />
+    <Proper class1="MDT_param_d66453ef683a-2" class2="MDT_param_d66453ef683a-1" class3="MDT_param_d66453ef683a-0" class4="MDT_param_d66453ef683a-4" periodicity1="3" phase1="0.0" k1="0.6090737910961704" periodicity2="1" phase2="0.0" k2="2.0859084374775785" />
+    <Proper class1="MDT_param_d66453ef683a-2" class2="MDT_param_d66453ef683a-1" class3="MDT_param_d66453ef683a-0" class4="MDT_param_d66453ef683a-5" periodicity1="3" phase1="0.0" k1="0.6090737910961704" periodicity2="1" phase2="0.0" k2="2.0859084374775785" />
+    <Proper class1="MDT_param_d66453ef683a-3" class2="MDT_param_d66453ef683a-0" class3="MDT_param_d66453ef683a-1" class4="MDT_param_d66453ef683a-6" periodicity1="3" phase1="0.0" k1="1.0001407846270824" />
+    <Proper class1="MDT_param_d66453ef683a-3" class2="MDT_param_d66453ef683a-0" class3="MDT_param_d66453ef683a-1" class4="MDT_param_d66453ef683a-7" periodicity1="3" phase1="0.0" k1="1.0001407846270824" />
+    <Proper class1="MDT_param_d66453ef683a-4" class2="MDT_param_d66453ef683a-0" class3="MDT_param_d66453ef683a-1" class4="MDT_param_d66453ef683a-6" periodicity1="3" phase1="0.0" k1="1.0001407846270824" />
+    <Proper class1="MDT_param_d66453ef683a-4" class2="MDT_param_d66453ef683a-0" class3="MDT_param_d66453ef683a-1" class4="MDT_param_d66453ef683a-7" periodicity1="3" phase1="0.0" k1="1.0001407846270824" />
+    <Proper class1="MDT_param_d66453ef683a-5" class2="MDT_param_d66453ef683a-0" class3="MDT_param_d66453ef683a-1" class4="MDT_param_d66453ef683a-6" periodicity1="3" phase1="0.0" k1="1.0001407846270824" />
+    <Proper class1="MDT_param_d66453ef683a-5" class2="MDT_param_d66453ef683a-0" class3="MDT_param_d66453ef683a-1" class4="MDT_param_d66453ef683a-7" periodicity1="3" phase1="0.0" k1="1.0001407846270824" />
+    <Proper class1="MDT_param_d66453ef683a-6" class2="MDT_param_d66453ef683a-1" class3="MDT_param_d66453ef683a-2" class4="MDT_param_d66453ef683a-8" periodicity1="3" phase1="0.0" k1="1.6250561150309923" />
+    <Proper class1="MDT_param_d66453ef683a-7" class2="MDT_param_d66453ef683a-1" class3="MDT_param_d66453ef683a-2" class4="MDT_param_d66453ef683a-8" periodicity1="3" phase1="0.0" k1="1.6250561150309923" />
+  </PeriodicTorsionForce>
+  <Residues>
+    <Residue name="MDT_param_d66453ef683a">
+      <Atom name="C1" type="MDT_param_d66453ef683a-0" charge="-0.13610011111111114" />
+      <Atom name="C2" type="MDT_param_d66453ef683a-1" charge="0.12639988888888887" />
+      <Atom name="O1" type="MDT_param_d66453ef683a-2" charge="-0.5998001111111111" />
+      <Atom name="H1" type="MDT_param_d66453ef683a-3" charge="0.04236688888888887" />
+      <Atom name="H2" type="MDT_param_d66453ef683a-4" charge="0.04236688888888887" />
+      <Atom name="H3" type="MDT_param_d66453ef683a-5" charge="0.04236688888888887" />
+      <Atom name="H4" type="MDT_param_d66453ef683a-6" charge="0.04319988888888887" />
+      <Atom name="H5" type="MDT_param_d66453ef683a-7" charge="0.04319988888888887" />
+      <Atom name="H6" type="MDT_param_d66453ef683a-8" charge="0.3959998888888889" />
+      <Bond atomName1="C1" atomName2="C2" />
+      <Bond atomName1="C2" atomName2="O1" />
+      <Bond atomName1="C1" atomName2="H1" />
+      <Bond atomName1="C1" atomName2="H2" />
+      <Bond atomName1="C1" atomName2="H3" />
+      <Bond atomName1="C2" atomName2="H4" />
+      <Bond atomName1="C2" atomName2="H5" />
+      <Bond atomName1="O1" atomName2="H6" />
+    </Residue>
+  </Residues>
+</ForceField>
