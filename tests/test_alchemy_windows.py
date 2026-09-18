@@ -436,8 +436,11 @@ def test_npt_windows_carry_pv_resume_and_recover_the_exact_free_energy(tmp_path)
     assert samples.ensemble == "NPT" and np.ptp(samples.volume_nm3) > 0.05   # the box moved
     u = samples.reduced_potential()
     pv = 1.01325 * 0.0602214076 * samples.volume_nm3 / samples.kt
-    np.testing.assert_allclose(u - samples.potential_kj_mol / samples.kt, pv[:, None] *
-                               np.ones_like(u), rtol=1e-12)
+    # u itself against U/kT + pV/kT. Not (u - U/kT) against pV/kT: U/kT is ~ -7000 here, and the
+    # difference loses ~1e-12 absolute to cancellation -- a 1e-12 RELATIVE test of a 0.28 kT
+    # remainder then fails on round-off (it did, 2026-09-19), which says nothing about pV.
+    np.testing.assert_allclose(u, samples.potential_kj_mol / samples.kt + pv[:, None],
+                               rtol=1e-12)
     result = est.analyze(samples)
     exact = (1.5 * kt_kj_mol(T) * math.log(K1 / K0) + C) / KJ_PER_KCAL
     print(f"\nS4 N1 NPT campaign: exact {exact:.4f} kcal/mol, samples {samples.counts()}")
