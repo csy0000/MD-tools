@@ -1,16 +1,18 @@
 # REST2: paracetamol in explicit water, 10 ns per state
 
-!!! note "Requires md-tools 0.5.4 or later"
-    Earlier releases built REST2 states differently; their tutorials are
-    [archived](../archived/README.md).
+!!! note "Requires the md-tools release after 0.5.4"
+    This page builds its box from a **registered parameter package** rather than parameterising
+    the molecule again, which needs the release after 0.5.4. It was run with md-tools at commit
+    `e9a89db`, on ONE NVIDIA RTX A5000 shared by the four replicas through CUDA MPS.
 
-A four-state REST2 ladder over paracetamol, from a SMILES string to 10 ns of production **per state**,
-with md-tools **0.5.4**. Every command below was run exactly as written, and every number is copied
-from the files that run produced (md-tools at commit `e1a84e1`; four NVIDIA RTX 3080 GPUs, CUDA,
-mixed precision).
+A four-state REST2 ladder over paracetamol, 10 ns of production **per state**. Every command below
+was run exactly as written, and every number is copied from the files that run produced.
 
-The whole thing took about 12 minutes: 1.5 min to build, 1 s to scale, 11 min to equilibrate and run
-the ladder.
+The molecule is **not parameterised here**: this page reuses the package
+[cMD: paracetamol](../cMD/paracetamol.md) makes, so read that page first if you want to know where
+ligand parameters come from. The charge calculation happens once, there.
+
+The ladder took 19.5 min on one shared GPU, plus a few seconds to build and scale.
 
 !!! info "What changed since 0.5.3"
     In 0.5.3 the ladder scaled its states itself, at run time, and `run.sh` refused this molecule.
@@ -31,45 +33,59 @@ improper. See [REST2](../../openmm_methods/REST2/README.md).
 
 ## 1. The dataset root
 
+A REST2 ladder gets its **own** dataset root, beside the cMD one rather than inside it: `input/` is
+shared by every run on a system, and this ladder's equilibration stages are longer than the cMD
+page's, so `build-md` refuses to overwrite them. The parameters are shared; the box is not.
+
 ```bash
-mkdir -p PARA/build
-cd PARA/build
+mkdir -p REST2-PARA/build
+cd REST2-PARA/build
+cp "$MD_DATA/parameters/ligands/CHEMBL112/param_e932f4c4f371/TYL.sdf" paracetamol.sdf
 ```
 
-`paracetamol.smi`:
-
-```text
-CC(=O)Nc1ccc(O)cc1 paracetamol
-```
+## 2. Build the system, from the registered package
 
 `build-top.config`:
 
 ```yaml
 solute:
   kind: ligand
+  residue_name: TYL
+  parameters: CHEMBL112/param_e932f4c4f371
 ```
 
-## 2. Build the system
-
 ```bash
-md-openmm build-top -i paracetamol.smi \
+md-openmm build-top -i paracetamol.sdf \
     -os built.xml -op built.pdb -log built.log --config build-top.config
 ```
 
 ```text
+Resolved configuration
+  solute.parameters           CHEMBL112/param_e932f4c4f371   (set)
+  residue name                TYL   (stated)
+Preparation
+  parameters   : CHEMBL112/param_e932f4c4f371 (reused (stated reference))
+  solvation    : 592 waters, ions {'NA': 2, 'CL': 2}, box dodecahedron (19.1 nm^3)
 Counts
   atoms                       1800
   solute atoms                20
-  waters                      592
-  ions                        {'NA': 2, 'CL': 2}
 ```
 
-It writes `built.xml`, `built.pdb` and `built.sdf`. **Keep `built.sdf`**: it holds the bond orders,
-which is how the next step knows which bonds are aromatic and which C–N is an amide.
+`parameters` names the package **by identity**, with no path: it is resolved in the shared catalog
+under `$MD_DATA/parameters/ligands`, where `md-openmm data-register --ligand-package` put it. A
+package that is not registered is named by its path instead — see
+[cMD: paracetamol](../cMD/paracetamol.md).
+
+`reused (stated reference)` means no charge was generated here. This box and the cMD page's box
+rest on the same numbers, which is the point: a comparison between the two runs is a comparison of
+sampling, not of parameters.
+
+It also writes `TYL.sdf` beside the System. **Keep it**: it holds the bond orders, which is how the
+next step knows which bonds are aromatic and which C–N is an amide.
 
 ## 3. Build the scaled states
 
-This is the new step. `scaler.config`, beside the built System:
+`scaler.config`, beside the built System:
 
 ```yaml
 method: REST2
@@ -91,7 +107,7 @@ build/REST2/
 ├── system_state0.xml  system_state1.xml  system_state2.xml  system_state3.xml
 ├── scaler.yaml          what these files are and how they were made (sha256 of each)
 ├── scaler.log           the same, for a person
-└── UNL-unscaled.png     what stays unscaled, drawn
+└── TYL-unscaled.png     what stays unscaled, drawn
 ```
 
 From `scaler.log`:
@@ -101,10 +117,10 @@ From `scaler.log`:
   solute                      20 atom(s)
   unscaled torsions           amide omega 1 bond(s), aromatic ring 6 bond(s), double bond 0 bond(s), impropers 24 term(s)
                               56 torsion term(s) unscaled, 18 scaled
-  SDF for UNL                 built.sdf
+  SDF for TYL                 TYL.sdf
 ```
 
-and `UNL-unscaled.png` — every red bond keeps all its torsions unscaled in every state, and every red
+and `TYL-unscaled.png` — every red bond keeps all its torsions unscaled in every state, and every red
 atom is the centre of an unscaled improper; the numbers are the atom indices `scaler.yaml` uses:
 
 ![paracetamol: unscaled torsions in red](images/paracetamol-unscaled.png)
@@ -144,7 +160,7 @@ reporting:
 `build/REST2/`, and `build-md` refuses if they disagree with it.
 
 ```bash
-cd ..                                            # PARA/
+cd ..                                            # REST2-PARA/
 md-openmm build-md -odir ./REST2-run1 --config REST2.config
 ```
 
@@ -159,13 +175,41 @@ The group file it writes names the saved states, one per line:
 
 ## 5. Run it
 
+Four replicas need four workers. Give each one its own GPU if you have them:
+
 ```bash
 cd REST2-run1
-CUDA_VISIBLE_DEVICES=1,2,3,4 ./run.sh
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1,2,3,4 ./run.sh
 ```
 
+This run had **one** card, so the four workers shared it — which md-tools allows only under
+NVIDIA MPS, and refuses otherwise:
+
+```text
+md-run: REST2: this launch shares device 0 between 4 workers. NVIDIA MPS is not-a-client for this
+process ... Without MPS, workers on one GPU are time-sliced: each waits for the others' kernels,
+and a synchronous ladder runs at the pace of that shared GPU.
+```
+
+md-tools neither starts nor stops the daemon — that is the operator's decision, because an MPS
+daemon outlives the run. Start one that belongs to you, run, and stop it:
+
+```bash
+export CUDA_MPS_PIPE_DIRECTORY="$HOME/.cache/mps/pipe"    # keep this path SHORT: it holds a Unix
+export CUDA_MPS_LOG_DIRECTORY="$HOME/.cache/mps/log"      # socket, and those cap at 108 characters
+mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
+CUDA_VISIBLE_DEVICES=0 nvidia-cuda-mps-control -d
+
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 ./run.sh
+
+echo quit | nvidia-cuda-mps-control
+```
+
+A private pipe directory matters: with the default one the daemon serves **every** card on the
+host, so a shared machine's other GPUs end up behind your daemon.
+
 `run.sh` minimises and equilibrates once on the unscaled system (`min`, `eq_1`, `eq_2`, `eq_3`),
-then launches the ladder, one MPI rank per state and one GPU per rank:
+then launches the ladder, one MPI rank per state:
 
 ```text
 mpirun -n 4 md-openmm md-run -ng 4 -i ../input/REST2.in -p "${TOPOLOGY}" \
@@ -175,11 +219,11 @@ mpirun -n 4 md-openmm md-run -ng 4 -i ../input/REST2.in -p "${TOPOLOGY}" \
 
 !!! tip "Which GPU is which"
     CUDA numbers devices fastest first, `nvidia-smi` by PCI bus, so on a machine with mixed cards
-    `CUDA_VISIBLE_DEVICES=1,2,3,4` need not be the GPUs `nvidia-smi` lists as 1–4 -- on the machine
-    this ran on, it was not. Add `CUDA_DEVICE_ORDER=PCI_BUS_ID` in front of the command to make the
-    two numberings agree.
+    `CUDA_VISIBLE_DEVICES=1,2,3,4` need not be the GPUs `nvidia-smi` lists as 1–4. Put
+    `CUDA_DEVICE_ORDER=PCI_BUS_ID` in front to make the two numberings agree.
 
-It finished in 11 min and ended with `run.sh: all stages reported completion`.
+It finished in 19.5 min and ended with `run.sh: all stages reported completion`. Stages that had
+already completed were skipped, not repeated — only the ladder ran.
 
 ## 6. Results
 
@@ -191,37 +235,67 @@ It finished in 11 min and ended with `run.sh: all stages reported completion`.
 # solute frames         : 5000 (every 1000 steps)
 # production per replica: 10000.0 ps
 # NEIGHBOURING-PAIR acceptance:
-#   state 0 <-> state 1   546/2500   0.218
-#   state 1 <-> state 2   540/2500   0.216
-#   state 2 <-> state 3   583/2500   0.233
-#   overall               1669/7500   0.223
+#   basis: cumulative over every committed exchange row in the authoritative NetCDF, exchanges 0-4999
+#   state 0 <-> state 1   566/2500   0.226
+#   state 1 <-> state 2   525/2500   0.210
+#   state 2 <-> state 3   580/2500   0.232
+#   overall               1671/7500   0.223
 # REST2:
 #   tau ladder            0, 0.166667, 0.333333, 0.5   (4 state(s), one temperature 300.0 K, NVT)
+#   scaling               solute-solute (1-tau)^2, solute-environment 1-tau
 #   left unscaled         bonds unscaled, angles unscaled, torsions: ordinary amide omega, aromatic ring bonds, other double bonds, impropers
 #   solute region         20 atom(s), 7 unscaled central bond(s), impropers unscaled
+#   velocities on swap    never rescaled (one beta across the ladder)
 # TIMINGS:
-#   throughput            1397.83 ns/day per replica, 5591.32 ns/day aggregate over 4 state(s)
+#   elapsed               1170.8 s
+#   throughput            737.95 ns/day per replica, 2951.81 ns/day aggregate over 4 state(s)
 run_status: completed
 ```
 
-**The walkers really travel.** Counting, in `exchange.csv`, every full trip of a walker from state 0
-to state 3 and back: 54, 51, 46 and 56 round trips for the four walkers.
+An acceptance near 0.22 on every neighbouring pair is a usable ladder: high enough that
+configurations move, low enough that the states are telling each other something.
+
+Both measurements below come from [`paracetamol_analysis.py`](paracetamol_analysis.py), run from
+the dataset root.
+
+**The walkers really travel.** An acceptance ratio on its own does not show that: neighbours can
+swap busily while nothing ever crosses the ladder. Counting, per walker, full journeys from the
+physical state to the hottest and back:
+
+```text
+round trips (0 -> top -> 0), per walker: 51, 50, 58, 59
+```
 
 **The unscaled amide stays planar, and the scaled rotation loosens.** Measured on
-`solute_state<i>_prod1.nc`, 5000 frames each:
+`solute_state<i>_prod1.nc`, 5000 frames each. An angle needs a circular standard deviation —
+179° and −179° are 2° apart, not 358°:
 
-| torsion | scaled? | state 0 (τ = 0) | state 3 (τ = 0.5) |
-|---|---|---|---|
-| amide ω, atoms 0-1-3-4 | no | trans, circular sd 11.9°, no cis frame | trans, circular sd 12.0°, no cis frame |
-| ring about N–C, atoms 1-3-4-5 | yes | circular sd 110° | circular sd 160° |
+| torsion | scaled? | state 0 (τ = 0) | state 1 | state 2 | state 3 (τ = 0.5) |
+|---|---|---|---|---|---|
+| amide ω, atoms 0-1-3-4 | no | 12.2° | 12.0° | 11.9° | 11.8° |
+| ring about N–C, atoms 1-3-4-5 | yes | 126.7° | 138.6° | 160.2° | 161.1° |
 
-The amide looks the same in the hottest state as in the physical one, which is the point of leaving
-it unscaled; the ring rotation, which REST2 is meant to help, is visibly freer at τ = 0.5.
+and **not one cis frame in any state** — 0 of 5000 with \|ω\| < 90°, state 0 to state 3. The amide
+looks the same in the hottest state as in the physical one, which is the point of leaving it
+unscaled: a hot state that isomerised it would sample a geometry state 0 never visits, and every
+exchange would carry that geometry down the ladder. The ring rotation, which REST2 is meant to
+help, is visibly freer at τ = 0.5.
 
 The files follow the thermodynamic **state**: `solute_state0_prod1.nc` is the physical ensemble, and
 no demultiplexing is needed before analysing it. `solute.yaml` records that the ladder integrated
 the saved states (`detection_route: saved-state`, and the sha256 of each).
 
+!!! note "One shared GPU is slower, and samples the same"
+    On four RTX 3080s this ladder ran at about 1400 ns/day per replica; on one shared A5000 it
+    runs at 738. The physics is identical — same Systems, same ladder, same acceptance near 0.22,
+    the same round-trip counts to within the scatter of a different random trajectory. A shared
+    card costs wall time, not correctness.
+
 ## Next
 
-* the ordinary MD version of this molecule: [cMD: paracetamol](../cMD/paracetamol.md)
+* where the parameters came from: [cMD: paracetamol](../cMD/paracetamol.md)
+* the same parameters in a protein pocket:
+  [cMD: a bromodomain with paracetamol](../cMD/bromodomain-paracetamol.md)
+* a ladder over a peptide: [REST2: chignolin](chignolin.md)
+* register the finished directory as a dataset:
+  [Registering a finished run](../../data_register/README.md)
