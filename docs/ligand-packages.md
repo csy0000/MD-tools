@@ -182,9 +182,18 @@ md-openmm build-top --parameterize -i TYL.sdf --config para.config \
     -log build/parameterize.log --resname TYL [--register]
 ```
 
-`-i` reads a `.sdf` or a `.mol2` -- the only place `.mol2` is accepted, because parameterisation
+`-i` reads a `.sdf`, a `.mol2` or a `.smi`. `.mol2` is accepted only here, because parameterisation
 needs a molecular graph with bond orders and that is what several docking and preparation tools
-write. `-op` and `-os` must name files in ONE directory, and that directory is what is written:
+write; a `.smi` states the chemistry and no coordinates, so a conformer is EMBEDDED exactly as
+`build-top` embeds one (ETKDGv3 from the run seed, then MMFF), and the log says which route the
+coordinates came from. A structure without bond orders, such as a `.pdb`, is refused.
+
+**The conformer is not part of the identity.** A package is identified by its chemical state and
+its parameters, so the same molecule parameterised from a `.smi` and from a `.sdf` gets the SAME
+parameter id with different `molecule.sdf` coordinates. A conformer can only move the id by moving
+the charges, which is a property of the molecule rather than of the input format.
+
+`-op` and `-os` must name files in ONE directory, and that directory is what is written:
 
 ```text
 build/parameter/  molecule.sdf       the package
@@ -200,6 +209,11 @@ The first four ARE a package, so the directory registers and a catalog search fi
 three are what a person, a tutorial and a later command line point at; they are declared in the
 metadata with their digests, and a package whose copies were modified is refused. `-log` must be
 written OUTSIDE the directory, because a package holds nothing it does not declare.
+
+**A package directory moves as a UNIT: all seven files.** The declared copies are part of what the
+metadata promises, so copying only the four "package" files leaves the package unloadable --
+"the metadata declares the readable copy 'TYL.pdb', which is not there". Copy or move the
+directory, never a selection of its contents.
 
 `TYL.xml` is the molecule alone: no solvent, no box, no cutoff, no constraints. It is a parameters
 artefact for reading and comparing, not a system to integrate -- a run's Hamiltonian comes from a
@@ -258,8 +272,13 @@ ligand_catalog:
 
 * `search` (the default) looks in the catalogs for a package whose declared criteria match this
   build, REUSES it on a match and PARAMETERISES the molecule on any difference;
-* `CHEMBL112/param_e932f4c4f371` reuses exactly that package and searches nothing. This is the
-  explicit override: it is how a tutorial or a campaign pins the parameters it means to use;
+* `CHEMBL112/param_e932f4c4f371` reuses exactly that package from the catalogs and searches
+  nothing. This is the explicit override: it is how a tutorial or a campaign pins the parameters
+  it means to use;
+* a PATH to a package directory -- `parameters: ./parameter` -- reuses the package there and
+  searches nothing. Absolute, or relative to the configuration file, so a build works from
+  `build-top --parameterize` output beside it with no catalog at all. The directory keeps whatever
+  name its build gave it;
 * `generate` parameterises the molecule whatever the catalog holds.
 
 Either kind of reuse requires the same thing of the input:

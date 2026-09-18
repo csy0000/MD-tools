@@ -74,7 +74,7 @@ def _parameterize(work: Path, structure: Path, catalog: Path, *, out="build/para
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("source", ["sdf", "mol2"])
+@pytest.mark.parametrize("source", ["sdf", "mol2", "smi"])
 def test_it_writes_a_real_package_with_the_readable_copies_beside_it(tmp_path, source):
     from md_tools.build.record import read_record
     from md_tools.ligands import load_package
@@ -83,7 +83,15 @@ def test_it_writes_a_real_package_with_the_readable_copies_beside_it(tmp_path, s
     work = tmp_path / "work"
     work.mkdir()
     mol = _molecule("CC(=O)Nc1ccc(O)cc1")
-    structure = (_sdf(mol, work / "in.sdf") if source == "sdf" else _mol2(mol, work / "in.mol2"))
+    if source == "sdf":
+        structure = _sdf(mol, work / "in.sdf")
+    elif source == "mol2":
+        structure = _mol2(mol, work / "in.mol2")
+    else:
+        # No coordinates at all: the conformer is embedded, as build-top embeds one. The package
+        # identity does not depend on it, so this must reach the same parameter id.
+        structure = work / "in.smi"
+        structure.write_text("CC(=O)Nc1ccc(O)cc1 paracetamol\n", encoding="utf-8")
 
     result = _parameterize(work, structure, tmp_path / "catalog")
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
@@ -112,6 +120,9 @@ def test_it_writes_a_real_package_with_the_readable_copies_beside_it(tmp_path, s
 
     record = read_record(work / "parameterize.log")
     assert record["mode"] == "parameterize"
+    coordinates = record["interpretation"]["coordinates"]
+    assert ("embedded from the SMILES" in coordinates) is (source == "smi")
+    assert ("used as given" in coordinates) is (source != "smi")
     assert record["outputs"]["package"]["reference"] == tyl.reference
     # The catalog already held this exact state, so nothing was charged again.
     assert record["ligand_packages"]["attached"]["charges_generated_in_this_build"] is False
@@ -191,13 +202,13 @@ def test_a_molecule_the_catalog_does_not_hold_is_parameterised(tmp_path):
     ("log inside", "inside the package directory"),
     ("with scaler", "two different jobs"),
     ("resname without the flag", "belongs to --parameterize"),
-    ("smiles input", "must be .sdf or .mol2"),
+    ("pdb input", "must be .sdf, .mol2, .smi"),
 ])
 def test_the_refusals(tmp_path, case, expected):
     work = tmp_path / "work"
     work.mkdir()
     (work / "in.sdf").write_text("x\n", encoding="utf-8")
-    (work / "in.smi").write_text("CCO ethanol\n", encoding="utf-8")
+    (work / "in.pdb").write_text("END\n", encoding="utf-8")
     args = {
         "two directories": ["--parameterize", "-i", "in.sdf", "-op", "a/TYL.pdb",
                             "-os", "b/TYL.xml", "--resname", "TYL"],
@@ -210,8 +221,10 @@ def test_the_refusals(tmp_path, case, expected):
                        "-log", "e/built.log", "--resname", "TYL"],
         "with scaler": ["--parameterize", "--rest2-scaler", "-i", "in.sdf", "--resname", "TYL"],
         "resname without the flag": ["-i", "in.sdf", "--resname", "TYL"],
-        "smiles input": ["--parameterize", "-i", "in.smi", "-op", "f/T.pdb", "-os", "f/T.xml",
-                         "--resname", "TYL"],
+        # A structure is not a molecular graph: a .pdb has no bond orders, which is what
+        # parameterisation needs, so it is refused here while .smi is embedded.
+        "pdb input": ["--parameterize", "-i", "in.pdb", "-op", "f/T.pdb", "-os", "f/T.xml",
+                      "--resname", "TYL"],
     }[case]
     result = _run(args, work)
     assert result.returncode == 2, result.stdout[-1000:] + result.stderr[-1000:]
