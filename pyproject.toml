@@ -31,6 +31,13 @@ dev = ["pytest", "pytest-xdist", "build"]
 # is a fatal preflight error, never a quietly serial run. See `md_tools.remd.mpi`.
 mpi = ["mpi4py>=3.1"]
 
+# Alchemical free-energy ANALYSIS (0.7.0, under construction). An extra, so an ordinary cMD install
+# is unchanged. pymbar (MIT) supplies MBAR and statistical inefficiency and is imported lazily by
+# `md_tools.alchemy.estimators`, which forces its numpy/scipy solver: pymbar 4 otherwise imports JAX,
+# and JAX preallocates memory on every visible GPU for an analysis that needs none. EXP, BAR and TI
+# need only numpy. Capped below 5 because the estimator API the code calls is pymbar 4's.
+alchemy = ["pymbar>=4,<5", "scipy"]
+
 # The ONLY entry point. Installing the wheel puts `md-openmm` on PATH, which is what lets a
 # consuming project run the whole pipeline with no source checkout and no component lock.
 [project.scripts]
