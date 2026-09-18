@@ -34,6 +34,19 @@ the first eligible frame to the last.
 directory — any AIS run from 0.5.4 — is refused on continuation, because neither its λ values nor
 its selected frames can be confirmed unchanged. Start a new `-odir`.
 
+**`data-register` classifies a run directory by its method.** The default layout is
+`<method>-run<N>/`, and the manifest drafter matched directory names *exactly* — so `cMD-run1` was
+not `cMD`, and every real production directory was registered as a `reference` component claiming
+no method at all. A run directory now resolves for `cMD`, `REST2`, `AIS`, `umbrella` and the
+archived `rREST2`; `US` is accepted as a directory name and records `umbrella`, because
+`build_md.PROTOCOLS` is the one authority for the spelling and two spellings for one method in a
+manifest cannot be joined afterwards. `build/`, `input/`, `common/`, `min/`, `eq/` and `analysis/`
+keep their fixed meanings. Anything else — a stream directory such as
+`cMD-cold-run1.dcd-stream-20260912-0816`, or a variant nobody declared — is still registered as
+`reference` with no method claimed, because an invented method in a manifest is worse than an
+honest absence. Datasets registered before this fix carry `type: reference, method: null` for
+their run directories; the data are unaffected and re-registering restores the labels.
+
 ## 0.5.4 — 2026-09-17
 
 **`build-top` takes a peptide as a sequence.** `-i ALA.seq`, where the file holds one line of

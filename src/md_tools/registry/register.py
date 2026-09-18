@@ -46,21 +46,60 @@ from .userconfig import load_user_config, resolve_md_data
 
 STATE_NAME = ".md-tools-registration.json"
 
-#: Which component type and method a directory name implies. A directory whose name is not here
-#: is still registered, as a `reference` component with no method claim -- the alternative is to
-#: invent a method, and an invented method in a manifest is worse than an honest absence.
+#: Which component type and method a FIXED directory name implies. Methods live in
+#: `COMPONENT_METHODS` instead, because a method directory is named `<method>-run<n>`.
 COMPONENT_KINDS: dict[str, tuple[str, str | None, str]] = {
     "input": ("shared-input", None, "Prepared system and topology shared by every method."),
     "common": ("shared-input", None, "Prepared system and topology shared by every method."),
+    "build": ("shared-input", None, "Prepared system and topology shared by every method."),
     "min": ("simulation", "minimization", "Restrained energy minimisation."),
     "eq": ("simulation", "equilibration", "The equilibration chain before production."),
-    "cMD": ("simulation", "cMD", "Production molecular dynamics."),
-    "REST2": ("simulation", "REST2", "Replica-exchange solute tempering ladder."),
-    # rREST2 is archived (0.5.4), but a dataset produced before that still registers: registering
-    # describes finished data and runs nothing.
-    "rREST2": ("simulation", "rREST2", "Reservoir REST2 ladder (archived method)."),
     "analysis": ("analysis", None, "Analysis derived from this dataset's own simulation output."),
 }
+
+#: The methods a run directory may name. `md_tools.build.md.PROTOCOLS` is the authority for the
+#: SPELLING, so a manifest's `method` always equals the `protocol` its `resolved.config` carries;
+#: `US` is accepted as a synonym for the directory name and records `umbrella` regardless, because
+#: two spellings for one method in a manifest is two policies, and joining them later is guesswork.
+COMPONENT_METHODS: dict[str, tuple[str, str]] = {
+    "cMD": ("cMD", "Production molecular dynamics."),
+    "REST2": ("REST2", "Replica-exchange solute tempering ladder."),
+    "AIS": ("AIS", "Annealed importance sampling between two end states."),
+    "umbrella": ("umbrella", "Umbrella sampling along a collective variable."),
+    "US": ("umbrella", "Umbrella sampling along a collective variable."),
+    # rREST2 is archived (0.5.4), but a dataset produced before that still registers: registering
+    # describes finished data and runs nothing.
+    "rREST2": ("rREST2", "Reservoir REST2 ladder (archived method)."),
+}
+
+#: What a directory nobody can classify becomes. Inventing a method is worse than an honest absence.
+UNCLAIMED: tuple[str, str | None, str] = (
+    "reference", None,
+    "Directory registered as part of this dataset. No method is claimed for it, because none "
+    "could be established from the records.")
+
+
+def _component_kind(name: str) -> tuple[str, str | None, str]:
+    """What a directory name says it is: a fixed name, `<method>-run<n>`, or nothing claimable.
+
+    The run suffix is the DEFAULT layout (`<project>/<system>/<method>-run<n>`), so an exact-name
+    lookup alone classified every real production directory as `reference` -- `cMD-run1` is not
+    `cMD`. Split on the LAST `-run`, and require the remainder to be digits: that keeps
+    `cMD-cold-run1.dcd-stream-20260912-0816` unclaimed, because `1.dcd-stream-...` is not an index
+    and `cMD-cold` is not a method this package writes.
+    """
+    fixed = COMPONENT_KINDS.get(name)
+    if fixed is not None:
+        return fixed
+    method_name, separator, index_text = name.rpartition("-run")
+    if not separator or not index_text.isdigit():
+        method_name, index_text = name, ""
+    entry = COMPONENT_METHODS.get(method_name)
+    if entry is None:
+        return UNCLAIMED
+    method, description = entry
+    return ("simulation", method,
+            f"{description} Run {int(index_text)}." if index_text else description)
 
 
 def _missing_source_reason(source: Path, destination: Path, relative: str) -> str:
@@ -482,10 +521,7 @@ def _manifest(*, source: Path, relative: str, year: str, project_name: str, data
     for child in sorted(Path(source).iterdir()):
         if not child.is_dir() or child.name.startswith(".") or child.name == "__pycache__":
             continue
-        kind, method, description = COMPONENT_KINDS.get(
-            child.name, ("reference", None,
-                         "Directory registered as part of this dataset. No method is claimed for "
-                         "it, because none could be established from the records."))
+        kind, method, description = _component_kind(child.name)
         components.append({"name": child.name, "type": kind, "path": child.name,
                            "status": "complete", "linked": False, "method": method,
                            "description": description})

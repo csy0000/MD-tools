@@ -79,6 +79,71 @@ def _register(world, **kw):
     return register_dataset(**params)
 
 
+# -- what a directory name says it is ----------------------------------------------------------
+
+@pytest.mark.parametrize("name, kind, method", [
+    ("cMD-run1", "simulation", "cMD"),
+    ("REST2-run2", "simulation", "REST2"),
+    ("AIS-run10", "simulation", "AIS"),
+    ("umbrella-run1", "simulation", "umbrella"),
+    ("US-run1", "simulation", "umbrella"),
+    ("rREST2-run1", "simulation", "rREST2"),
+    ("cMD", "simulation", "cMD"),
+    ("build", "shared-input", None),
+    ("input", "shared-input", None),
+    ("min", "simulation", "minimization"),
+    ("eq", "simulation", "equilibration"),
+    ("analysis", "analysis", None),
+])
+def test_a_run_directory_names_its_method(name, kind, method):
+    assert register._component_kind(name)[:2] == (kind, method)
+
+
+def test_the_exact_name_lookup_alone_would_have_missed_every_real_run_directory():
+    """`<method>-run<n>` is the DEFAULT layout, so exact-name matching classified nothing real."""
+    assert register.COMPONENT_KINDS.get("cMD-run1") is None
+    assert register._component_kind("cMD-run1")[:2] == ("simulation", "cMD")
+
+
+def test_us_records_umbrella_because_the_protocol_has_exactly_one_spelling():
+    """Two spellings for one method in a manifest is two policies, and joining them is guesswork."""
+    from md_tools.build.md import PROTOCOLS
+
+    assert register._component_kind("US-run1")[1] == register._component_kind("umbrella-run1")[1]
+    assert register._component_kind("US-run1")[1] in PROTOCOLS
+
+
+@pytest.mark.parametrize("name", [
+    "cMD-cold-run1.dcd-stream-20260912-0816",   # a stream directory, not a run
+    "cMD-cold-run1",                            # a variant nobody declared
+    "cMD-run",                                  # no index
+    "cMD-runX",                                 # not an index
+    "notes",
+])
+def test_a_directory_nobody_can_classify_claims_no_method(name):
+    kind, method, description = register._component_kind(name)
+    assert (kind, method) == ("reference", None)
+    assert "No method is claimed" in description
+
+
+def test_every_method_spelling_is_one_the_package_actually_writes():
+    """A method in a manifest a reader cannot find in PROTOCOLS is a method nobody can join on."""
+    from md_tools.build.md import PROTOCOLS
+
+    written = {method for method, _ in register.COMPONENT_METHODS.values()}
+    assert written - {"rREST2"} <= set(PROTOCOLS)
+
+
+def test_a_registered_run_directory_carries_its_method_into_the_manifest(world):
+    (world["source"] / "cMD").rename(world["source"] / "cMD-run1")
+    _age(world["source"])
+    _register(world)
+    manifest = yaml.safe_load(
+        (world["root"] / "2026" / "ALA" / "ALA-cMD" / MANIFEST_NAME).read_text(encoding="utf-8"))
+    component = next(c for c in manifest["components"] if c["name"] == "cMD-run1")
+    assert (component["type"], component["method"]) == ("simulation", "cMD")
+
+
 # -- the path shape ---------------------------------------------------------------------------
 
 def test_the_project_path_is_year_first_with_no_month(world):
