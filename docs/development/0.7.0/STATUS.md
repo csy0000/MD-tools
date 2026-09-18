@@ -17,7 +17,7 @@ in [`handoffs/`](handoffs/) and never edit it.
 | | milestone | owner | state | evidence |
 |---|---|---|---|---|
 | A0 | interfaces, schemas, fixtures, adapter choice | S0 with S2–S4 | IN PROGRESS | [shared contracts](../shared-contracts.md) |
-| A1 | `combine-topology` construction | S2 | NOT STARTED | — |
+| A1 | `combine-topology` construction | S2 | IMPLEMENTED (callable layer; CLI not wired) | integrated at `6df0df6`; [handoffs/S2.md](handoffs/S2.md); 114 passed on Reference, `MD_DATA` at an empty temp root |
 | A2 | Amber18 softcore, energies and derivatives | S3 | NOT STARTED | — |
 | A3 | windows, FEP/BAR/MBAR and TI, hydration | S4 | NOT STARTED | — |
 | A4 | relative binding cycle | S4 | NOT STARTED | — |
@@ -40,11 +40,15 @@ A2 — individual development does not.
 | wire `md-run` / `build-md` for alchemical windows (`protocol` value, `.in` keys, `resolved.config`) | the window runner needs S3's Hamiltonian interface to settle first; wiring it against a moving API means doing it twice |
 | a data-contract method entry for alchemical datasets | needed before registration can even be tested against a temporary root; real registration stays BLOCKED (sandbox) |
 | `md-openmm combine-topology` CLI and its input schema | S2's callable surface is accepted; the input schema is PROPOSED in `topology-plan.md` |
-| land S2 at `7d8b7f9` | merged locally with a renaming integration commit; held because six S2 functions were unclassified in the CUDA coverage matrix and two took a free `platform` string |
 
 ## Integration commits
 
-None yet.
+| commit | what | checks |
+|---|---|---|
+| `f04397b` | merge S2 at `7d8b7f9` | held: the CUDA inventory found six unclassified S2 sites, two taking a free `platform` string |
+| `6bae714` | `ligands.package` comparison functions made public for S2 | stale-entry guard PASS |
+| `84a77b0` | `alchemy` extra: `pymbar>=4,<5`, `scipy` | — |
+| `6df0df6` | merge S2 at `ea43898`: recovery Contexts pinned to Reference by constant, six sites classified non-CUDA | 114 passed (S2's files plus all ligand tests, slow included, CUDA hidden); both inventory guards PASS run directly; `MD_DATA` temp root empty afterwards |
 
 ## Blockers
 
