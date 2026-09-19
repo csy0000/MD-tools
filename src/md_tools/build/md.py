@@ -190,6 +190,27 @@ MD_SCHEMA = Schema(
             Field("tau_max", float, default=0.5, minimum=0.0, maximum=0.95,
                   doc="The hottest rung's tau. The ladder is linear from 0.0 to this value. "
                       "tau = 0 is the unscaled physical Hamiltonian."),
+            Field("backbone_scaling_list", str, default=None, nullable=True,
+                  doc="Selective REST2: a CLAIM about the saved states, not a way to make them. "
+                      "The residues whose BACKBONE is hot, as a quoted AMBER residue mask of "
+                      "one-based topology residue indices (\":45,46,59\", \":45-50\"). The "
+                      "region is chosen when `md-openmm build-top --rest2-scaler` builds the "
+                      "states; build-md resolves this claim and refuses it unless it is the "
+                      "region that build/REST2/scaler.yaml records, as it does for "
+                      "number_of_replicas and tau_max. Masks are compared as resolved regions, "
+                      "not as text. Leave all three selector keys out to accept whatever region "
+                      "the record holds; build-md.log then prints it."),
+            Field("sidechain_scaling_list", str, default=None, nullable=True,
+                  doc="Selective REST2: a claim, as for backbone_scaling_list, naming the "
+                      "residues whose SIDECHAIN is hot. Chi1 belongs to the sidechain."),
+            Field("ligand_scaling_dict", dict, default=None, nullable=True,
+                  doc="Selective REST2: a claim naming hot ligand INSTANCES, as "
+                      "`{label: {mask: \":201\", torsion_exclusions: <file> or auto}}`. The "
+                      "label is a name only; the instance is the residue the mask resolves "
+                      "to, and an exclusion file is compared by its contents, not its path "
+                      "(relative paths are read from this configuration's directory). The "
+                      "compact form `label: <file>` is refused: no instance name is recorded "
+                      "for it to resolve against yet."),
             Field("exchange_interval_steps", int, default=5000, minimum=1, unit="steps",
                   doc="Steps of dynamics between exchange attempts. 5000 steps = 10 ps at 2 fs."),
             Field("number_of_exchanges", int, default=500, minimum=1,
@@ -394,6 +415,15 @@ def _check_protocol(resolved: dict[str, Any]) -> None:
             "dynamics.phase_space_printout is set but dynamics.tau is 0.0. A phase-space stream "
             "records complete samples of a SCALED rung's ensemble; from the unscaled Hamiltonian "
             "it would sample a rung nothing runs at.")
+    claimed = [key for key in ("backbone_scaling_list", "sidechain_scaling_list",
+                               "ligand_scaling_dict")
+               if (resolved.get("rest2") or {}).get(key) is not None]
+    if claimed and protocol != "REST2":
+        raise ConfigError(
+            f"rest2.{claimed[0]} is set but protocol is {protocol}. The selector keys are claims "
+            f"about the saved states of a REST2 ladder; {protocol} integrates no ladder, so the "
+            f"claim would check nothing. Remove it. (A fixed-tau stage on a selective state reads "
+            f"its region from that state's scaler.yaml.)")
     if (resolved.get("rest2") or {}).get("equilibration_per_tau"):
         if protocol != "REST2":
             raise ConfigError(
@@ -1944,7 +1974,8 @@ raise SystemExit(run_generated_remd(__file__, protocol="{protocol}"))
 '''
 
 
-def _saved_ladder_states(resolved: dict[str, Any], dataset) -> dict[str, Any]:
+def _saved_ladder_states(resolved: dict[str, Any], dataset, *,
+                         config_dir: Path | None = None) -> dict[str, Any]:
     """The saved scaled states a REST2 ladder integrates, checked before anything is written.
 
     A ladder scales nothing (docs/amber-like-fix/REST2-scaler.md, step 4): its states are
@@ -1992,8 +2023,54 @@ def _saved_ladder_states(resolved: dict[str, Any], dataset) -> dict[str, Any]:
             f"{len(taus)} at tau {taus}. A ladder scales nothing, so its configuration must "
             f"describe the states it will integrate: change the configuration, or rebuild the "
             f"states:\n{command}")
+    selection = _check_claimed_region(resolved, dataset, record, record_path, command,
+                                      config_dir=config_dir or Path.cwd())
     return {"directory": directory, "record": record_path, "taus": taus,
-            "files": [directory / state_system_name(index) for index in range(len(taus))]}
+            "files": [directory / state_system_name(index) for index in range(len(taus))],
+            "selection": selection}
+
+
+def _check_claimed_region(resolved: dict[str, Any], dataset, record: dict[str, Any],
+                          record_path: Path, command: str, *, config_dir: Path):
+    """The selector keys of a REST2 configuration are CLAIMS, checked as the tau ladder is.
+
+    The region is chosen by `build-top --rest2-scaler`, the one place a scaled Hamiltonian is
+    made, and recorded in scaler.yaml. A claim here is resolved through the one resolver and
+    compared with that record by `rest2.regions.claimed_region_differences`, the one comparison;
+    build-md scales and re-derives nothing. Returns the recorded selection document.
+    """
+    import json
+
+    from ..rest2.regions import SELECTOR_KEYS, claimed_region_differences, has_selectors
+    from ..rest2.selection import SelectionError
+
+    rest2 = resolved.get("rest2") or {}
+    claim = {key: rest2[key] for key in SELECTOR_KEYS if rest2.get(key) is not None}
+    document = record.get("selection")
+    if not has_selectors(claim):
+        return document
+    from openmm.app import PDBFile
+
+    topology = PDBFile(str(dataset.built("pdb"))).topology
+    mapping_path = dataset.build / "ligand_mapping.json"
+    ligand_mapping = (json.loads(mapping_path.read_text(encoding="utf-8"))
+                      if mapping_path.is_file() else None)
+    try:
+        differences = claimed_region_differences(
+            topology, claim, config_dir=config_dir, ligand_mapping=ligand_mapping,
+            implicit=resolved["solvent"] == "implicit", selection_document=document)
+    except SelectionError as refusal:
+        raise ConfigError(f"rest2 selector claim: {refusal}") from None
+    if differences:
+        raise ConfigError(
+            f"this configuration claims a selective REST2 region that is not the one "
+            f"{record_path} was built with:\n"
+            + "".join(f"  - {line}\n" for line in differences)
+            + "A ladder scales nothing, so its configuration must describe the states it will "
+              "integrate: change the rest2 selector keys (or remove them to accept the "
+              f"recorded region), or rebuild the states with a scaler.config that names this "
+              f"region:\n{command}")
+    return document
 
 
 def _sha256_file(path) -> str:
@@ -2057,7 +2134,9 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
 
     ladder_states = None
     if resolved["protocol"] == "REST2":
-        ladder_states = _saved_ladder_states(resolved, dataset)
+        ladder_states = _saved_ladder_states(
+            resolved, dataset,
+            config_dir=Path(config_path).parent if config_path is not None else Path.cwd())
 
     # THE WHOLE CHAIN, VALIDATED BEFORE THE FIRST SCRIPT IS WRITTEN.
     #
@@ -2549,6 +2628,14 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         log.field("record", str(ladder_states["record"]))
         for index, (tau, path) in enumerate(zip(ladder_states["taus"], ladder_states["files"])):
             log.field(f"state {index}", f"tau {tau:g}  {path}")
+        selection = ladder_states.get("selection") or {}
+        mode = selection.get("mode") or selection.get("selection_mode")
+        log.field("hot region", "the whole solute (legacy)" if mode in (None, "legacy-full-solute")
+                  else f"{mode}, as recorded in the saved states")
+        if mode not in (None, "legacy-full-solute"):
+            from ..rest2.regions import print_residue_map
+
+            print_residue_map(selection, echo=log)
 
     log.heading("Outputs")
     for name in written:
