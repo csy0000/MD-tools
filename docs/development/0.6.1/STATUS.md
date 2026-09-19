@@ -34,10 +34,11 @@ VALIDATED, and neither is released.
 |---|---|---|
 | `e36ff56` | merge S1 at `d013ca9`, with its integration patches in `remd/driver.py`, `run/preflight.py`, `remd/executor.py`, `reference/export.py`, `reference/rest2_export.py`, `remd/protocol.py` | code byte-identical to S1's tested tree; S0 reran the non-CUDA selective tests, slow included, CUDA hidden, `MD_DATA` at an empty temp root: 173 passed. Held: `rest2/regions.py::explicit_selection` unclassified in the CUDA matrix |
 | (this merge) | merge S1 at `20f4036`: that site classified non-CUDA | inventory, stale-entry and constructor guards PASS, run directly on the in-tree file |
+| `62adec3` | merge released **0.6.0** (`dev-0.6.0` = `main` = `v0.6.0` → `3927105`): $MD_DATA test isolation, alias reporting, `--extend-from` refusal writes nothing, OPC 1-4 scale | fast lane: 2270 passed, 3 skipped, 2 known failures (build-top example; `--check` needs a device). `test_selective_rest2_integration.py`: 8 passed, **1 failed as expected** — `test_an_extension_of_the_0_6_0_run_onto_selective_states_is_refused_on_its_hamiltonian` reads `extended/REST2.out`, which a refused `--extend-from` no longer writes; S1 updates it |
 
 ## Blockers
 
-- Open for S0: the compact `L01: <path>` form (needs an instance name in the mapping record); the `--extend-from` log-before-refusal defect, which MD-tools-0.6.0 is fixing on `dev-0.6.0`.
+- Open for S0: the compact `L01: <path>` form (needs an instance name in the mapping record); the `--extend-from` log-before-refusal defect is fixed in released 0.6.0 and merged here (`62adec3`); S1's out-of-place extension test needs updating to it.
 - Registration: BLOCKED (sandbox). The user has put `$MD_DATA` out of reach of every session
   (2026-09-19); the registration half of S1-G is reported BLOCKED, not passed.
 - S1-G: no GPU is available to this wave. Cards 0–4 are reserved by the user for the 0.6.0 gate
