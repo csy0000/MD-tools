@@ -121,3 +121,33 @@ def test_the_two_legs_are_matched_before_any_sample_is_read(tmp_path):
         "ligand_hamiltonian_sha256"] == report["ligand_hamiltonian_sha256"]
     with pytest.raises(TopologyError, match="constraint_policy"):
         matched_leg_report(tmp_path / "vac_free", tmp_path / "solv")
+
+
+def test_a_vacuum_plan_makes_a_vacuum_window_and_nothing_else_does(tmp_path):
+    """S0's three rules at plan level: the permission is derived from the plan's solvation, the
+    window is labelled from it, and a caller's contrary flag is refused before any output."""
+    from md_tools.alchemy.hamiltonian import from_plan
+    from md_tools.alchemy.topology import Environment, build_topology_plan
+    from md_tools.ligands.mapping import LigandSelector
+    a, b = af.package(af.ETHANE), af.package(af.CHLOROETHANE)
+    v = af.FIXTURE_ROOT.parent / "vacuum-v1"
+    env = Environment.from_files(v / "built.xml", v / "built.pdb", LigandSelector(resname="ETA"),
+                                 record=v / "built.log")
+    plan = build_topology_plan(a, b, af.core_map(a, b), env, mode="hybrid")
+    assert plan.record["environment"]["solvation"] == "vacuum"
+    h = from_plan(plan)
+    path = linear_path(NAMES, endpoint_a="ethane", endpoint_b="chloroethane")
+    prepare_leg(tmp_path / "leg", plan=plan, hamiltonian=h, path=path, s_values=(0.0, 1.0),
+                temperature_k=300.0, pressure_bar=None, environment="vacuum",
+                endpoint_a="ethane", endpoint_b="chloroethane", scheme="amber18-hybrid")
+    assert read_leg(tmp_path / "leg")[0]["solvation"] == "vacuum"
+    st = WindowSettings(steps=200, report_interval=100, checkpoint_interval=200, seed=1,
+                        minimize_iterations=50)
+    with pytest.raises(WindowError, match="disagrees with the plan"):
+        run_leg(tmp_path / "leg", hamiltonian=h, settings=st, windows=["w000"], cpu=True,
+                vacuum_leg=False)
+    assert not (tmp_path / "leg" / "windows").exists()
+    run_leg(tmp_path / "leg", hamiltonian=h, settings=st, windows=["w000"], cpu=True)
+    record = json.loads(window_paths(tmp_path / "leg" / "windows" / "r1", "w000")["record"]
+                        .read_text())
+    assert record["solvation"] == "vacuum"
