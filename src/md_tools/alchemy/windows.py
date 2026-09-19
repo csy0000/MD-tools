@@ -95,7 +95,12 @@ def self_check_relative(platform_name: str, properties: Mapping[str, str] | None
         return SELF_CHECK_REL["double"]
     precision = str((properties or {}).get("Precision", "")).lower()
     if platform_name in ("CUDA", "OpenCL", "HIP"):
-        return SELF_CHECK_REL.get(precision or "single", SELF_CHECK_REL["single"])
+        # An unknown or absent precision is REFUSED, not mapped to the loosest bound: a typo would
+        # otherwise widen the check quietly. platform_policy always sets Precision on a GPU.
+        if precision not in SELF_CHECK_REL:
+            raise WindowError(f"{platform_name} Precision {precision or '(absent)'!r} is not one of "
+                              f"{sorted(SELF_CHECK_REL)}; the self-check bound depends on it")
+        return SELF_CHECK_REL[precision]
     # the CPU platform computes forces and energies in single precision
     return SELF_CHECK_REL["single"]
 

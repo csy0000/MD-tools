@@ -475,3 +475,6 @@ def test_self_check_tolerance_follows_precision():
     assert self_check_relative("CUDA", {"Precision": "double"}) == 1e-6
     assert self_check_relative("CUDA", {"Precision": "mixed"}) == 2e-5
     assert self_check_relative("CPU", {}) == 2e-5
+    for bad in ({"Precision": "mxed"}, {}):
+        with pytest.raises(WindowError, match="Precision"):
+            self_check_relative("CUDA", bad)
