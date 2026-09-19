@@ -1,0 +1,128 @@
+"""One LEG of a thermodynamic cycle: a plan, its Hamiltonian, its windows, and its free energy.
+
+    prepare_leg   plan + Hamiltonian -> a leg directory: leg.json, system.xml, topology.pdb
+    run_leg       every window of the leg (or the ones named), through `windows.run_window`
+    analyze_leg   the windows' sample streams -> `estimators.analyze` -> a `cycles.Leg`
+
+A leg directory is the unit a window runs against: `system.xml` is `hamiltonian.system` exactly
+(`run_window` compares the serialisations before writing anything), `topology.pdb` is the plan's
+combined topology, and `leg.json` records the plan digest, the path, the states and how the
+Hamiltonian was built. The window outputs sit in `windows/`.
+
+The Hamiltonian is REBUILT from the plan by the caller on every invocation (`from_plan`), never
+unpickled from a previous process: a System and its Context parameters are what reproduce the
+energies (shared contracts section 5), and the window fingerprint binds every state's Context
+parameters, so a Hamiltonian that rebuilt differently could not continue an old window.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+from md_tools.alchemy.cycles import Leg
+from md_tools.alchemy.paths import AlchemicalPath
+from md_tools.alchemy.samples import ThermodynamicState, concatenate, window_states
+from md_tools.alchemy.windows import (WindowError, WindowSettings, read_window_samples,
+                                      run_window, window_paths)
+
+LEG_SCHEMA = "md-tools-alchemical-leg/1"
+
+
+def prepare_leg(directory, *, plan, hamiltonian, path: AlchemicalPath, s_values: Sequence[float],
+                temperature_k: float, pressure_bar: float | None, environment: str,
+                endpoint_a: str, endpoint_b: str, scheme: str) -> dict[str, Any]:
+    """Write a leg directory. Refuses an existing directory rather than mixing two legs."""
+    import openmm
+
+    directory = Path(directory)
+    if directory.exists():
+        raise WindowError(f"{directory} exists; a leg is prepared once, into a new directory")
+    states = window_states(path, s_values, temperature_k=temperature_k, pressure_bar=pressure_bar)
+    directory.mkdir(parents=True)
+    system_xml = openmm.XmlSerializer.serialize(hamiltonian.system)
+    (directory / "system.xml").write_text(system_xml)
+    pdb = plan.pdb_text
+    if pdb is None:
+        import io
+        buf = io.StringIO()
+        openmm.app.PDBFile.writeFile(plan.topology, plan.positions_nm * 10.0, buf, keepIds=True)
+        pdb = buf.getvalue()
+    (directory / "topology.pdb").write_text(pdb)
+    record = {
+        "schema": LEG_SCHEMA, "environment": environment, "endpoint_a": endpoint_a,
+        "endpoint_b": endpoint_b, "alchemical_scheme": scheme,
+        "plan_sha256": plan.sha256, "plan_mode": plan.mode,
+        "hamiltonian": {k: v for k, v in (getattr(hamiltonian, "record", {}) or {}).items()
+                        if k in ("schema", "softcore", "settings")},
+        "system_sha256": hashlib.sha256(system_xml.encode()).hexdigest(),
+        "path": path.to_record(), "states": [s.to_record() for s in states],
+    }
+    (directory / "leg.json").write_text(json.dumps(record, indent=1, sort_keys=True) + "\n")
+    return record
+
+
+def read_leg(directory) -> tuple[dict[str, Any], AlchemicalPath, tuple[ThermodynamicState, ...]]:
+    record = json.loads((Path(directory) / "leg.json").read_text())
+    if record.get("schema") != LEG_SCHEMA:
+        raise WindowError(f"{directory}/leg.json schema {record.get('schema')!r}")
+    return (record, AlchemicalPath.from_record(record["path"]),
+            tuple(ThermodynamicState.from_record(s) for s in record["states"]))
+
+
+def run_leg(directory, *, hamiltonian, settings: WindowSettings, windows: Sequence[str] | None = None,
+            repeat: str = "r1", **run_kw) -> list[dict[str, Any]]:
+    """Run (continue, or verify) the leg's windows into `windows/<repeat>/`."""
+    directory = Path(directory)
+    record, path, states = read_leg(directory)
+    import openmm
+    current = hashlib.sha256(openmm.XmlSerializer.serialize(hamiltonian.system).encode()).hexdigest()
+    if current != record["system_sha256"]:
+        raise WindowError(f"the Hamiltonian given is not the one {directory} was prepared with "
+                          f"(system sha256 {current[:12]}... != {record['system_sha256'][:12]}...)")
+    wanted = list(windows) if windows else [s.state_id for s in states]
+    out = directory / "windows" / repeat
+    return [run_window(topology=directory / "topology.pdb", system=directory / "system.xml",
+                       hamiltonian=hamiltonian, path=path, states=states, window_id=wid,
+                       out_dir=out, settings=settings, **run_kw)
+            for wid in wanted]
+
+
+def analyze_leg(directory, *, repeat: str = "r1", estimator: str = "MBAR",
+                name: str | None = None) -> tuple[Leg, dict[str, Any]]:
+    """The leg's free energy, from every window's committed and completed stream."""
+    from md_tools.alchemy import estimators as est
+
+    directory = Path(directory)
+    record, _, states = read_leg(directory)
+    out = directory / "windows" / repeat
+    parts = []
+    for st in states:
+        p = window_paths(out, st.state_id)
+        if not p["completion"].is_file():
+            raise WindowError(f"window {st.state_id} of {directory} ({repeat}) is not complete")
+        parts.append(read_window_samples(p["samples"], json.loads(p["record"].read_text())))
+    analysis = est.analyze(concatenate(parts))
+    leg = Leg.from_estimate(name or f"{record['environment']} {repeat}", record["environment"],
+                            analysis["estimates"][estimator], path=record["path"],
+                            temperature_k=states[0].temperature_k,
+                            alchemical_scheme=record["alchemical_scheme"])
+    return leg, analysis
+
+
+def combine_repeats(legs: Sequence[Leg]) -> Leg:
+    """Inverse-variance mean of independent repeats of ONE leg."""
+    if not legs:
+        raise WindowError("no repeats")
+    first = legs[0]
+    for leg in legs[1:]:
+        if (leg.environment, leg.endpoint_a, leg.endpoint_b, leg.alchemical_scheme) != \
+                (first.environment, first.endpoint_a, first.endpoint_b, first.alchemical_scheme):
+            raise WindowError("repeats of different legs cannot be combined")
+    w = [1.0 / leg.sigma_kj_mol ** 2 for leg in legs]
+    value = sum(wi * leg.delta_g_kj_mol for wi, leg in zip(w, legs)) / sum(w)
+    return Leg(f"{first.environment} ({len(legs)} repeats)", first.environment,
+               first.endpoint_a, first.endpoint_b, value, (1.0 / sum(w)) ** 0.5,
+               first.temperature_k, first.estimator, first.alchemical_scheme,
+               first.restraint_digest, {"repeats": [leg.to_record() for leg in legs]})

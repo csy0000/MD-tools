@@ -427,6 +427,9 @@ class WindowSettings:
     friction_per_ps: float = 1.0
     barostat_interval: int = 25
     seed: int = 20260919
+    #: LocalEnergyMinimizer iterations at the window's own state before velocities are drawn, on
+    #: a fresh start only (0 = none). Part of the window's identity.
+    minimize_iterations: int = 0
 
     def __post_init__(self):
         for name in ("steps", "report_interval", "checkpoint_interval"):
@@ -478,7 +481,8 @@ def window_identity(*, hamiltonian, path: AlchemicalPath, states, window_id, set
             "checkpoint_interval": settings.checkpoint_interval,
             "equilibration_steps": settings.equilibration_steps,
             "friction_per_ps": settings.friction_per_ps,
-            "barostat_interval": settings.barostat_interval, "seed": settings.seed},
+            "barostat_interval": settings.barostat_interval, "seed": settings.seed,
+            "minimize_iterations": settings.minimize_iterations},
         "timestep_fs": timestep["timestep_fs"],
         "restraint": restraint.to_record() if restraint is not None else None,
         "sample_provenance": "origin_state = window_id's state; never the rank or device",
@@ -614,6 +618,8 @@ def run_window(*, topology, system, hamiltonian, path: AlchemicalPath,
     else:
         _set_initial_coordinates(simulation, checked.loaded, coordinates)
         hamiltonian.set_state(context, origin.components)
+        if settings.minimize_iterations:
+            openmm.LocalEnergyMinimizer.minimize(context, 10.0, int(settings.minimize_iterations))
         context.setVelocitiesToTemperature(
             temperature, as_openmm_seed(derive_build_seed(settings.seed,
                                                           f"alchemy/{window_id}/velocities")))
