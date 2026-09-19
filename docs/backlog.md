@@ -761,6 +761,7 @@ criteria of its own. They left this list because something owns them, not becaus
 | bidirectional switching and alchemical transformations | same, §9 | [0.7.0 aims](development/0.7.0/AIMS.md), with AIS's own contract unchanged |
 | OpenMMTools-compatible AIS Langevin splitting | same, §9 | still deferred; no branch owns it |
 | more advanced protonation and tautomer preparation | same, §9 | still deferred; no branch owns it |
+| a non-periodic System with no GB force and no build record is labelled `implicit` in stage records (`run/preflight.py`: `implicit = not periodic`) | S2 finding, 2026-09-19, while adding vacuum builds | pre-existing 0.6.0 behaviour; build-top vacuum builds are identified by their record and refused on ordinary paths (0.7.0), but an unrecorded vacuum-like System still carries the wrong label |
 | a vacuum alchemical leg that applies the solvent leg's STATED 1-4 scale (so OPC-solvated hydration cycles can pair with vacuum) | S2 finding, 2026-09-19: OPC applies 0.833333 to a ligand's 1-4 pairs, a vacuum build 5/6 | deferred by S0; until then `matched_legs` refuses the pairing by name and TIP3P is the working water model for hydration cycles |
 
 The two "still deferred" rows are listed so that archiving their instruction does not lose them.
