@@ -800,6 +800,46 @@ class ReplicaRun:
 
         return manifest, files, checkpoint, stored
 
+    @staticmethod
+    def refuse_other_saved_states(parent, groupfile):
+        """Refuse, read-only, an extension whose group file names other states than its parent ran.
+
+        The parent's `solute.yaml` records the sha256 of every saved state its ladder integrated,
+        state i at position i; the group file names this run's. Comparing the two needs nothing
+        this run has not already been given, so it is made BEFORE `-odir` holds anything. The full
+        identity comparison in `_extend_from` still runs, and still decides everything else; this
+        catches the Hamiltonian early because that one is answerable from the files alone.
+
+        A parent that records no saved states (a ladder scaled at run time, before 0.5.4) is left
+        to that later comparison.
+        """
+        import yaml
+
+        from ..rest2.states import scaled_state_identity
+        from .executor import parse_group_file
+
+        record = Path(parent) / "solute.yaml"
+        if not record.is_file():
+            return
+        ran = ((yaml.safe_load(record.read_text(encoding="utf-8")) or {}).get("rest2") or {}
+               ).get("scaled_states") or {}
+        ran = [str(digest) for digest in ran.get("states") or []]
+        if not ran:
+            return
+        named = []
+        for group in parse_group_file(groupfile, extending=True):
+            state = scaled_state_identity(group["system"]) if group.get("system") else None
+            named.append(state["system_sha256"] if state else None)
+        if named != ran:
+            n = max(len(ran), len(named))
+            ran, named = ran + [None] * (n - len(ran)), named + [None] * (n - len(named))
+            differ = [f"state {i}: parent {(a or 'none')[:12]} vs here {(b or 'none')[:12]}"
+                      for i, (a, b) in enumerate(zip(ran, named)) if a != b]
+            raise IdentityError(
+                f"the extension does not describe the same run as its parent, so it would not be "
+                f"a continuation of it: {groupfile} names other saved states than {record} "
+                f"records the parent integrating.\n  - " + "\n  - ".join(differ))
+
     def _extend_from(self, identity, parent, *, extend):
         """Continue a COMPLETED parent into a NEW output set, leaving the parent untouched.
 

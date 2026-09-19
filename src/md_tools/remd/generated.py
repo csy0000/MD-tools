@@ -535,14 +535,16 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     # or the `.log` exists. The driver validated it too, but only once this function had already
     # published `_protocol.py` and `solute.yaml` and opened the logs, so a refused parent left a
     # new directory that read as a started extension. Every rank reads the same parent and
-    # reaches the same answer. The comparison with this run's identity still happens in the
-    # driver, which is where that identity is built.
+    # reaches the same answer. So is the one identity question the files answer alone: whether
+    # the group file names the saved states the parent ran. The full comparison with this run's
+    # identity still happens in the driver, which is where that identity is built.
     if args.extend_from:
         from .driver import DriverError, ReplicaRun
         from .storage import StorageError
 
         try:
             ReplicaRun.validate_extension_parent(Path(args.extend_from))
+            ReplicaRun.refuse_other_saved_states(Path(args.extend_from), args.groupfile)
         except (DriverError, StorageError, ValueError, OSError) as refusal:
             print(f"{protocol_name}: --extend-from {args.extend_from}: {refusal} Nothing was "
                   f"written.", file=sys.stderr)
