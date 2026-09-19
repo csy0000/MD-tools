@@ -170,6 +170,9 @@ class ReplicaRun:
         #: The `LadderPreflight` this run was validated by. Its platform, device and machine
         #: settings are CONSUMED; nothing here re-resolves them. See `_build_platform`.
         self.prepared = prepared
+        #: Where every rung came from, decided HERE -- at construction, before any output -- and
+        #: part of the ladder's identity (shared contract §3, "The ladder's direct Python API").
+        self.rung_provenance = self._establish_rung_provenance()
 
         # THE RESOLVED RESTRAINTS, consumed the same way. `_protocol.py` names the definition
         # file, because that is what a generated helper can carry; which four atoms each restraint
@@ -218,6 +221,9 @@ class ReplicaRun:
                 solute_indices=self.solute_indices, excluded_bonds=self.excluded_bonds,
                 selection=self.selection),
             "exchange_rule": rule_identity,
+            # Where every rung came from: the declaration and, per rung, its canonical digest and
+            # origin. A resume with other rungs or another declaration is a different ladder.
+            "rungs": self.rung_provenance,
         })
         payload.update(self.identity_extra)
         return payload
@@ -236,6 +242,13 @@ class ReplicaRun:
         if (key == "hamiltonian" and isinstance(was, dict) and isinstance(now, dict)
                 and was.get("format") == hamiltonian_identity.LEGACY_FINGERPRINT_FORMAT):
             return hamiltonian_identity.hamiltonian_identities_agree(was, now)
+        if key == "rungs" and was is None:
+            # THE COMPATIBILITY BRANCH for rung provenance (shared contract §3): an identity
+            # written before 0.6.1 recorded no rungs. It agrees ONLY with a plain saved-state
+            # ladder, every rung verified -- which is what every ladder before 0.6.1 ran.
+            from md_tools.rest2.rungs import all_verified_saved_states
+
+            return all_verified_saved_states(now)
         return was == now
 
     # -- the run -------------------------------------------------------------------------------------
@@ -301,6 +314,69 @@ class ReplicaRun:
                 self.cv_states.close()
         return result
 
+    def _establish_rung_provenance(self):
+        """Refuse a ladder whose rungs would be re-derived, or whose origin cannot be established.
+
+        A scaled Hamiltonian is built once, as a file, and never re-derived at run time: a plan with
+        no rungs is refused outright. Saved-state rungs carry the origins the preflight verified.
+        A caller's DECLARED rungs are checked here against the saved states -- particles, masses,
+        constraints -- and each is recorded, by canonical digest, as `saved-state <i> (verified)`
+        or `caller-modified`.
+        """
+        from md_tools.rest2 import rungs as rung_rules
+
+        rungs = tuple(getattr(self.prepared, "rung_systems", ()) or ())
+        if not rungs:
+            raise DriverError(
+                "this ladder has no prepared rung Systems, and they are not re-derived at run time: "
+                "a scaled Hamiltonian is built once, as a file, by `md-openmm build-top "
+                "--rest2-scaler`. Launch through `md-run` (or a generated script), which reads "
+                "every rung from the saved states, or pass a LadderPreflight whose rung_systems "
+                "are declared with rung_source='caller-supplied' and a rung_source_reason.")
+        if len(rungs) != self.protocol.n_states:
+            raise DriverError(
+                f"the preflight prepared {len(rungs)} rung System(s) and this protocol "
+                f"describes {self.protocol.n_states} states. The plan and the ladder must be the "
+                f"same ladder; neither is inferred from the other.")
+        source = getattr(self.prepared, "rung_source", "")
+        reason = getattr(self.prepared, "rung_source_reason", "")
+        try:
+            rung_rules.check_declaration(
+                rung_systems=rungs, rung_source=source, rung_source_reason=reason,
+                sealed=source == rung_rules.SAVED_STATES and bool(
+                    getattr(self.prepared, "rung_origins", ())))
+            if source == rung_rules.SAVED_STATES:
+                origins = list(self.prepared.rung_origins)
+                record = getattr(self.prepared, "saved_states_record", None)
+                # The seal says the preflight verified THESE rungs; a plan copied with other
+                # rungs swapped in (`dataclasses.replace`) keeps the seal and not the rungs.
+                from md_tools.rest2.identity import system_fingerprint
+
+                changed = [i for i, (system, entry) in enumerate(zip(rungs, origins))
+                           if system_fingerprint(system) != entry["system_digest"]]
+                if len(origins) != len(rungs) or changed:
+                    raise rung_rules.RungProvenanceError(
+                        f"the saved-state plan's rung(s) {changed or 'count'} are not the Systems "
+                        f"its preflight verified. Rungs changed after verification are "
+                        f"caller-supplied: declare them so.")
+            else:
+                record = rung_rules.find_saved_states_record(
+                    explicit=getattr(self.prepared, "saved_states_record", None),
+                    system_path=getattr(self.files, "system", None))
+                if record is None:
+                    raise rung_rules.RungProvenanceError(
+                        f"caller-supplied rungs are verified against the saved states, and none "
+                        f"were found: set LadderPreflight.saved_states_record to the scaler.yaml, "
+                        f"or pass files.system as a saved state or as the built System beside "
+                        f"build/REST2/ (files.system is {getattr(self.files, 'system', None)!r}).")
+                digests, _taus, reference = rung_rules.saved_state_digests(record)
+                rung_rules.check_rung_structure(rungs, reference)
+                origins = rung_rules.rung_origins(rungs, digests)
+        except (rung_rules.RungProvenanceError, ValueError) as refusal:
+            raise DriverError(f"ladder rungs: {refusal}") from None
+        return rung_rules.provenance(rung_source=source, rung_source_reason=reason,
+                                     origins=origins, record=record)
+
     def _rung_systems(self):
         """The N Systems this ladder propagates, and the force audit describing them.
 
@@ -313,18 +389,9 @@ class ReplicaRun:
         objects the preflight audited; a copy would be one more construction that could differ
         from what was checked, which is the failure mode being removed.
         """
-        prepared_rungs = tuple(getattr(self.prepared, "rung_systems", ()) or ())
-        if not prepared_rungs:
-            # No prepared plan: a direct caller that constructed this object itself. Same
-            # function, same Systems -- `Protocol.build_systems` delegates to the one the
-            # preflight uses, so this branch cannot build a different ladder.
-            return self.protocol.build_systems(
-                self.base_system, self.solute_indices, self.excluded_bonds)
-        if len(prepared_rungs) != self.protocol.n_states:
-            raise DriverError(
-                f"the preflight prepared {len(prepared_rungs)} rung System(s) and this protocol "
-                f"describes {self.protocol.n_states} states. The plan and the ladder must be the "
-                f"same ladder; neither is inferred from the other.")
+        # Established, counted and verified at construction (`_establish_rung_provenance`); a
+        # plan without rungs never gets this far, because nothing re-derives them.
+        prepared_rungs = tuple(self.prepared.rung_systems)
         return list(prepared_rungs), getattr(self.prepared, "force_audit", None)
 
     def _open_cv_states(self, *, committed_rows=0, committed=None):
