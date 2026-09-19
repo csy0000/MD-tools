@@ -221,54 +221,44 @@ CUDA_SITES = {
         "test_cv_mpi_cuda_lanes.py::test_cv_continuation_under_mpi_on_cuda"),
     "alchemy/windows.py::run_window": (
         "builds the sampling Simulation on the platform `preflight_stage` resolved (`checked.acceleration`, never a platform string), loads a checkpoint or sets coordinates, sets the window's state, and integrates it in checkpoint-sized chunks",
-        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
-        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
-        "of it passes --cpu and is not CUDA evidence"),
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::run_window.commit": (
         "saves the sampling Context's checkpoint through `commit_generation`, binding the sample stream's committed prefix; on CUDA a device-to-host copy of the whole Context state",
-        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
-        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
-        "of it passes --cpu and is not CUDA evidence"),
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::CrossStateEvaluator.__init__": (
         "creates the SECOND Context, the evaluation Context, over a copy of the Hamiltonian's System, on the Platform object and properties the caller passes -- `run_window` passes the preflight's resolution",
-        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
-        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
-        "of it passes --cpu and is not CUDA evidence"),
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::CrossStateEvaluator.evaluate": (
         "pushes the sampled positions and box into the evaluation Context and, per state, sets the Hamiltonian's parameters and evaluates the energy; then the complete derivative at the origin state -- K+1 or more energy evaluations per report",
-        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
-        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
-        "of it passes --cpu and is not CUDA evidence"),
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::SampleStreamReporter.report": (
         "reads positions, box and energy out of the State the sampling Context produced for this report, and drives the evaluation Context through `CrossStateEvaluator.evaluate`",
-        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
-        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
-        "of it passes --cpu and is not CUDA evidence"),
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::_set_initial_coordinates": (
         "writes the starting State (or PDB positions and box) into the sampling Context",
-        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
-        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
-        "of it passes --cpu and is not CUDA evidence"),
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::ParametricHamiltonian.set_state": (
         "sets Context global parameters on whatever Context it is given -- the sampling or the evaluation one",
-        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
-        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
-        "of it passes --cpu and is not CUDA evidence"),
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::ParametricHamiltonian.derivatives": (
         "sets the state and reads OpenMM energy-parameter derivatives off the Context it is given",
-        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
-        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
-        "of it passes --cpu and is not CUDA evidence"),
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::ComposedHamiltonian.set_state": (
         "delegates to the inner Hamiltonian's set_state and sets `lambda_restraints` on the Context it is given",
-        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
-        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
-        "of it passes --cpu and is not CUDA evidence"),
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::ComposedHamiltonian.derivatives": (
         "the inner Hamiltonian's derivatives plus a restricted parameter-derivative evaluation of force group 16 (the Boresch restraint) on the Context it is given",
-        "NONE YET -- BLOCKED: no CUDA card is allocated to S4. The lane that would cover it is "
-        "test_alchemy_windows.py run with cpu=False (S4 acceptance row G1); every current test "
-        "of it passes --cpu and is not CUDA evidence"),
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "d65d4f0 -- run with --error-on-skip)"),
 }
 
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
