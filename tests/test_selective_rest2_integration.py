@@ -206,23 +206,25 @@ def test_an_in_place_continuation_onto_selective_states_is_refused_read_only(v06
     assert _snapshot(run) == before, "a refused continuation writes nothing"
 
 
-def test_an_extension_of_the_0_6_0_run_onto_selective_states_is_refused_on_its_hamiltonian(
+def test_an_extension_of_the_0_6_0_run_onto_selective_states_is_refused_before_anything_exists(
         v060_ladder, tmp_path):
-    """Out of place the helpers are new, so `compare_identity` decides: the recorded v2
-    hamiltonian meets an EXPLICIT selection, and the named branch refuses it."""
+    """Out of place, the states the group file names are not the ones the parent's solute.yaml
+    records. That is refused READ-ONLY (83c4a98, released in 0.6.0): on stderr, naming the
+    states, before the extension's -odir holds anything, and with the parent untouched."""
     root, parent, env = _selective_copy(v060_ladder, tmp_path)
     before = _snapshot(parent)
     extension = root / "extended"
     done = _ladder(root, env, extension, "--extend", "1", "--extend-from", str(parent), ok=False)
     assert done.returncode != 0
-    # The refusal is written to the EXTENSION's REST2.out: the extension's own logs are opened
-    # before `_extend_from` compares identities (existing ordering, reported to S0). The parent
-    # is untouched, which is what the continuation contract is about.
-    message = done.stdout + done.stderr + (extension / "REST2.out").read_text(encoding="utf-8")
-    assert "does not describe the same run as its parent" in message, message[-4000:]
-    assert "  - hamiltonian: parent" in message
-    assert "'selection_mode': 'explicit'" in message
-    assert "md-tools-hamiltonian-identity/v2" in message
+    assert "names other saved states than" in done.stderr, done.stderr[-4000:]
+    # State 0 is tau = 0, the unscaled System, identical under ANY selection; only the hot
+    # states differ, and the refusal names exactly those.
+    assert "state 0: parent " not in done.stderr
+    for state in range(1, STATES):
+        assert f"state {state}: parent " in done.stderr, done.stderr[-4000:]
+    assert "Nothing was written" in done.stderr
+    assert not extension.exists() or not any(extension.iterdir()), (
+        f"the refused extension left {sorted(p.name for p in extension.iterdir())}")
     assert _snapshot(parent) == before
 
 
@@ -462,3 +464,50 @@ def test_a_selective_ladders_exchange_energies_are_its_saved_states_energies(sel
     _, wrong, _ = exchange_energy_discrepancy(run, _whole_solute_states(root, STATES),
                                               platform="CPU")
     assert wrong > 20 * EXCHANGE_ENERGY_TOLERANCE_KT, wrong
+
+
+# --- with identical states, a selection cannot refuse on its own -------------------------------------
+
+@pytest.fixture(scope="module")
+def selective_parent(tmp_path_factory):
+    """A completed SELECTIVE ladder run by this checkout: the parent the next test extends."""
+    root = tmp_path_factory.mktemp("selective-parent")
+    env = _env(root, REPO / "src")
+    _dataset(root)
+    _scaler(root, env, SELECTIVE_SCALER)
+    _project(root, env)
+    _initial_state(root)
+    run = root / "run"
+    _ladder(root, env, run)
+    return root, run
+
+
+def test_with_identical_states_a_selection_cannot_refuse_on_its_own(selective_parent, tmp_path):
+    """The identity hashes the Hamiltonian, not its provenance (S0 ruling, 323779f). Rebuild the
+    states with the SAME region spelled differently: every state file is byte-identical, the
+    record's provenance differs, and the out-of-place extension must be ACCEPTED. The
+    hamiltonian refusal of `compare_identity` on the selection alone is then unreachable: the
+    states agree, so the only thing left to differ is provenance, and provenance is not identity."""
+    source_root, _ = selective_parent
+    root = tmp_path / "copy"
+    shutil.copytree(source_root, root, symlinks=True)
+    parent = root / "run"
+    env = _env(root, REPO / "src")
+    states = root / "build" / "REST2"
+    before_states = {p.name: p.read_bytes() for p in states.glob("system_state*.xml")}
+    before_record = yaml.safe_load((states / "scaler.yaml").read_text(encoding="utf-8"))
+
+    _scaler(root, env, LEGACY_SCALER + 'backbone_scaling_list: ":2-2"\n', overwrite=True)
+    after_record = yaml.safe_load((states / "scaler.yaml").read_text(encoding="utf-8"))
+    assert {p.name: p.read_bytes() for p in states.glob("system_state*.xml")} == before_states
+    assert after_record["selection"]["masks"]["backbone"] == ":2-2"
+    assert after_record["selection_provenance_sha256"] != \
+        before_record["selection_provenance_sha256"], "the record's provenance DID change"
+    assert after_record["selection_sha256"] == before_record["selection_sha256"]
+
+    extension = root / "extended"
+    _ladder(root, env, extension, "--extend", "1", "--extend-from", str(parent))
+    manifest = json.loads((extension / "restart.json").read_text(encoding="utf-8"))
+    assert manifest["run_status"] == "completed"
+    assert manifest["scientific_identity"]["hamiltonian"] == \
+        _restart_identity(parent)["hamiltonian"]
