@@ -89,7 +89,9 @@ __all__ = [
     "TopologyError",
     "TopologyPlan",
     "build_topology_plan",
+    "ligand_hamiltonian",
     "load_plan",
+    "matched_legs",
 ]
 
 PLAN_SCHEMA = "md-tools-topology-plan/1"
@@ -1239,6 +1241,100 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
     # The record is what a reader gets back from plan.json: tuples become lists here, not on
     # the first round trip, so an in-memory plan and a loaded one compare equal.
     record = json.loads(_canonical(record))
+    record["ligand_hamiltonian_sha256"] = _sha256_text(_canonical(ligand_hamiltonian(record)))
     record["plan_sha256"] = _record_digest(record)
     return TopologyPlan(record=record, system_a=system_a, system_b=system_b, topology=topology,
                         positions_nm=positions, pdb_text=pdb_text)
+
+
+# ------------------------------------------------------------------------------------------------
+# legs of one cycle
+# ------------------------------------------------------------------------------------------------
+LIGAND_HAMILTONIAN_SCHEME = "md-tools-ligand-hamiltonian/1"
+
+
+def ligand_hamiltonian(record: dict) -> dict[str, Any]:
+    """Everything a plan says about the LIGANDS' Hamiltonian, independent of the environment.
+
+    Plan indices differ between legs -- a vacuum leg and a solvated one number the ligand
+    differently -- so every atom is named by its package-local identity: ("A", i) for an atom of
+    endpoint A (the core included), ("B", j) for an atom only B has. Two legs of one cycle must
+    agree on all of it: the same packages, map, mode, applied 1-4 scales and constraint policy,
+    and the same dummy treatment term by term, or the dummy contributions and the ligand's own
+    intramolecular energy do not cancel between them.
+    """
+    hyb_a = record["endpoints"]["A"]["hybrid_index_of_local_atom"]
+    hyb_b = record["endpoints"]["B"]["hybrid_index_of_local_atom"]
+    name = {h: ("A", i) for i, h in enumerate(hyb_a)}
+    for j, h in enumerate(hyb_b):
+        name.setdefault(h, ("B", j))
+
+    def atoms(indices):
+        return [list(name[h]) for h in indices]
+
+    terms = {family: sorted(
+        [atoms(s["atoms"]), s["kind"], s.get("periodicity"), s["role"], s["a"], s["b"],
+         s["at_dummy_end"]] for s in slots) for family, slots in record["terms"].items()}
+    exceptions = sorted([atoms(s["atoms"]), s["role"], s["a"], s["b"],
+                         s.get("unique_group_internal", False)]
+                        for s in record["nonbonded"]["exceptions"])
+    internal = record["nonbonded"]["unique_group_internal"]
+    groups = sorted([g["dummy_at"], g["local_atoms"],
+                     {k: (None if v is None else name[v]) for k, v in g["frame"].items()}]
+                    for g in record["dummy_groups"])
+    restraint = record.get("restraint")
+    body = {
+        "scheme": LIGAND_HAMILTONIAN_SCHEME,
+        "mode": record["mode"],
+        "endpoints": {side: {k: record["endpoints"][side][k] for k in
+                             ("reference", "package_sha256", "parameter_digest")}
+                      for side in ("A", "B")},
+        "atom_map_sha256": record["atom_map"]["sha256"],
+        "applied_1_4_scales": {k: record["environment"]["nonbonded_applied"][k]
+                               for k in ("coulomb14scale", "lj14scale")},
+        "constraint_policy": record["constraints"]["policy"],
+        "dummy_groups": groups,
+        "terms": terms,
+        "exceptions": exceptions,
+        "exclusions": sorted(atoms(s["atoms"]) for s in record["nonbonded"]["exclusions"]),
+        "internal_pairs": sorted([atoms(p["atoms"]), p["dummy_at"], p["physical"]]
+                                 for p in internal["pairs"]),
+        "restraint": None if not restraint else {
+            "k_kj_mol_nm2": restraint["k_kj_mol_nm2"], "group_a": atoms(restraint["group_a"]),
+            "group_b": atoms(restraint["group_b"])},
+    }
+    return json.loads(_canonical(body))
+
+
+def matched_legs(first: "TopologyPlan", second: "TopologyPlan") -> dict[str, Any]:
+    """Refuse two plans that cannot be the two legs of one thermodynamic cycle.
+
+    Compares `ligand_hamiltonian` of both, component by component, and names every component that
+    differs. Passing means the dummy groups' bonded and internal terms, the restraint and the
+    ligands' own intramolecular Hamiltonian are identical in both legs, which is what makes them
+    cancel -- the environment is all that differs.
+    """
+    one, two = ligand_hamiltonian(first.record), ligand_hamiltonian(second.record)
+    differing = sorted(k for k in set(one) | set(two) if one.get(k) != two.get(k))
+    if "applied_1_4_scales" in differing:
+        raise TopologyError(
+            f"these plans apply different 1-4 scales to the ligand -- "
+            f"{one['applied_1_4_scales']} and {two['applied_1_4_scales']} -- so the ligand's own "
+            f"intramolecular Hamiltonian is a different function in the two legs, and a cycle "
+            f"between them would fold that difference into the free energy, however small. An "
+            f"OPC-solvated leg applies OPC's rounded 0.833333; a vacuum leg applies the package's "
+            f"5/6. Pair a vacuum leg with a TIP3P-solvated one. (A vacuum build that applies the "
+            f"solvent leg's stated scale is a deferred backlog item.)")
+    if differing:
+        named = {k: (one.get(k), two.get(k)) for k in differing
+                 if k in ("mode", "constraint_policy", "atom_map_sha256")}
+        raise TopologyError(
+            f"these plans are not two legs of one cycle: {differing} differ"
+            f"{' ' + str(named) if named else ''}. Build both legs from the same packages, map "
+            f"and mode, in environments that apply the same 1-4 scales and constraint policy to "
+            f"the ligand.")
+    digest = _sha256_text(_canonical(one))
+    return {"scheme": LIGAND_HAMILTONIAN_SCHEME, "ligand_hamiltonian_sha256": digest,
+            "plans": [first.sha256, second.sha256],
+            "environments": [first.record["environment"]["system_sha256"],
+                             second.record["environment"]["system_sha256"]]}
