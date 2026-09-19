@@ -673,10 +673,11 @@ def claimed_region_differences(topology, claim: Mapping[str, Any], *, config_dir
 
     The ONE comparison, and it resolves the claim through `resolve_region`, the one resolver, so
     two spellings of one region (":45,46" and ":45-46") agree and a claim is never compared as
-    text. What is compared is WHICH residues and instances are hot: the nonbonded atoms, each
-    residue's role, each ligand instance (label, residue, package) and its exclusion file by
-    CONTENT digest -- the path may differ because the two configurations live in different
-    directories. Torsion classification settings are the scaler's and are not a claim.
+    text. What is compared is exactly the Hamiltonian-determining projection the identity hashes
+    (`identity.hamiltonian_selection_projection`), as far as a region determines it: the hot
+    atoms, each residue's role, and each ligand instance's residue, package and RESOLVED exclusion
+    content. Labels, mask text, paths and file bytes are provenance and never differ here.
+    Torsion classification settings are the scaler's and are not a claim.
 
     A claim that does not itself resolve RAISES (`SelectionError`): an invalid claim is refused,
     not reported as a difference. A legacy or 1.0 record, or a missing one, is a difference with
@@ -715,45 +716,48 @@ def claimed_region_differences(topology, claim: Mapping[str, Any], *, config_dir
                            f"({str(recorded_digest)[:12]}... vs "
                            f"{topology_digest(topology)[:12]}...)")
 
-    claimed_atoms = set(region["selected_nonbonded_atoms"])
-    recorded_atoms = {int(i) for i in document.get("selected_nonbonded_atoms") or ()}
+    # THE SAME PROJECTION the Hamiltonian identity hashes (`identity.hamiltonian_selection_
+    # projection`), applied to what the region resolution determines -- hot atoms and ligand
+    # instances. Labels, mask text, paths and exclusion-file bytes are provenance, here as there.
+    from .identity import hamiltonian_selection_projection
+
+    claimed = hamiltonian_selection_projection({
+        "format": SELECTION_FORMAT, "selection_mode": EXPLICIT_MODE,
+        "selected_nonbonded_atoms": region["selected_nonbonded_atoms"],
+        "ligand_instances": region["ligand_instances"]})
+    recorded = hamiltonian_selection_projection(document)
+
+    claimed_atoms = set(claimed["selected_nonbonded_atoms"])
+    recorded_atoms = set(recorded["selected_nonbonded_atoms"])
     if claimed_atoms != recorded_atoms:
         differences.append(
             f"hot nonbonded atoms differ: {len(claimed_atoms - recorded_atoms)} claimed but not "
             f"recorded, {len(recorded_atoms - claimed_atoms)} recorded but not claimed")
 
+    # Which ROLE each residue plays decides which torsions it owns; its display name and any
+    # instance label do not.
     def roles(residue_map):
-        return {str(k): (sorted(v.get("categories") or ()), v.get("ligand_instance"),
-                         v.get("residue_name"))
+        return {str(k): (sorted(v.get("categories") or ()), v.get("residue_name"))
                 for k, v in (residue_map or {}).items()}
 
     claimed_roles, recorded_roles = roles(region["residue_map"]), roles(document.get("residue_map"))
     for number in sorted(set(claimed_roles) | set(recorded_roles), key=int):
         was, now = recorded_roles.get(number), claimed_roles.get(number)
-        if was != now:
+        if (was or ([], None))[0] != (now or ([], None))[0]:
             differences.append(
                 f"residue {number}: recorded {_describe_role(was)}, claimed {_describe_role(now)}")
 
-    def instances(entries):
-        out = {}
-        for entry in entries or ():
-            block = entry.get("torsion_exclusions") or {}
-            out[int(entry["topology_residue"])] = {
-                "label": entry.get("label"), "residue_key": list(entry.get("residue_key") or ()),
-                "package": (entry.get("package") or {}).get("parameter_id"),
-                "exclusions": (block.get("mode"), block.get("sha256"))}
-        return out
+    def by_residue(projection):
+        return {tuple(entry["residue_key"]): entry for entry in projection["ligand_instances"]}
 
-    claimed_instances = instances(region["ligand_instances"])
-    recorded_instances = instances(document.get("ligand_instances"))
-    for number in sorted(set(claimed_instances) & set(recorded_instances)):
-        was, now = recorded_instances[number], claimed_instances[number]
-        for key, meaning in (("label", "label"), ("residue_key", "residue identity"),
-                             ("package", "parameter package"),
-                             ("exclusions", "torsion exclusions (mode, content sha256)")):
-            if was[key] != now[key]:
-                differences.append(f"ligand instance at residue {number}: {meaning} recorded "
-                                   f"{was[key]!r}, claimed {now[key]!r}")
+    claimed_instances, recorded_instances = by_residue(claimed), by_residue(recorded)
+    for key in sorted(set(claimed_instances) & set(recorded_instances)):
+        was, now = recorded_instances[key], claimed_instances[key]
+        for field, meaning in (("parameter_id", "parameter package"),
+                               ("exclusions", "torsion exclusions (resolved content)")):
+            if was[field] != now[field]:
+                differences.append(f"ligand instance {list(key)}: {meaning} recorded "
+                                   f"{was[field]!r}, claimed {now[field]!r}")
     return differences
 
 
@@ -767,5 +771,5 @@ def _describe_masks(masks) -> str:
 def _describe_role(role) -> str:
     if role is None:
         return "not selected"
-    categories, instance, name = role
-    return f"{name} as {'+'.join(categories)}" + (f" (instance {instance})" if instance else "")
+    categories, name = role
+    return f"{name} as {'+'.join(categories)}"

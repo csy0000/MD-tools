@@ -629,6 +629,7 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
         # scaled states are exactly `build_scaled_system(built, **selection arguments, tau)`.
         "selection": selection.to_document(),
         "selection_sha256": selection.digest(),
+        "selection_provenance_sha256": selection.provenance_digest(),
         "scaler_arguments": {key: (None if value is None else
                                    [list(v) if isinstance(v, tuple) else v for v in value])
                              if key != "unscaled_impropers" else value

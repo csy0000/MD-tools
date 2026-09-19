@@ -194,7 +194,14 @@ class ScalingSelection:
         return document
 
     def digest(self) -> str:
-        """sha256 over the canonical 2.0 document: what the Hamiltonian identity hashes."""
+        """sha256 of the Hamiltonian-determining projection: what the identity hashes. Two
+        selections differing only in provenance (mask spelling, labels, paths) share it."""
+        from .identity import selection_identity_sha256
+
+        return selection_identity_sha256(self.to_document())
+
+    def provenance_digest(self) -> str:
+        """sha256 over the WHOLE 2.0 document, provenance included. Never an identity."""
         import json
 
         return hashlib.sha256(json.dumps(self.to_document(), sort_keys=True,
