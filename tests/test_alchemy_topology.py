@@ -10,6 +10,7 @@ evidence, and it claims nothing about a device.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
@@ -401,14 +402,13 @@ def test_an_environment_holding_the_other_endpoint_is_refused(eta, cle, water):
 def test_an_environment_whose_ligand_parameters_differ_is_refused(eta, cle, water):
     from openmm import XmlSerializer
 
-    from md_tools.alchemy.topology import Environment, TopologyError
+    from md_tools.alchemy.topology import TopologyError
 
     system = XmlSerializer.clone(water.system)
     nb = next(f for f in system.getForces() if type(f).__name__ == "NonbondedForce")
     q, s, e = nb.getParticleParameters(0)
     nb.setParticleParameters(0, q * 1.01, s, e)
-    damaged = Environment(system=system, topology=water.topology, positions_nm=water.positions_nm,
-                          ligand=water.ligand)
+    damaged = dataclasses.replace(water, system=system)
     with pytest.raises(TopologyError, match="immutable"):
         _build(eta, cle, core_map(eta, cle), damaged, "hybrid")
 
@@ -416,12 +416,11 @@ def test_an_environment_whose_ligand_parameters_differ_is_refused(eta, cle, wate
 def test_repartitioned_masses_are_refused(eta, cle, water):
     from openmm import XmlSerializer
 
-    from md_tools.alchemy.topology import Environment, TopologyError
+    from md_tools.alchemy.topology import TopologyError
 
     system = XmlSerializer.clone(water.system)
     system.setParticleMass(2, 3.024)
-    damaged = Environment(system=system, topology=water.topology, positions_nm=water.positions_nm,
-                          ligand=water.ligand)
+    damaged = dataclasses.replace(water, system=system)
     with pytest.raises(TopologyError, match="repartitioning"):
         _build(eta, cle, core_map(eta, cle), damaged, "hybrid")
 
@@ -822,12 +821,9 @@ def test_a_barostat_environment_is_carried_unchanged_to_both_endpoints(eta, cle,
     copied identically into both Systems, and recovery closes with it present."""
     from openmm import MonteCarloBarostat, XmlSerializer
 
-    from md_tools.alchemy.topology import Environment
-
     system = XmlSerializer.clone(water.system)
     system.addForce(MonteCarloBarostat(1.0, 300.0, 25))
-    env = Environment(system=system, topology=water.topology, positions_nm=water.positions_nm,
-                      ligand=water.ligand)
+    env = dataclasses.replace(water, system=system)
     plan = _build(eta, cle, core_map(eta, cle), env, "hybrid")
     for endpoint in (plan.system_a, plan.system_b):
         [barostat] = [f for f in endpoint.getForces() if isinstance(f, MonteCarloBarostat)]
@@ -912,3 +908,98 @@ def test_a_real_charge_changing_pair_is_refused():
     with pytest.raises(TopologyError, match="net formal charge changes from -1 to 0"):
         _build(a, b, AtomMap.from_pairs(a, b, {"C1": "C1", "C2": "C2"}),
                acetate_environment(), "hybrid")
+
+
+# ------------------------------------------------------------------------------------------------
+# the applied 1-4 scale: read from the build record, never inferred (S0 ruling)
+# ------------------------------------------------------------------------------------------------
+def test_the_cmap_complex_leg_recovers_both_endpoints_under_opc(eta, cle):
+    """ff19SB + OPC: CMAP present, and OPC's 0.833333 applied to every 1-4 pair."""
+    from openmm import CMAPTorsionForce
+
+    from md_tools.alchemy.topology_recovery import endpoint_accounting
+    from tests.alchemy_fixtures import CMAP_FORCEFIELD, CMAP_ROOT, complex_environment
+
+    env = complex_environment(CMAP_ROOT)
+    plan = _build(eta, cle, core_map(eta, cle), env, "hybrid")
+    assert plan.record["environment"]["nonbonded_applied"]["coulomb14scale"] == 0.833333
+    for system in (plan.system_a, plan.system_b):
+        assert any(isinstance(f, CMAPTorsionForce) and f.getNumTorsions() > 0
+                   for f in system.getForces())
+    for side, pkg in (("A", eta), ("B", cle)):
+        reference, index = independent_reference(plan, env, pkg, side,
+                                                 forcefield_files=CMAP_FORCEFIELD)
+        accounting = endpoint_accounting(plan, side, reference, index)
+        _assert_closes(accounting, raw_at_least=1e-2)
+        assert accounting["hybrid"]["CMAPTorsionForce"] != 0.0
+
+
+def _environment_ligand_table(env, pkg):
+    from md_tools.ligands.package import subsystem_parameter_table
+
+    residue = env.ligand.residues(env.topology)[0]
+    indices = [a.index for a in residue.atoms()]
+    return subsystem_parameter_table(env.system, pkg.mol, indices,
+                                     pkg.conventions["coulomb14scale"],
+                                     pkg.conventions["lj14scale"])[0]
+
+
+def test_under_opc_the_raw_comparison_fails_and_the_rescaled_one_passes(eta):
+    """Both directions of the guard, at the package module's own 1e-9."""
+    from md_tools.alchemy.topology import applied_scales, scaled_table
+    from md_tools.ligands.package import compare_parameter_tables
+    from tests.alchemy_fixtures import CMAP_ROOT, complex_environment
+
+    env = complex_environment(CMAP_ROOT)
+    found = _environment_ligand_table(env, eta)
+    bonds_ok = found["_constraint_lengths"]
+    raw = compare_parameter_tables(eta.table, found, where="raw", skip_masses=True,
+                                   missing_bonds_ok=bonds_ok, rel=1e-9)
+    assert any("exceptions" in p for p in raw), raw
+    rescaled = scaled_table(eta, applied_scales(env, eta))
+    found["conventions"] = rescaled["conventions"]
+    assert compare_parameter_tables(rescaled, found, where="rescaled", skip_masses=True,
+                                    missing_bonds_ok=bonds_ok, rel=1e-9) == []
+
+
+def test_under_tip3p_the_rescaled_table_is_the_package_table(eta):
+    from md_tools.alchemy.topology import applied_scales, scaled_table
+    from tests.alchemy_fixtures import complex_environment
+
+    env = complex_environment()
+    applied = applied_scales(env, eta)
+    assert (applied["coulomb14scale"], applied["lj14scale"]) == (5 / 6, 0.5)
+    assert scaled_table(eta, applied)["exceptions"] == eta.table["exceptions"]
+
+
+def test_an_environment_that_does_not_state_its_applied_scales_is_refused(eta, cle, water):
+    from md_tools.alchemy.topology import TopologyError
+
+    silent = dataclasses.replace(water, nonbonded_compatibility=None,
+                                 compatibility_source=None)
+    with pytest.raises(TopologyError, match="never inferred"):
+        _build(eta, cle, core_map(eta, cle), silent, "hybrid")
+
+
+@pytest.mark.parametrize("damage", ["field-missing", "other-build", "not-a-record"])
+def test_a_build_record_that_cannot_vouch_is_refused(tmp_path, damage):
+    from md_tools.alchemy.topology import Environment, TopologyError
+    from md_tools.ligands.mapping import LigandSelector
+    from tests.alchemy_fixtures import CMAP_ROOT, FIXTURE_ROOT
+
+    root = FIXTURE_ROOT / "ethane-tip3p"
+    record = tmp_path / "built.log"
+    text = (root / "built.log").read_text()
+    if damage == "field-missing":
+        text = text.replace("#     nonbonded_compatibility:", "#     not_nonbonded_compatibility:")
+        match = "carries no forcefield_record.ligand.nonbonded_compatibility"
+    elif damage == "other-build":
+        text = (CMAP_ROOT / "built.log").read_text()
+        match = "describes another build"
+    else:
+        text = "just a log\n"
+        match = "carries no machine record"
+    record.write_text(text)
+    with pytest.raises(TopologyError, match=match):
+        Environment.from_files(root / "built.xml", root / "built.pdb",
+                               LigandSelector(resname="ETA"), record=record)
