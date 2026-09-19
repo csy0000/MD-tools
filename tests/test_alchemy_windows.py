@@ -171,6 +171,26 @@ def test_npt_without_a_box_is_refused_by_the_shared_preflight(model, tmp_path):
     assert not (tmp_path / "npt").exists()
 
 
+def test_check_creates_nothing(model, tmp_path, capsys):
+    res = _run(model, "w000", SHORT, out=tmp_path / "chk", check=True)
+    assert res["disposition"] == "checked"
+    assert "--check passed. Nothing was created." in capsys.readouterr().out
+    assert not (tmp_path / "chk").exists()
+
+
+def test_a_prepared_preflight_is_consumed_not_replanned(model, tmp_path, monkeypatch):
+    from md_tools.run import preflight as pf
+    out = tmp_path / "prep"
+    p = window_paths(out, "w001")
+    checked = pf.preflight_stage(
+        topology=model["pdb"], system=model["xml"], output=p["out"], log=p["record"],
+        restart=p["restart"], checkpoint=p["checkpoint"], cpu=True,
+        protocol="alchemical window w001", timestep_fs=2.0, ensemble="NVT")
+    monkeypatch.setattr(pf, "preflight_stage",
+                        lambda **kw: pytest.fail("re-planned a prepared preflight"))
+    assert _run(model, "w001", SHORT, out=out, prepared=checked)["rows"] == 21
+
+
 def test_settings_that_would_round_are_refused():
     with pytest.raises(WindowError, match="rounded"):
         WindowSettings(steps=1050, report_interval=100, checkpoint_interval=500)
@@ -416,8 +436,11 @@ def test_npt_windows_carry_pv_resume_and_recover_the_exact_free_energy(tmp_path)
     assert samples.ensemble == "NPT" and np.ptp(samples.volume_nm3) > 0.05   # the box moved
     u = samples.reduced_potential()
     pv = 1.01325 * 0.0602214076 * samples.volume_nm3 / samples.kt
-    np.testing.assert_allclose(u - samples.potential_kj_mol / samples.kt, pv[:, None] *
-                               np.ones_like(u), rtol=1e-12)
+    # u itself against U/kT + pV/kT. Not (u - U/kT) against pV/kT: U/kT is ~ -7000 here, and the
+    # difference loses ~1e-12 absolute to cancellation -- a 1e-12 RELATIVE test of a 0.28 kT
+    # remainder then fails on round-off (it did, 2026-09-19), which says nothing about pV.
+    np.testing.assert_allclose(u, samples.potential_kj_mol / samples.kt + pv[:, None],
+                               rtol=1e-12)
     result = est.analyze(samples)
     exact = (1.5 * kt_kj_mol(T) * math.log(K1 / K0) + C) / KJ_PER_KCAL
     print(f"\nS4 N1 NPT campaign: exact {exact:.4f} kcal/mol, samples {samples.counts()}")
