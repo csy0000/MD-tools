@@ -108,9 +108,9 @@ are; a state is never scaled a second time.
 ## Selective REST2: choosing the hot region (0.6.1, in development)
 
 > **Not in a release.** This section describes branch `0.6.1` work (session S1). The scaler
-> resolves, records and builds selective states. Two pieces are **not wired yet**: forwarding the
-> keys from a `build-md` REST2 configuration, and passing the recorded selection into the runtime
-> identity. Until they land, the keys below are set in `scaler.config` only.
+> resolves, records and builds selective states, and a run's Hamiltonian identity carries the
+> recorded selection. One piece is **not wired yet**: checking the keys when a `build-md` REST2
+> configuration claims them. Until that lands, the keys below are set in `scaler.config` only.
 
 With no selector, the hot region is the whole solute: every atom that is not solvent or a
 counter-ion. The states are byte-identical to 0.6.0's. Three optional `scaler.config` keys choose
