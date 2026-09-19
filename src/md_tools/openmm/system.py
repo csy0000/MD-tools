@@ -1620,9 +1620,13 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
     forcefield, ff_info = build_forcefield(cfg, ligand_sdf, route=route)
     templates = residue_templates_for(pdb.topology) if residue_templates_for else {}
 
-    method = {"PME": app.PME, "LJPME": app.LJPME, "CutoffPeriodic": app.CutoffPeriodic}[
-        bcfg["nonbonded_method"]
-    ]
+    method = {"PME": app.PME, "LJPME": app.LJPME, "CutoffPeriodic": app.CutoffPeriodic,
+              "NoCutoff": app.NoCutoff}[bcfg["nonbonded_method"]]
+    # A vacuum System has no cutoff and no Ewald sum; passing either would be a setting that
+    # does nothing, so they are passed only to a method that uses them.
+    periodic_kwargs = ({} if bcfg["nonbonded_method"] == "NoCutoff" else {
+        "nonbondedCutoff": float(bcfg["nonbonded_cutoff_nm"]) * unit.nanometer,
+        "ewaldErrorTolerance": float(bcfg["ewald_error_tolerance"])})
     constraints = constraint_option(bcfg["constraints"])
 
     # OpenMM repartitions hydrogen mass itself, skipping any residue it made rigid -- so with
@@ -1654,12 +1658,11 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
     system = forcefield.createSystem(
         pdb.topology,
         nonbondedMethod=method,
-        nonbondedCutoff=float(bcfg["nonbonded_cutoff_nm"]) * unit.nanometer,
         constraints=constraints,
         rigidWater=bool(bcfg["rigid_water"]),
         removeCMMotion=bool(bcfg["remove_cm_motion"]),
-        ewaldErrorTolerance=float(bcfg["ewald_error_tolerance"]),
         residueTemplates=templates,
+        **periodic_kwargs,
         **({"hydrogenMass": target_h_mass * unit.amu} if delegate_hmr else {}),
     )
 
@@ -1681,7 +1684,11 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
                 # OpenMM headers of whichever version happened to write it.
                 "method": nonbonded_method_name(force.getNonbondedMethod()),
                 "method_code": int(force.getNonbondedMethod()),
-                "cutoff_nm": force.getCutoffDistance().value_in_unit(unit.nanometer),
+                # null for NoCutoff: OpenMM keeps a cutoff and an Ewald tolerance on the Force
+                # whether or not the method uses them, and recording them would describe a
+                # truncation and a sum that are not applied.
+                "cutoff_nm": (None if bcfg["nonbonded_method"] == "NoCutoff" else
+                              force.getCutoffDistance().value_in_unit(unit.nanometer)),
                 "switching": switching,
                 # null, not 0.0, when the switching function is off: OpenMM keeps a switching
                 # distance on the Force whether or not it is used, and reporting it unconditionally
@@ -1690,7 +1697,8 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
                     force.getSwitchingDistance().value_in_unit(unit.nanometer)
                     if switching else None),
                 "dispersion_correction": bool(force.getUseDispersionCorrection()),
-                "ewald_error_tolerance": force.getEwaldErrorTolerance(),
+                "ewald_error_tolerance": (None if bcfg["nonbonded_method"] == "NoCutoff"
+                                          else force.getEwaldErrorTolerance()),
             }
 
     scope = None if bcfg["hmr_scope"] == "all" else range(n_solute_atoms)

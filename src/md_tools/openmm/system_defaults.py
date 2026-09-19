@@ -21,7 +21,7 @@ SCHEMA_VERSION = 1
 ENGINE = "openmm"
 ENGINE_VERSION = "8.6.0"
 
-SOLVENTS = ("TIP3P", "OPC", "GBn2")
+SOLVENTS = ("TIP3P", "OPC", "GBn2", "vacuum")
 
 #: What `--solvent` selects when nothing is asked for. TIP3P is the method-development default:
 #: see `docs/scientific-defaults.md`.
@@ -39,6 +39,16 @@ def canonical_solvent(name: str) -> str:
 
 def is_implicit(solvent: str) -> bool:
     return canonical_solvent(solvent) == "GBn2"
+
+
+def is_vacuum(solvent: str) -> bool:
+    """No solvent at all: the ligand alone, NoCutoff, no box. An alchemical VACUUM LEG only.
+
+    Not a third kind of MD: `build-top` builds it for `solute.kind: ligand` only, and `build-md`
+    refuses a vacuum System. It exists so a hydration cycle's two legs come from one construction
+    path and one build record.
+    """
+    return canonical_solvent(solvent) == "vacuum"
 
 
 
@@ -189,9 +199,10 @@ def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT,
     """
     solvent = canonical_solvent(solvent)
     implicit = is_implicit(solvent)
+    vacuum = is_vacuum(solvent)
     # An implicit file still documents what the explicit block would look like, and it documents
     # the DEFAULT explicit combination rather than whichever one happens to sort first.
-    combination = EXPLICIT_COMBINATIONS[DEFAULT_SOLVENT if implicit else solvent]
+    combination = EXPLICIT_COMBINATIONS[DEFAULT_SOLVENT if implicit or vacuum else solvent]
     document = {
         "schema_version": SCHEMA_VERSION,
         "engine": ENGINE,
@@ -224,7 +235,7 @@ def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT,
             # The QUALIFIED OpenMM resource, which is the file `ForceField()` is given. The
             # amber14/amber19 copies carry the Na+/Cl- ion templates `addSolvent` needs; the
             # top-level `tip3p.xml` does not.
-            "water": None if implicit else combination["water"],
+            "water": None if implicit or vacuum else combination["water"],
         },
         "solvent": {
             "model": solvent if not implicit else DEFAULT_SOLVENT,
@@ -269,6 +280,10 @@ def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT,
     document.pop("implicit_solvent" if not implicit else "solvent")
     if implicit:
         document["forcefield"]["water"] = None
+        document["constraints"]["rigid_water"] = False
+    if vacuum:
+        # No box, no water, no salt: the model is the whole solvent block.
+        document["solvent"] = {"model": "vacuum"}
         document["constraints"]["rigid_water"] = False
     return document
 

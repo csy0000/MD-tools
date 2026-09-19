@@ -2002,6 +2002,29 @@ def _sha256_file(path) -> str:
     return sha256_file(Path(path))
 
 
+def _refuse_vacuum_system(system_path: Path) -> None:
+    """A vacuum System is an alchemical leg; ordinary MD in vacuum is not supported.
+
+    `build-top`'s `solvent.model: vacuum` makes a non-periodic System with no solvation force at
+    all. The runtime would otherwise read "not periodic" as implicit solvent and run it under an
+    implicit label, which is the silent renaming this refuses. Every System build-top makes is
+    periodic (explicit water) or carries a GB force (implicit), so "not periodic and no GB force"
+    identifies a vacuum build from the System itself.
+    """
+    from openmm import XmlSerializer
+
+    system = XmlSerializer.deserialize(Path(system_path).read_text(encoding="utf-8"))
+    if system.usesPeriodicBoundaryConditions():
+        return
+    if any("GB" in type(force).__name__ for force in system.getForces()):
+        return
+    raise ConfigError(
+        f"{system_path} is a VACUUM System: not periodic and no implicit-solvent force. Vacuum "
+        f"builds are alchemical legs; ordinary MD in vacuum is not supported. build-md generates "
+        f"explicit- and implicit-solvent runs only, and would otherwise have run this one as "
+        f"implicit solvent.")
+
+
 def build_scripts(*, config_path: Path | None, out_dir: Path,
                   overwrite: bool = False, echo: bool = True) -> dict[str, Any]:
     """Generate one run. `out_dir` is the RUN directory; returns the record written in it.
@@ -2054,6 +2077,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
             "system that every run on this dataset shares:\n"
             + "".join(f"  missing: {path}\n" for path in missing)
             + f"  Run `md-openmm build-top` into {dataset.build}/ first.")
+    _refuse_vacuum_system(dataset.built("xml"))
 
     ladder_states = None
     if resolved["protocol"] == "REST2":

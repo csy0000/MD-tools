@@ -1003,3 +1003,59 @@ def test_a_build_record_that_cannot_vouch_is_refused(tmp_path, damage):
     with pytest.raises(TopologyError, match=match):
         Environment.from_files(root / "built.xml", root / "built.pdb",
                                LigandSelector(resname="ETA"), record=record)
+
+
+# ------------------------------------------------------------------------------------------------
+# two legs of one cycle
+# ------------------------------------------------------------------------------------------------
+def test_a_vacuum_and_a_tip3p_leg_are_matched_legs(eta, cle, water):
+    from openmm import app
+
+    from md_tools.alchemy.topology import matched_legs
+
+    solvent = _build(eta, cle, core_map(eta, cle), water, "hybrid")
+    vacuum = _build(eta, cle, core_map(eta, cle), vacuum_environment(eta, constraints=app.HBonds),
+                    "hybrid")
+    assert solvent.sha256 != vacuum.sha256
+    assert solvent.record["ligand_hamiltonian_sha256"] == vacuum.record["ligand_hamiltonian_sha256"]
+    report = matched_legs(solvent, vacuum)
+    assert report["ligand_hamiltonian_sha256"] == solvent.record["ligand_hamiltonian_sha256"]
+
+
+def test_an_opc_leg_and_a_vacuum_leg_are_refused_by_scale(eta, cle):
+    from md_tools.alchemy.topology import TopologyError, matched_legs
+    from tests.alchemy_fixtures import CMAP_ROOT, complex_environment
+
+    from openmm import app
+
+    opc = _build(eta, cle, core_map(eta, cle), complex_environment(CMAP_ROOT), "hybrid")
+    vacuum = _build(eta, cle, core_map(eta, cle), vacuum_environment(eta, constraints=app.HBonds),
+                    "hybrid")
+    with pytest.raises(TopologyError, match="different 1-4 scales.*Pair a vacuum leg with a TIP3P"):
+        matched_legs(opc, vacuum)
+
+
+@pytest.mark.parametrize("difference", ["constraints", "map", "mode", "packages"])
+def test_legs_that_differ_are_refused_by_name(eta, cle, eoh, water, difference):
+    from openmm import app
+
+    from md_tools.alchemy.topology import TopologyError, matched_legs
+
+    solvent = _build(eta, cle, core_map(eta, cle), water, "hybrid")
+    if difference == "constraints":
+        other = _build(eta, cle, core_map(eta, cle), vacuum_environment(eta), "hybrid")
+        match = "constraint_policy"
+    elif difference == "map":
+        amap = core_map(eta, cle, {"H5": "H4", "H4": "H5"})
+        other = _build(eta, cle, amap, vacuum_environment(eta, constraints=app.HBonds), "hybrid")
+        match = "atom_map_sha256"
+    elif difference == "mode":
+        other = _build(eta, cle, core_map(eta, cle),
+                       vacuum_environment(eta, constraints=app.HBonds), "dual")
+        match = "mode"
+    else:
+        other = _build(eta, eoh, core_map(eta, eoh),
+                       vacuum_environment(eta, constraints=app.HBonds), "hybrid")
+        match = "endpoints"
+    with pytest.raises(TopologyError, match=match):
+        matched_legs(solvent, other)
