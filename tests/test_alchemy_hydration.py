@@ -95,3 +95,29 @@ def test_combining_repeats_is_inverse_variance():
     assert c.sigma_kj_mol == pytest.approx((1 / (1 / 0.01 + 1 / 0.04)) ** 0.5)
     with pytest.raises(WindowError, match="different legs"):
         combine_repeats([legs[0], Leg("x", "solvent", "A", "B", 1, 0.1, 300.0, "MBAR", "x")])
+
+
+def test_the_two_legs_are_matched_before_any_sample_is_read(tmp_path):
+    from md_tools.alchemy.campaign import matched_leg_report
+    from md_tools.alchemy.hamiltonian import from_plan
+    from md_tools.alchemy.topology import TopologyError, build_topology_plan
+    a, b = af.package(af.ETHANE), af.package(af.CHLOROETHANE)
+    path = linear_path(NAMES, endpoint_a="ethane", endpoint_b="chloroethane")
+
+    def leg(name, env, environment, pressure):
+        plan = build_topology_plan(a, b, af.core_map(a, b), env, mode="hybrid")
+        prepare_leg(tmp_path / name, plan=plan, hamiltonian=from_plan(plan), path=path,
+                    s_values=(0.0, 1.0), temperature_k=300.0, pressure_bar=pressure,
+                    environment=environment, endpoint_a="ethane", endpoint_b="chloroethane",
+                    scheme="amber18-hybrid")
+        return plan
+
+    vac = leg("vac", af.vacuum_environment(a, constraints=app.HBonds), "vacuum", None)
+    leg("solv", af.water_environment(), "solvent", 1.01325)
+    leg("vac_free", af.vacuum_environment(a), "vacuum", None)       # no constraints
+    report = matched_leg_report(tmp_path / "vac", tmp_path / "solv")
+    assert report["ligand_hamiltonian_sha256"] == vac.record["ligand_hamiltonian_sha256"]
+    assert json.loads((tmp_path / "solv" / "leg.json").read_text())[
+        "ligand_hamiltonian_sha256"] == report["ligand_hamiltonian_sha256"]
+    with pytest.raises(TopologyError, match="constraint_policy"):
+        matched_leg_report(tmp_path / "vac_free", tmp_path / "solv")
