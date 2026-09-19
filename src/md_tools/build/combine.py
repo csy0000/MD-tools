@@ -88,6 +88,11 @@ COMBINE_SCHEMA = Schema(
         Section("environment", [
             Field("system", str, doc="The built System holding endpoint A, e.g. build/built.xml."),
             Field("topology", str, doc="Its topology, e.g. build/built.pdb."),
+            Field("record", str, doc="The build-top record of that build, e.g. build/built.log. "
+                                     "It must describe these two files (its outputs sha256 are "
+                                     "checked) and state the 1-4 scales the System applies to "
+                                     "the ligand (nonbonded_compatibility), which are never "
+                                     "inferred."),
             Field("ligand", dict, doc="A ligand selector naming exactly ONE residue: `{resname}` "
                                       "or `{chain, resid, insertion_code}`."),
         ], required=True, doc="ONE matched environment. Endpoint B never has its own box: two "
@@ -191,7 +196,8 @@ def combine_topology(*, config_path: Path, out_dir: Path, check: bool = False,
                                                where="environment.ligand")
         environment = Environment.from_files(
             _relative(base, resolved["environment"]["system"]),
-            _relative(base, resolved["environment"]["topology"]), selector)
+            _relative(base, resolved["environment"]["topology"]), selector,
+            record=_relative(base, resolved["environment"]["record"]))
         mode = resolved["mode"]
         report = None
         if resolved["map"]["automatic"]:
