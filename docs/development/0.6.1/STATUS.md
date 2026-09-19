@@ -37,7 +37,7 @@ VALIDATED, and neither is released.
 
 ## Blockers
 
-- Open for S0: `build-md` forwarding of the three selection keys; the compact `L01: <path>` form (needs an instance name in the mapping record); the `--extend-from` log-before-refusal defect, which MD-tools-0.6.0 is fixing on `dev-0.6.0`.
+- Open for S0: the compact `L01: <path>` form (needs an instance name in the mapping record); the `--extend-from` log-before-refusal defect, which MD-tools-0.6.0 is fixing on `dev-0.6.0`.
 - Registration: BLOCKED (sandbox). The user has put `$MD_DATA` out of reach of every session
   (2026-09-19); the registration half of S1-G is reported BLOCKED, not passed.
 - S1-G: no GPU is available to this wave. Cards 0–4 are reserved by the user for the 0.6.0 gate
