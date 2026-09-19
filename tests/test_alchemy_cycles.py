@@ -170,6 +170,7 @@ def _vdihedral(a, b, c, d):
 
 # ---------------------------------------------------------------------- cycles
 def _leg(name, env, a, b, dg, sigma=0.2, **kw):
+    kw.setdefault("ligand_hamiltonian_sha256", "L" * 64)
     return cy.Leg(name, env, a, b, dg, sigma, T, "MBAR", kw.pop("scheme", "decouple"), **kw)
 
 
@@ -277,3 +278,13 @@ def test_restraint_in_a_periodic_box_uses_the_minimum_image():
     e = ctx.getState(getEnergy=True).getPotentialEnergy()._value
     assert e == pytest.approx(r.energy_kj_mol(unwrapped), rel=1e-9)
     assert e != pytest.approx(r.energy_kj_mol(x), rel=1e-3)
+
+
+def test_relative_legs_must_share_one_ligand_hamiltonian():
+    ok = _leg("s", "solvent", "A", "B", 2.0)
+    with pytest.raises(cy.CycleError, match="differ"):
+        cy.relative_hydration(vacuum=_leg("v", "vacuum", "A", "B", 5.0,
+                                          ligand_hamiltonian_sha256="M" * 64), solvent=ok)
+    with pytest.raises(cy.CycleError, match="carry no ligand_hamiltonian_sha256"):
+        cy.relative_binding(solvent=ok, complex=_leg("c", "complex", "A", "B", 6.0,
+                                                      ligand_hamiltonian_sha256=None))

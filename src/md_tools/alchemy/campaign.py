@@ -54,6 +54,9 @@ def prepare_leg(directory, *, plan, hamiltonian, path: AlchemicalPath, s_values:
         "schema": LEG_SCHEMA, "environment": environment, "endpoint_a": endpoint_a,
         "endpoint_b": endpoint_b, "alchemical_scheme": scheme,
         "plan_sha256": plan.sha256, "plan_mode": plan.mode,
+        # S2's ligand-side Hamiltonian digest; None until S2's plan record carries it, and the
+        # relative cycles refuse a leg without it.
+        "ligand_hamiltonian_sha256": plan.record.get("ligand_hamiltonian_sha256"),
         "hamiltonian": {k: v for k, v in (getattr(hamiltonian, "record", {}) or {}).items()
                         if k in ("schema", "softcore", "settings")},
         "system_sha256": hashlib.sha256(system_xml.encode()).hexdigest(),
@@ -107,7 +110,8 @@ def analyze_leg(directory, *, repeat: str = "r1", estimator: str = "MBAR",
     leg = Leg.from_estimate(name or f"{record['environment']} {repeat}", record["environment"],
                             analysis["estimates"][estimator], path=record["path"],
                             temperature_k=states[0].temperature_k,
-                            alchemical_scheme=record["alchemical_scheme"])
+                            alchemical_scheme=record["alchemical_scheme"],
+                            ligand_hamiltonian_sha256=record.get("ligand_hamiltonian_sha256"))
     return leg, analysis
 
 
@@ -117,12 +121,15 @@ def combine_repeats(legs: Sequence[Leg]) -> Leg:
         raise WindowError("no repeats")
     first = legs[0]
     for leg in legs[1:]:
-        if (leg.environment, leg.endpoint_a, leg.endpoint_b, leg.alchemical_scheme) != \
-                (first.environment, first.endpoint_a, first.endpoint_b, first.alchemical_scheme):
+        if (leg.environment, leg.endpoint_a, leg.endpoint_b, leg.alchemical_scheme,
+                leg.ligand_hamiltonian_sha256) != \
+                (first.environment, first.endpoint_a, first.endpoint_b, first.alchemical_scheme,
+                 first.ligand_hamiltonian_sha256):
             raise WindowError("repeats of different legs cannot be combined")
     w = [1.0 / leg.sigma_kj_mol ** 2 for leg in legs]
     value = sum(wi * leg.delta_g_kj_mol for wi, leg in zip(w, legs)) / sum(w)
     return Leg(f"{first.environment} ({len(legs)} repeats)", first.environment,
                first.endpoint_a, first.endpoint_b, value, (1.0 / sum(w)) ** 0.5,
                first.temperature_k, first.estimator, first.alchemical_scheme,
-               first.restraint_digest, {"repeats": [leg.to_record() for leg in legs]})
+               first.restraint_digest, {"repeats": [leg.to_record() for leg in legs]},
+               first.ligand_hamiltonian_sha256)
