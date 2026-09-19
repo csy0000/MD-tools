@@ -259,11 +259,80 @@ CUDA_SITES = {
         "the inner Hamiltonian's derivatives plus a restricted parameter-derivative evaluation of force group 16 (the Boresch restraint) on the Context it is given",
         "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
         "d65d4f0 -- run with --error-on-skip)"),
+    "alchemy/hamiltonian.py::AlchemicalHamiltonian.set_state": (
+        "sets every public and derived Context parameter of the softcore Hamiltonian on the Context it is given -- the caller's, whose platform came from platform_policy (S4's sampling or evaluation Context); it reads the Context's parameter names first and refuses a Context missing any",
+        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
+        "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
+        "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
+        "consistency with injected defects shown to fail) -- and "
+        "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
+        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
+        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
+        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
+    "alchemy/hamiltonian.py::AlchemicalHamiltonian.energy": (
+        "sets the state and reads the total potential energy off the caller's Context",
+        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
+        "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
+        "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
+        "consistency with injected defects shown to fail) -- and "
+        "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
+        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
+        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
+        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
+    "alchemy/hamiltonian.py::AlchemicalHamiltonian._energy": (
+        "reads one force group's potential energy off the caller's Context",
+        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
+        "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
+        "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
+        "consistency with injected defects shown to fail) -- and "
+        "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
+        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
+        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
+        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
+    "alchemy/hamiltonian.py::AlchemicalHamiltonian.derivative_components": (
+        "reads OpenMM energy-parameter derivatives per custom force group, then evaluates each end-state NonbondedForce group at weights 1 and 0 (six restricted evaluations, each a PME on CUDA) on the caller's Context, and restores the state",
+        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
+        "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
+        "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
+        "consistency with injected defects shown to fail) -- and "
+        "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
+        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
+        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
+        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
+    "alchemy/hamiltonian.py::AlchemicalHamiltonian.derivative_components.swing": (
+        "moves one derived weight parameter to 1, then 0, then back, on the caller's Context, for the exact NonbondedForce derivative algebra",
+        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
+        "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
+        "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
+        "consistency with injected defects shown to fail) -- and "
+        "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
+        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
+        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
+        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
 }
 
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
 #: named exemption rather than an omission -- and the reason is checkable by reading the callsite.
 NON_CUDA_CONTEXT_SITES = {
+    "alchemy/hamiltonian.py::_check_internal_force":
+        "walks `System.getForces()` -- the host-side list of Force OBJECTS -- of both end states to find the plan's UniqueGroupInternalNonbonded CustomBondForce and compare its bond parameters with the Hamiltonian's own internal pairs. Host-side accessors; no Context.",
+    "alchemy/hamiltonian.py::_connected_groups":
+        "the same `System.getForces()` list, reading HarmonicBondForce bonds and System constraints to split a softcore region into connected groups. Host-side accessors; no Context.",
+    "alchemy/hamiltonian.py::_pme_parameters":
+        "creates a Context to read the PME parameters OpenMM chooses for end state A's NonbondedForce, so both end states' forces are given the same explicit alpha and grid -- on the REFERENCE platform, by the module constant `BUILD_PROBE_PLATFORM`, with no argument that could change it. Construction-time, deterministic, nothing propagated; the numbers it reads are written into the Hamiltonian's System. Never CUDA evidence.",
+    "alchemy/hamiltonian.py::_dispersion_force":
+        "creates a Context over a probe System holding only the dispersion carrier, sets positions and reads one energy, to calibrate the carrier's long-range correction per unit coefficient -- on the REFERENCE platform, by the module constant `BUILD_PROBE_PLATFORM`. Construction-time and deterministic; the calibrated coefficients are written into the Hamiltonian's System. Never CUDA evidence.",
+    "alchemy/hamiltonian.py::_add_other_forces":
+        "walks `System.getForces()` -- the host-side list of Force OBJECTS -- of both end states to pair and compare their bonded forces term by term. Accessors and XmlSerializer round trips; no Context exists.",
+    "alchemy/hamiltonian.py::_nonbonded_force":
+        "the same `System.getForces()` list, to find an end state's one NonbondedForce and refuse any other nonbonded force. Host-side accessors; no Context.",
+    "alchemy/hamiltonian.py::_structural_problems":
+        "the same `System.getForces()` list, to compare the end states' force layouts, alongside particle masses, constraints and box vectors read off the Systems. Host-side accessors; no Context.",
     "alchemy/topology.py::Environment.from_files":
         "reads the environment's coordinates with `PDBFile.getPositions` -- the positions a PDB "
         "FILE holds, parsed on the host, sharing only the spelling of the State accessor. It "

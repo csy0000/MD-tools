@@ -1,0 +1,543 @@
+{
+ "precision": "double",
+ "lambda": 1.0,
+ "groups": {
+  "static": {
+   "dE_cuda_minus_ref": 0.0
+  },
+  "nonbonded_a": {
+   "dE_cuda_minus_ref": 4.516002700682975e-07,
+   "lambda_electrostatics": {
+    "analytic": {
+     "CUDA": 200.15972047314912,
+     "Reference": 200.15980788459933
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 200.1598505170037,
+      "fd_1e-4": 200.16074823464345,
+      "richardson": 200.16075730249838
+     },
+     "Reference": {
+      "fd_1e-3": 200.15980788460118,
+      "fd_1e-4": 200.15980788457898,
+      "richardson": 200.15980788457878
+     }
+    }
+   },
+   "lambda_sterics": {
+    "analytic": {
+     "CUDA": 0.08310148416701146,
+     "Reference": 0.08310147489511532
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.08310148858425848,
+      "fd_1e-4": 0.08310148282841823,
+      "richardson": 0.08310148277027843
+     },
+     "Reference": {
+      "fd_1e-3": 0.08310147489609676,
+      "fd_1e-4": 0.08310147491030762,
+      "richardson": 0.08310147491045115
+     }
+    }
+   }
+  },
+  "nonbonded_b": {
+   "dE_cuda_minus_ref": 9.247646437415824e-05,
+   "lambda_electrostatics": {
+    "analytic": {
+     "CUDA": -266.3569091875729,
+     "Reference": -266.35700166984753
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": -266.13882638014275,
+      "fd_1e-4": -272.28419673861026,
+      "richardson": -272.3462711866756
+     },
+     "Reference": {
+      "fd_1e-3": -266.35700162898956,
+      "fd_1e-4": -266.35700095567927,
+      "richardson": -266.3570009488781
+     }
+    }
+   },
+   "lambda_sterics": {
+    "analytic": {
+     "CUDA": -0.4029232315842819,
+     "Reference": -0.4029232257740887
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": -0.40290867082148907,
+      "fd_1e-4": -0.40295156850334024,
+      "richardson": -0.4029520018132579
+     },
+     "Reference": {
+      "fd_1e-3": -0.4029232257209969,
+      "fd_1e-4": -0.40292322580626205,
+      "richardson": -0.4029232258071233
+     }
+    }
+   }
+  },
+  "lj_common_changing": {
+   "dE_cuda_minus_ref": -4.297674127684559e-08,
+   "lambda_electrostatics": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     },
+     "Reference": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     }
+    }
+   },
+   "lambda_sterics": {
+    "analytic": {
+     "CUDA": 0.053117041144528455,
+     "Reference": 0.053117087529018364
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.05311704114469018,
+      "fd_1e-4": 0.05311704114163707,
+      "richardson": 0.05311704114160623
+     },
+     "Reference": {
+      "fd_1e-3": 0.053117087529142015,
+      "fd_1e-4": 0.05311708753230615,
+      "richardson": 0.05311708753233812
+     }
+    }
+   },
+   "lambda_bonded": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     },
+     "Reference": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     }
+    }
+   }
+  },
+  "softcore_a_elec": {
+   "dE_cuda_minus_ref": 0.0,
+   "lambda_electrostatics": {
+    "analytic": {
+     "CUDA": -0.4266870592113431,
+     "Reference": -0.4266870420831378
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": -0.42668725250068174,
+      "fd_1e-4": -0.42668706114204,
+      "richardson": -0.42668705920912436
+     },
+     "Reference": {
+      "fd_1e-3": -0.4266872353724694,
+      "fd_1e-4": -0.4266870440138349,
+      "richardson": -0.42668704208091934
+     }
+    }
+   },
+   "lambda_sterics": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     },
+     "Reference": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     }
+    }
+   },
+   "lambda_bonded": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     },
+     "Reference": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     }
+    }
+   }
+  },
+  "softcore_a_lj": {
+   "dE_cuda_minus_ref": 0.0,
+   "lambda_electrostatics": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     },
+     "Reference": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     }
+    }
+   },
+   "lambda_sterics": {
+    "analytic": {
+     "CUDA": 0.19864955966456324,
+     "Reference": 0.198649550295526
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.1986496508066345,
+      "fd_1e-4": 0.1986495605746076,
+      "richardson": 0.198649559663173
+     },
+     "Reference": {
+      "fd_1e-3": 0.198649641437638,
+      "fd_1e-4": 0.1986495512055709,
+      "richardson": 0.19864955029413592
+     }
+    }
+   },
+   "lambda_bonded": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     },
+     "Reference": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     }
+    }
+   }
+  },
+  "softcore_b_elec": {
+   "dE_cuda_minus_ref": -8.423624313710466e-16,
+   "lambda_electrostatics": {
+    "analytic": {
+     "CUDA": -26.66325631471713,
+     "Reference": -26.663256305390632
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": -26.66294678627765,
+      "fd_1e-4": -26.663253201946187,
+      "richardson": -26.663256297053948
+     },
+     "Reference": {
+      "fd_1e-3": -26.662946776951255,
+      "fd_1e-4": -26.66325319263554,
+      "richardson": -26.66325628774346
+     }
+    }
+   },
+   "lambda_sterics": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 4.930380657631324e-29,
+      "fd_1e-4": 4.930380657631324e-28,
+      "richardson": 4.975202299973426e-28
+     },
+     "Reference": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     }
+    }
+   },
+   "lambda_bonded": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 4.930380657631324e-29,
+      "fd_1e-4": 4.930380657631324e-28,
+      "richardson": 4.975202299973426e-28
+     },
+     "Reference": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     }
+    }
+   }
+  },
+  "softcore_b_lj": {
+   "dE_cuda_minus_ref": 0.00019610571337125293,
+   "lambda_electrostatics": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 5.6843418860808015e-11,
+      "fd_1e-4": 5.684341886080801e-10,
+      "richardson": 5.736017721408808e-10
+     },
+     "Reference": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     }
+    }
+   },
+   "lambda_sterics": {
+    "analytic": {
+     "CUDA": 23744.371475095148,
+     "Reference": 23744.365168169243
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 23731.10354023794,
+      "fd_1e-4": 23744.233237956676,
+      "richardson": 23744.365861165952
+     },
+     "Reference": {
+      "fd_1e-3": 23731.097238810435,
+      "fd_1e-4": 23744.226931078174,
+      "richardson": 23744.359554232393
+     }
+    }
+   },
+   "lambda_bonded": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 5.6843418860808015e-11,
+      "fd_1e-4": 5.684341886080801e-10,
+      "richardson": 5.736017721408808e-10
+     },
+     "Reference": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     }
+    }
+   }
+  },
+  "softcore_internal": {
+   "dE_cuda_minus_ref": 2.1382690462701248e-07,
+   "lambda_electrostatics": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     },
+     "Reference": {
+      "fd_1e-3": -1.7763568394002505e-12,
+      "fd_1e-4": -1.7763568394002505e-11,
+      "richardson": -1.7925055379402526e-11
+     }
+    }
+   },
+   "lambda_sterics": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     },
+     "Reference": {
+      "fd_1e-3": -1.7763568394002505e-12,
+      "fd_1e-4": -1.7763568394002505e-11,
+      "richardson": -1.7925055379402526e-11
+     }
+    }
+   },
+   "lambda_bonded": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     },
+     "Reference": {
+      "fd_1e-3": -1.7763568394002505e-12,
+      "fd_1e-4": -1.7763568394002505e-11,
+      "richardson": -1.7925055379402526e-11
+     }
+    }
+   }
+  },
+  "bonded_mixed": {
+   "dE_cuda_minus_ref": 5.886345377348334e-06,
+   "lambda_electrostatics": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": -5.6843418860808015e-11,
+      "fd_1e-4": -5.684341886080801e-10,
+      "richardson": -5.736017721408808e-10
+     },
+     "Reference": {
+      "fd_1e-3": -2.8421709430404007e-11,
+      "fd_1e-4": -2.842170943040401e-10,
+      "richardson": -2.868008860704404e-10
+     }
+    }
+   },
+   "lambda_sterics": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": -5.6843418860808015e-11,
+      "fd_1e-4": -5.684341886080801e-10,
+      "richardson": -5.736017721408808e-10
+     },
+     "Reference": {
+      "fd_1e-3": -2.8421709430404007e-11,
+      "fd_1e-4": -2.842170943040401e-10,
+      "richardson": -2.868008860704404e-10
+     }
+    }
+   },
+   "lambda_bonded": {
+    "analytic": {
+     "CUDA": 2.4210683522356184,
+     "Reference": 2.421068917015368
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 2.421068352191469,
+      "fd_1e-4": 2.4210683517367215,
+      "richardson": 2.4210683517321283
+     },
+     "Reference": {
+      "fd_1e-3": 2.421068916873992,
+      "fd_1e-4": 2.421068916476088,
+      "richardson": 2.4210689164720685
+     }
+    }
+   }
+  },
+  "dispersion": {
+   "dE_cuda_minus_ref": 0.0,
+   "lambda_electrostatics": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     },
+     "Reference": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     }
+    }
+   },
+   "lambda_sterics": {
+    "analytic": {
+     "CUDA": -0.10359371289341779,
+     "Reference": -0.10359371289341779
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": -0.10361475138480347,
+      "fd_1e-4": -0.10381427981834279,
+      "richardson": -0.1038162952570654
+     },
+     "Reference": {
+      "fd_1e-3": -0.10361475138480347,
+      "fd_1e-4": -0.10381427981834279,
+      "richardson": -0.1038162952570654
+     }
+    }
+   },
+   "lambda_bonded": {
+    "analytic": {
+     "CUDA": 0.0,
+     "Reference": 0.0
+    },
+    "fd": {
+     "CUDA": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     },
+     "Reference": {
+      "fd_1e-3": 0.0,
+      "fd_1e-4": 0.0,
+      "richardson": 0.0
+     }
+    }
+   }
+  }
+ }
+}

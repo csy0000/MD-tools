@@ -1,0 +1,128 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0
+rootdir: <path>
+configfile: pyproject.toml
+plugins: xdist-3.8.0
+collected 12 items
+
+tests/test_alchemy_hamiltonian_cuda.py 
+mixed one-atom: end-state calibration 9.03e-05 kJ/mol, forces 6.57e-02 kJ/mol/nm; worst group |dE| = 5.02e-04
+.
+double one-atom: end-state calibration 1.08e-04 kJ/mol, forces 1.41e-03 kJ/mol/nm; worst group |dE| = 1.41e-04
+.FF..F
+double: bound 1.42e-02 kJ/mol/nm; 0.0: 1.42e-03, 0.25: 8.85e-04, 0.5: 2.96e-03, 0.75: 8.84e-04, 1.0: 1.42e-03, step: 3.87e+06, kink: 2.20e+01
+.
+tests/test_alchemy_hamiltonian_cuda_dynamics.py 
+NVE lambda=0.0: Hamiltonian 0.506, plain System A 0.504 kJ/mol
+.
+NVE lambda=0.5: Hamiltonian 0.525, plain System A 0.502 kJ/mol
+.
+NVE lambda=1.0: Hamiltonian 0.523, plain System A 0.486 kJ/mol
+..
+
+=================================== FAILURES ===================================
+___________ test_cuda_matches_reference_per_force_group[tail-mixed] ____________
+
+precision = 'mixed', tail = True
+
+    @pytest.mark.parametrize("precision", ["mixed", "double"])
+    @pytest.mark.parametrize("tail", [False, True], ids=["one-atom", "tail"])
+    def test_cuda_matches_reference_per_force_group(precision, tail):
+        sa, sb, a, b, x = fx.build(True, dispersion=True, tail=tail)
+        plain_cuda, plain_ref = _context(sa, x, "CUDA", precision), _context(sa, x, "Reference")
+        calib = abs(_energy(plain_cuda) - _energy(plain_ref))
+        force_calib = float(np.max(np.abs(
+            plain_cuda.getState(getForces=True).getForces(asNumpy=True)._value
+            - plain_ref.getState(getForces=True).getForces(asNumpy=True)._value)))
+        h = build_hamiltonian(sa, sb, a, b)
+        cuda, ref = _context(h.system, x, "CUDA", precision), _context(h.system, x, "Reference")
+        platform_name = cuda.getPlatform().getName()
+        assert platform_name == "CUDA", platform_name
+        report = []
+        for t in STATES:
+            state = dict(zip(NAMES, t))
+            h.set_state(cuda, state)
+            h.set_state(ref, state)
+            for name, g in FORCE_GROUPS.items():
+                e_c, e_r = _energy(cuda, {g}), _energy(ref, {g})
+                tol = max(10 * calib, FLOOR[precision] * max(1.0, abs(e_r)))
+                report.append((t, name, e_r, e_c - e_r, tol))
+>               assert abs(e_c - e_r) <= tol, (precision, t, name, e_c, e_r, tol)
+E               AssertionError: ('mixed', (1.0, 1.0, 1.0), 'softcore_b_lj', 1008.6565603474155, 1008.6599874686376, 0.0010086599874686375)
+E               assert 0.003427121222102869 <= 0.0010086599874686375
+E                +  where 0.003427121222102869 = abs((1008.6565603474155 - 1008.6599874686376))
+
+tests/test_alchemy_hamiltonian_cuda.py:77: AssertionError
+___________ test_cuda_matches_reference_per_force_group[tail-double] ___________
+
+precision = 'double', tail = True
+
+    @pytest.mark.parametrize("precision", ["mixed", "double"])
+    @pytest.mark.parametrize("tail", [False, True], ids=["one-atom", "tail"])
+    def test_cuda_matches_reference_per_force_group(precision, tail):
+        sa, sb, a, b, x = fx.build(True, dispersion=True, tail=tail)
+        plain_cuda, plain_ref = _context(sa, x, "CUDA", precision), _context(sa, x, "Reference")
+        calib = abs(_energy(plain_cuda) - _energy(plain_ref))
+        force_calib = float(np.max(np.abs(
+            plain_cuda.getState(getForces=True).getForces(asNumpy=True)._value
+            - plain_ref.getState(getForces=True).getForces(asNumpy=True)._value)))
+        h = build_hamiltonian(sa, sb, a, b)
+        cuda, ref = _context(h.system, x, "CUDA", precision), _context(h.system, x, "Reference")
+        platform_name = cuda.getPlatform().getName()
+        assert platform_name == "CUDA", platform_name
+        report = []
+        for t in STATES:
+            state = dict(zip(NAMES, t))
+            h.set_state(cuda, state)
+            h.set_state(ref, state)
+            for name, g in FORCE_GROUPS.items():
+                e_c, e_r = _energy(cuda, {g}), _energy(ref, {g})
+                tol = max(10 * calib, FLOOR[precision] * max(1.0, abs(e_r)))
+                report.append((t, name, e_r, e_c - e_r, tol))
+                assert abs(e_c - e_r) <= tol, (precision, t, name, e_c, e_r, tol)
+            f_c = cuda.getState(getForces=True).getForces(asNumpy=True)._value
+            f_r = ref.getState(getForces=True).getForces(asNumpy=True)._value
+            worst_force = float(np.max(np.abs(f_c - f_r)))
+            assert worst_force <= 10 * force_calib, (precision, t, worst_force, force_calib)
+            d_c, d_r = h.derivatives(cuda, state), h.derivatives(ref, state)
+            for p in NAMES:
+                tol = max(20 * calib, FLOOR[precision] * max(1.0, abs(d_r[p]), abs(_energy(ref))))
+>               assert abs(d_c[p] - d_r[p]) <= tol, (precision, t, p, d_c[p], d_r[p], tol)
+E               AssertionError: ('double', (1.0, 1.0, 1.0), 'lambda_sterics', 23744.199826235646, 23744.193519343295, 0.002129512130295552)
+E               assert 0.006306892351858551 <= 0.002129512130295552
+E                +  where 0.006306892351858551 = abs((23744.199826235646 - 23744.193519343295))
+
+tests/test_alchemy_hamiltonian_cuda.py:85: AssertionError
+____________ test_cuda_forces_are_the_gradient_of_the_energy[mixed] ____________
+
+precision = 'mixed'
+
+    @pytest.mark.parametrize("precision", ["mixed", "double"])
+    def test_cuda_forces_are_the_gradient_of_the_energy(precision):
+        """Force / energy consistency ON THE DEVICE, replacing NVE as evidence of it (NVE on this fixture
+        was shown to have no power: handoffs/S3.md). Per atom and component, three halving steps and the
+        Richardson estimate, on the clash-tail geometry the derivative probe also examines.
+    
+        THE RULE, written down before the run: the bound is 10 x the worst Richardson error of the plain
+        end-state System A on the same atoms, same precision, same steps, on CUDA in this test. The
+        Hamiltonian at lambda 0, 0.25, 0.5, 0.75, 1 must be within it, and the same check with an energy
+        STEP and with a slope KINK injected at the Cl- - T1 distance must exceed it (power, on CUDA)."""
+        sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
+        h = build_hamiltonian(sa, sb, a, b)
+        steps = FD_STEPS[precision]
+        plain = _context(sa, x, "CUDA", precision)
+        assert plain.getPlatform().getName() == "CUDA"
+        bound = 10 * _worst(fx.fd_force_check(plain, FD_ATOMS, steps))
+        report = {}
+        cuda = _context(h.system, x, "CUDA", precision)
+        for v in (0.0, 0.25, 0.5, 0.75, 1.0):
+            h.set_state(cuda, dict(zip(NAMES, (v, v, v))))
+            rows = fx.fd_force_check(cuda, FD_ATOMS, steps)
+            report[v] = _worst(rows)
+            worst = max(rows, key=lambda r: r["richardson_error"])
+>           assert report[v] <= bound, (precision, v, bound, worst)
+E           AssertionError: ('mixed', 1.0, 1.8116272177803694, {'atom': 12, 'component': 'y', 'force': -33209.51682901406, 'errors': [38.70310746416362, 10.508434352610493, 0.517371723355609], ...})
+E           assert 4.192640415341884 <= 1.8116272177803694
+
+tests/test_alchemy_hamiltonian_cuda.py:152: AssertionError
+==================== 3 failed, 9 passed in 75.71s (0:01:15) ====================
