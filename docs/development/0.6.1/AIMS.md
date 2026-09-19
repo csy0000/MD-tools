@@ -3,7 +3,7 @@
 **Under construction.** Nothing here is in a release. 0.6.0, which this builds on, is itself still
 under the user's testing.
 
-Baseline: `dev-0.6.0` at `e524e0e`.
+Baseline: `e524e0e` on the 0.6.0 development line (released as `v0.6.0` at `3927105`; the `dev-0.6.0` branch has since been deleted).
 
 ## Purpose
 
@@ -190,7 +190,7 @@ implementation computes.
   exclusions are additional policy on top of it, not something R1 prescribes.
 - **R2** AMBER atom-mask syntax, <https://amberhub.chpc.utah.edu/atom-mask-selection-syntax/> —
   for syntax and numbering, and for documenting exactly which subset is supported.
-- **R3** the current source, this repository at `dev-0.6.0`.
+- **R3** the current source, this repository at `v0.6.0`.
 - Current implementation entry points: `src/md_tools/rest2/{selection,hamiltonian,identity,states}.py`,
   `src/md_tools/build/scaler.py`, `src/md_tools/openmm/system.py` (torsion classification),
   `src/md_tools/ligands/`, `src/md_tools/md/stage.py:64-74` (the legacy selector).
