@@ -663,3 +663,109 @@ def exclusion_file_changes(document: Mapping[str, Any], *, config_dir: Path) -> 
             changes.append(f"{instance['label']}: {path} has sha256 {digest[:12]}..., the "
                            f"record saved {block['sha256'][:12]}...")
     return changes
+
+
+def claimed_region_differences(topology, claim: Mapping[str, Any], *, config_dir: Path,
+                               ligand_mapping: Mapping[str, Any] | None, implicit: bool,
+                               selection_document: Mapping[str, Any] | None) -> list[str]:
+    """How a CLAIMED region (selector keys, e.g. from a build-md REST2 configuration) differs from
+    the region RECORDED in a selection document (`scaler.yaml`'s `selection`). `[]` means agree.
+
+    The ONE comparison, and it resolves the claim through `resolve_region`, the one resolver, so
+    two spellings of one region (":45,46" and ":45-46") agree and a claim is never compared as
+    text. What is compared is WHICH residues and instances are hot: the nonbonded atoms, each
+    residue's role, each ligand instance (label, residue, package) and its exclusion file by
+    CONTENT digest -- the path may differ because the two configurations live in different
+    directories. Torsion classification settings are the scaler's and are not a claim.
+
+    A claim that does not itself resolve RAISES (`SelectionError`): an invalid claim is refused,
+    not reported as a difference. A legacy or 1.0 record, or a missing one, is a difference with
+    a sentence, never a crash.
+    """
+    from .selection import (EXPLICIT_MODE, LEGACY_MODE, LEGACY_SELECTION_FORMAT,
+                            SELECTION_FORMAT, topology_digest)
+
+    claimed_explicit = has_selectors(claim)
+    document = dict(selection_document or {})
+    fmt = document.get("format")
+    mode = document.get("selection_mode", LEGACY_MODE) if fmt == SELECTION_FORMAT else LEGACY_MODE
+    region = None
+    if claimed_explicit:
+        # Resolved FIRST, so an invalid claim is refused whatever the record says.
+        region = resolve_region(topology, claim, config_dir=config_dir,
+                                ligand_mapping=ligand_mapping, implicit=implicit)
+    if not document:
+        return ["there is no recorded selection to compare the claim with; rebuild the states "
+                "with `md-openmm build-top --rest2-scaler`"]
+    if fmt not in (SELECTION_FORMAT, LEGACY_SELECTION_FORMAT):
+        return [f"the recorded selection has format {fmt!r}, which this build cannot compare"]
+    if not claimed_explicit:
+        return ([] if mode == LEGACY_MODE else
+                ["the claim names no selector (the whole solute), but the states were built for "
+                 "an EXPLICIT region: " + _describe_masks(document.get("masks"))])
+    if mode != EXPLICIT_MODE:
+        what = "a 1.0 (pre-0.6.1) record" if fmt == LEGACY_SELECTION_FORMAT else "a legacy record"
+        return [f"explicit claim against {what}: the states were built for the whole solute, and "
+                f"the claim names a selective region ({_describe_masks(region['masks'])})"]
+
+    differences: list[str] = []
+    recorded_digest = document.get("topology_sha256")
+    if recorded_digest and recorded_digest != topology_digest(topology):
+        differences.append("the record was resolved against a different topology "
+                           f"({str(recorded_digest)[:12]}... vs "
+                           f"{topology_digest(topology)[:12]}...)")
+
+    claimed_atoms = set(region["selected_nonbonded_atoms"])
+    recorded_atoms = {int(i) for i in document.get("selected_nonbonded_atoms") or ()}
+    if claimed_atoms != recorded_atoms:
+        differences.append(
+            f"hot nonbonded atoms differ: {len(claimed_atoms - recorded_atoms)} claimed but not "
+            f"recorded, {len(recorded_atoms - claimed_atoms)} recorded but not claimed")
+
+    def roles(residue_map):
+        return {str(k): (sorted(v.get("categories") or ()), v.get("ligand_instance"),
+                         v.get("residue_name"))
+                for k, v in (residue_map or {}).items()}
+
+    claimed_roles, recorded_roles = roles(region["residue_map"]), roles(document.get("residue_map"))
+    for number in sorted(set(claimed_roles) | set(recorded_roles), key=int):
+        was, now = recorded_roles.get(number), claimed_roles.get(number)
+        if was != now:
+            differences.append(
+                f"residue {number}: recorded {_describe_role(was)}, claimed {_describe_role(now)}")
+
+    def instances(entries):
+        out = {}
+        for entry in entries or ():
+            block = entry.get("torsion_exclusions") or {}
+            out[int(entry["topology_residue"])] = {
+                "label": entry.get("label"), "residue_key": list(entry.get("residue_key") or ()),
+                "package": (entry.get("package") or {}).get("parameter_id"),
+                "exclusions": (block.get("mode"), block.get("sha256"))}
+        return out
+
+    claimed_instances = instances(region["ligand_instances"])
+    recorded_instances = instances(document.get("ligand_instances"))
+    for number in sorted(set(claimed_instances) & set(recorded_instances)):
+        was, now = recorded_instances[number], claimed_instances[number]
+        for key, meaning in (("label", "label"), ("residue_key", "residue identity"),
+                             ("package", "parameter package"),
+                             ("exclusions", "torsion exclusions (mode, content sha256)")):
+            if was[key] != now[key]:
+                differences.append(f"ligand instance at residue {number}: {meaning} recorded "
+                                   f"{was[key]!r}, claimed {now[key]!r}")
+    return differences
+
+
+def _describe_masks(masks) -> str:
+    masks = masks or {}
+    parts = [f"{k} {masks.get(k)!r}" for k in ("backbone", "sidechain") if masks.get(k)]
+    parts += [f"ligand {label} {mask!r}" for label, mask in (masks.get("ligands") or {}).items()]
+    return ", ".join(parts) or "no masks recorded"
+
+
+def _describe_role(role) -> str:
+    if role is None:
+        return "not selected"
+    categories, instance, name = role
+    return f"{name} as {'+'.join(categories)}" + (f" (instance {instance})" if instance else "")
