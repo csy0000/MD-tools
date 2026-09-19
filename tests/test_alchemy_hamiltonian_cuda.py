@@ -114,3 +114,47 @@ def test_cuda_matches_reference_on_the_plan_with_internal_pairs(precision):
         for p in NAMES:
             tol = max(20 * calib, FLOOR[precision] * max(1.0, abs(d_r[p]), abs(e_r)))
             assert abs(d_c[p] - d_r[p]) <= tol, (precision, v, p, d_c[p], d_r[p], tol)
+
+
+#: Finite-difference steps per precision: in mixed, energies carry single-precision pair terms, so
+#: the step must be larger for the difference to rise above that noise.
+FD_STEPS = {"double": (1e-4, 5e-5, 2.5e-5), "mixed": (2e-3, 1e-3, 5e-4)}
+FD_ATOMS = [7, 8, 9, 12, 13, 14, 15]          # HA, FB, the Cl- at 0.22 nm from T1, the tail
+
+
+def _worst(rows):
+    return max(r["richardson_error"] for r in rows)
+
+
+@pytest.mark.parametrize("precision", ["mixed", "double"])
+def test_cuda_forces_are_the_gradient_of_the_energy(precision):
+    """Force / energy consistency ON THE DEVICE, replacing NVE as evidence of it (NVE on this fixture
+    was shown to have no power: handoffs/S3.md). Per atom and component, three halving steps and the
+    Richardson estimate, on the clash-tail geometry the derivative probe also examines.
+
+    THE RULE, written down before the run: the bound is 10 x the worst Richardson error of the plain
+    end-state System A on the same atoms, same precision, same steps, on CUDA in this test. The
+    Hamiltonian at lambda 0, 0.25, 0.5, 0.75, 1 must be within it, and the same check with an energy
+    STEP and with a slope KINK injected at the Cl- - T1 distance must exceed it (power, on CUDA)."""
+    sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
+    h = build_hamiltonian(sa, sb, a, b)
+    steps = FD_STEPS[precision]
+    plain = _context(sa, x, "CUDA", precision)
+    assert plain.getPlatform().getName() == "CUDA"
+    bound = 10 * _worst(fx.fd_force_check(plain, FD_ATOMS, steps))
+    report = {}
+    cuda = _context(h.system, x, "CUDA", precision)
+    for v in (0.0, 0.25, 0.5, 0.75, 1.0):
+        h.set_state(cuda, dict(zip(NAMES, (v, v, v))))
+        rows = fx.fd_force_check(cuda, FD_ATOMS, steps)
+        report[v] = _worst(rows)
+        worst = max(rows, key=lambda r: r["richardson_error"])
+        assert report[v] <= bound, (precision, v, bound, worst)
+    r0 = float(np.linalg.norm(x[12] - x[9])) + steps[-1] / 4
+    for kind, size in (("step", 0.2), ("kink", 50.0)):
+        broken = _context(fx.defective_system(h, "softcore_b_lj", r0, kind, size), x, "CUDA", precision)
+        h.set_state(broken, dict(zip(NAMES, (1.0, 1.0, 1.0))))
+        report[kind] = _worst(fx.fd_force_check(broken, [9, 12], steps))
+        assert report[kind] > bound, (precision, kind, report[kind], bound)
+    print(f"\n{precision}: bound {bound:.2e} kJ/mol/nm; " +
+          ", ".join(f"{k}: {v:.2e}" for k, v in report.items()))

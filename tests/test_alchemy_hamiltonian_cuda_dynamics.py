@@ -53,8 +53,13 @@ def _nve_excursion(system, x, set_state):
 
 @pytest.mark.parametrize("lam", [0.0, 0.5, 1.0])
 def test_nve_conserves_the_softcore_hamiltonian_on_cuda(lam):
-    """Velocity Verlet in double precision: the Hamiltonian's total-energy excursion is held to
-    that of the plain end-state System A integrated the same way on the same device.
+    """A SMOKE TEST, NOT EVIDENCE: velocity Verlet in double precision stays finite and its
+    total-energy excursion stays within 2 x that of the plain end-state System A.
+
+    It is not evidence of force/energy consistency. On this fixture NVE was shown to have no power
+    (CPU, 0.05 fs, 100 fs): a deliberate 20% energy step injected into softcore_b_lj gave the same
+    excursion as the correct Hamiltonian and as System A (0.071 vs 0.072 kJ/mol at lambda 0.5).
+    That job is test_alchemy_hamiltonian_cuda.py::test_cuda_forces_are_the_gradient_of_the_energy.
 
     CALIBRATED, and why it changed (disclosed in handoffs/S3.md). The first form used an absolute
     bound, 5e-4 x KE + 0.05 kJ/mol, never calibrated. The second CUDA run failed it at ~0.5 kJ/mol

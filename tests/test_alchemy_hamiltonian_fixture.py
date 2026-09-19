@@ -477,3 +477,44 @@ def test_every_nonbonded_force_carries_one_exclusion_set(periodic, tail):
     assert len(sets) >= 3
     distinct = {s for _, _, s in sets}
     assert len(distinct) == 1, [(name, group, len(s)) for name, group, s in sets]
+
+
+#: Reference, float64. Steps halve; the Richardson estimate cancels the h^2 truncation, leaving
+#: round-off ~1e-16 |E| / h ~ 1e-9 kJ/mol/nm here. A component passes when its Richardson error
+#: is below 1e-6 x max(1, |F|) -- fixed before the first run of this test.
+FD_STEPS_REFERENCE = (1e-4, 5e-5, 2.5e-5)
+
+
+def _fd_ok(rows):
+    return all(r["richardson_error"] <= 1e-6 * max(1.0, abs(r["force"])) for r in rows)
+
+
+@pytest.mark.parametrize("lam", [0.0, 0.5, 1.0])
+def test_forces_are_the_gradient_of_the_energy_at_the_clash_geometry(lam):
+    """Every softcore atom and the Cl- (0.22 nm from T1), every component, three steps: the force
+    is -dE/dx of the Hamiltonian's total energy, and the error converges as h^2."""
+    sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
+    h = build_hamiltonian(sa, sb, a, b)
+    c = _context(h.system, x)
+    h.set_state(c, _state((lam,) * 3))
+    rows = fx.fd_force_check(c, [7, 8, 9, 12, 13, 14, 15], FD_STEPS_REFERENCE)
+    worst = max(rows, key=lambda r: r["richardson_error"] / max(1.0, abs(r["force"])))
+    print(f"\nlambda {lam}: worst component atom {worst['atom']}{worst['component']} "
+          f"F = {worst['force']:.4e}, errors {['%.1e' % e for e in worst['errors']]}, "
+          f"Richardson {worst['richardson_error']:.1e} kJ/mol/nm")
+    assert _fd_ok(rows), [r for r in rows if not _fd_ok([r])][:3]
+
+
+@pytest.mark.parametrize("kind, size", [("step", 0.2), ("kink", 50.0)])
+def test_the_force_energy_check_has_power(kind, size):
+    """The same check, on the same geometry, FAILS for an energy step and for a slope kink placed
+    at the Cl- - T1 distance -- the non-smoothness a force/energy check exists to catch."""
+    sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
+    h = build_hamiltonian(sa, sb, a, b)
+    r0 = float(np.linalg.norm(x[12] - x[9])) + 1e-5            # inside every stencil
+    broken = _context(fx.defective_system(h, "softcore_b_lj", r0, kind, size), x)
+    h.set_state(broken, _state((1.0, 1.0, 1.0)))
+    rows = fx.fd_force_check(broken, [9, 12], FD_STEPS_REFERENCE)
+    worst = max(r["richardson_error"] for r in rows)
+    print(f"\n{kind}: worst Richardson error {worst:.2e} kJ/mol/nm")
+    assert not _fd_ok(rows), kind

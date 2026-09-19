@@ -477,3 +477,59 @@ def plain_energy(system, x, *, kappa=None, cutoff=None, box=None, nmax=22):
         total -= K_COULOMB * np.sum(qq[is_exc] * erf(kappa * r[is_exc]) / r[is_exc])
         total += _recip(q, x, box, kappa, nmax) - K_COULOMB * kappa / math.sqrt(math.pi) * np.sum(q * q)
     return float(total + _bonded_energy(system, x, box))
+
+
+# ---------------------------------------------------------------------------------------------
+# Force / energy consistency, platform-agnostic (used on Reference and on CUDA)
+# ---------------------------------------------------------------------------------------------
+
+def fd_force_check(context, atoms, steps):
+    """Per atom and Cartesian component: the force F, central finite differences -dE/dx of the
+    Context's TOTAL energy at each step in `steps` (each half the previous), their errors, and the
+    Richardson estimate from the two smallest steps, (4 D(h/2) - D(h)) / 3, and its error.
+
+    A smooth energy whose force is its gradient shows errors falling ~4x per halving and a small
+    Richardson error. A discontinuity or a kink inside the stencil shows neither. Positions are
+    restored."""
+    x0 = context.getState(getPositions=True).getPositions(asNumpy=True)._value.copy()
+    forces = context.getState(getForces=True).getForces(asNumpy=True)._value
+    rows = []
+    for i in atoms:
+        for k in range(3):
+            fds = []
+            for delta in steps:
+                energies = []
+                for sign in (1.0, -1.0):
+                    x = x0.copy()
+                    x[i, k] += sign * delta
+                    context.setPositions(x)
+                    energies.append(context.getState(getEnergy=True).getPotentialEnergy()._value)
+                fds.append(-(energies[0] - energies[1]) / (2 * delta))
+            f = float(forces[i, k])
+            richardson = (4 * fds[-1] - fds[-2]) / 3
+            rows.append({"atom": i, "component": "xyz"[k], "force": f,
+                         "errors": [abs(f - d) for d in fds],
+                         "richardson_error": abs(f - richardson)})
+    context.setPositions(x0)
+    return rows
+
+
+def defective_system(h, group_name, r0, kind, size):
+    """A copy of the Hamiltonian's System with one custom nonbonded force made non-smooth AT r0:
+      "step": the energy jumps by `size` (relative) at r0, with no force for it;
+      "kink": the energy gains size * |r - r0| (kJ/mol per nm): continuous, slope discontinuous.
+    The defects a finite-difference force check must catch at the evaluated geometry."""
+    import openmm
+    from md_tools.alchemy.hamiltonian import FORCE_GROUPS
+    s = openmm.XmlSerializer.deserialize(openmm.XmlSerializer.serialize(h.system))
+    for f in s.getForces():
+        if isinstance(f, openmm.CustomNonbondedForce) and f.getForceGroup() == FORCE_GROUPS[group_name]:
+            head, tail = f.getEnergyFunction().split(";", 1)
+            if kind == "step":
+                head = f"({head})*(1+{size!r}*step({r0!r}-r))"
+            elif kind == "kink":
+                head = f"({head}) + {size!r}*abs(r-{r0!r})"
+            else:
+                raise ValueError(kind)
+            f.setEnergyFunction(f"{head};{tail}")
+    return s
