@@ -78,11 +78,11 @@ BOUNDARY_14_RULES: Mapping[str, str] = {
 }
 
 
-#: The default boundary rule departs from the literal Amber18 text the user chose, so it is the
-#: user's decision; until they make it, "scaled" is provisional and every record says so. The
+#: The default boundary rule departs from the literal Amber18 text, so it was the user's decision;
+#: they confirmed "scaled" on 2026-09-19, and every record says which rule ran and that it was. The
 #: softcore FORM (`softcore_function`) and the boundary rule are two separate recorded facts:
 #: nothing here calls their combination "amber18".
-BOUNDARY_14_DEFAULT_STATUS = "scaled -- PROVISIONAL, the user's decision is pending (2026-09-19)"
+BOUNDARY_14_DEFAULT_STATUS = "scaled -- user-confirmed 2026-09-19"
 
 
 class SoftcoreError(ValueError):

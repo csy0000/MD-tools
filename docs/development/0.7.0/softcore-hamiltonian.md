@@ -70,13 +70,12 @@ is refused otherwise rather than softened behind the user's back.
 | bonded term on a region with force constant 0 at its dummy end only (the plan's `dummy-removed`) | mixed with `lambda_bonded` | pmemd 20+ `gti_bat_sc = 1` analogue |
 | bonded term on a region differing any other way | refused | — |
 
-**`sc_boundary_14` is the one departure from the literal Amber18 text, and its default is
-PROVISIONAL.** The Amber20+ manual calls `gti_add_sc = 0` theoretically incorrect. It also couples
-a dummy to physical coordinates through 1-4s, so the plan's single-anchor dummy would no longer
-factorise. The default is therefore `scaled`, pending the user's decision (asked through S0,
-2026-09-19). Both rules are implemented and tested. The record keeps the softcore form
-(`softcore_function: amber18`) and the boundary rule as two separate facts, so no record calls the
-combination "amber18".
+**`sc_boundary_14` is the one departure from the literal Amber18 text; its default `scaled` was
+confirmed by the user on 2026-09-19.** The Amber20+ manual calls `gti_add_sc = 0` theoretically
+incorrect. It also couples a dummy to physical coordinates through 1-4s, so the plan's single-anchor
+dummy would no longer factorise. `unscaled` stays implemented and tested. The record keeps the
+softcore form (`softcore_function: amber18`) and the boundary rule as two separate facts, so no
+record calls the combination "amber18".
 
 **Consequence for the end states.** Under `scaled`, `U(0)` is System A and `U(1)` is System B,
 plus the other region's internal nonbonded energy. That energy is a function of the group's

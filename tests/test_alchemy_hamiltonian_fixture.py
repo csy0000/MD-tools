@@ -317,7 +317,7 @@ def test_record_names_the_rules_and_the_end_states():
                              "sc_boundary_14": "scaled",
                              "sc_boundary_14_amber": "gti_add_sc = 1 (pmemd 20+ default)",
                              "sc_boundary_14_default":
-                                 "scaled -- PROVISIONAL, the user's decision is pending (2026-09-19)"}
+                                 "scaled -- user-confirmed 2026-09-19"}
     assert r["rules"]["boundary_14"] == "scaled"
     assert r["particles"]["a_only"] == [7] and r["particles"]["b_only"] == [8]
     assert r["particles"]["common_lj_changing"] == [0]
