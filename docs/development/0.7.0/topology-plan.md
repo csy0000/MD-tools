@@ -103,6 +103,15 @@ B's for appended ones; core mass changes are recorded. Masses do not enter the c
 free energy. An environment with repartitioned hydrogen masses is refused: appended atoms would
 need the same repartitioning, which is not implemented.
 
+## Pressure coupling
+
+A barostat in the environment is CARRIED THROUGH, not refused: it is a passive force, copied
+identically into both endpoint Systems (`test_a_barostat_environment_is_carried_unchanged_to_both_
+endpoints`). This is a construction statement only. Contract section 6 requires ensemble-correct
+state energies for alchemical NPT -- the reduced potential needs the pressure-volume term -- and
+that is the Hamiltonian's and the executor's to supply. AIS refuses a barostat; that rule is
+AIS's and does not transfer here.
+
 ## Refused
 
 Net charge change; different force field, charge method or charge backend between the packages;
@@ -187,4 +196,5 @@ Every refusal happens in `build_topology_plan`, before anything is written.
 
 `tests/data/alchemy/v1/` (see its README): ethane, chloroethane and ethanol packages (AM1-BCC,
 openff-2.2.1) and ethane in TIP3P built by `build-top`. `tests/data/alchemy/internal-v1/`:
-n-pentane, whose unmapped propyl group has internal 1-4 and 1-5 pairs. Loaders in `tests/alchemy_fixtures.py`.
+n-pentane, whose unmapped propyl group has internal 1-4 and 1-5 pairs. `xh-only-v1/`: methane.
+`complex-v1/`: capped alanine and ethane in TIP3P (ff14SB, no CMAP; see its README for why). Loaders in `tests/alchemy_fixtures.py`.

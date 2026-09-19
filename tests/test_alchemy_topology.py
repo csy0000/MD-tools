@@ -835,3 +835,37 @@ def test_a_barostat_environment_is_carried_unchanged_to_both_endpoints(eta, cle,
                 barostat.getFrequency()) == (1.0, 300.0, 25)
     for side, pkg in (("A", eta), ("B", cle)):
         _assert_closes(_accounting(plan, env, pkg, side), raw_at_least=1e-2)
+
+
+# ------------------------------------------------------------------------------------------------
+# the complex leg: a protein in the environment
+# ------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("side", ["A", "B"])
+def test_the_complex_leg_recovers_both_endpoints_with_the_protein_present(eta, cle, side):
+    from tests.alchemy_fixtures import COMPLEX_FORCEFIELD, complex_environment
+
+    env = complex_environment()
+    assert {r.name for r in env.topology.residues()} >= {"ACE", "ALA", "NME", "ETA", "HOH"}
+    plan = _build(eta, cle, core_map(eta, cle), env, "hybrid")
+    reference, index = independent_reference(plan, env, eta if side == "A" else cle, side,
+                                             forcefield_files=COMPLEX_FORCEFIELD)
+    from md_tools.alchemy.topology_recovery import endpoint_accounting
+
+    accounting = endpoint_accounting(plan, side, reference, index)
+    _assert_closes(accounting, raw_at_least=1e-2)
+    # the protein's own terms are in the reference and in the plan, untouched
+    assert accounting["hybrid"]["PeriodicTorsionForce"] != 0.0
+
+
+def test_the_complex_leg_keeps_protein_numbering_for_masks(eta, cle):
+    """A mask resolved on the complex before combination (":2", the alanine) selects the same
+    atoms after it: every environment residue keeps its one-based index and its atoms."""
+    from tests.alchemy_fixtures import complex_environment
+
+    env = complex_environment()
+    plan = _build(eta, cle, core_map(eta, cle), env, "hybrid")
+    before = {r.index + 1: (r.name, [a.index for a in r.atoms()]) for r in env.topology.residues()}
+    after = {r.index + 1: (r.name, [a.index for a in r.atoms()]) for r in plan.topology.residues()}
+    assert before[2][0] == "ALA" and after[2] == before[2]
+    assert all(after[i] == before[i] for i in before)
+    assert after[len(before) + 1][0] == "CLE"

@@ -92,12 +92,27 @@ def core_map(a, b, extra=None):
     return AtomMap.from_pairs(a, b, pairs)
 
 
-def independent_reference(plan, environment, pkg, side: str):
+#: `tests/data/alchemy/complex-v1/`: capped alanine (ff14SB) and one ethane in TIP3P, built by
+#: `build-top` as a `kind: complex` structure; the ethane is chain B, resid 201.
+COMPLEX_ROOT = FIXTURE_ROOT.parent / "complex-v1"
+COMPLEX_FORCEFIELD = ("amber14-all.xml", "amber14/tip3p.xml")
+
+
+def complex_environment():
+    from md_tools.alchemy.topology import Environment
+    from md_tools.ligands.mapping import LigandSelector
+
+    return Environment.from_files(COMPLEX_ROOT / "built.xml", COMPLEX_ROOT / "built.pdb",
+                                  LigandSelector(chain="B", resid="201"))
+
+
+def independent_reference(plan, environment, pkg, side: str,
+                          forcefield_files=("amber14/tip3p.xml",)):
     """The PHYSICAL endpoint built from scratch by OpenMM's force field, not from the plan.
 
     The environment minus its ligand, plus *pkg* as a fresh residue at the plan's coordinates,
-    parameterised by `ForceField(amber14/tip3p.xml)` with the package's ffxml loaded through the
-    ligand module's own loader, under the environment's recorded nonbonded settings. Returns the
+    parameterised by `ForceField(*forcefield_files)` -- the files the environment's build record
+    names -- with the package's ffxml loaded through the ligand module's own loader, under the environment's recorded nonbonded settings. Returns the
     System and, for each of its particles, the plan particle it is.
     """
     from openmm import NonbondedForce, app, unit
@@ -115,7 +130,7 @@ def independent_reference(plan, environment, pkg, side: str):
     kept = [a.index for a in environment.topology.atoms() if a.residue.name != ligand_name]
     modeller.add(topology_for_molecule(pkg.mol, pkg.atom_names, pkg.residue_name),
                  x[hyb] * unit.nanometer)
-    forcefield = app.ForceField("amber14/tip3p.xml")
+    forcefield = app.ForceField(*forcefield_files)
     load_packages_into(forcefield, [pkg])
     residue = [r for r in modeller.topology.residues() if r.name == pkg.residue_name][-1]
     constrained = environment.system.getNumConstraints() > 0
