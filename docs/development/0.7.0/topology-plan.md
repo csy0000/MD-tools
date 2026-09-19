@@ -96,7 +96,7 @@ The environment's constraint policy is read from its ligand (HBonds, AllBonds or
 applied to endpoint B. A constraint that would appear or vanish along the path, or change length,
 is refused -- a constraint has one length. An environment whose ligand has only X-H bonds cannot
 say whether it was built with HBonds or AllBonds; it is refused when endpoint B has a heavy-atom
-bond (untested: no fixture package has only X-H bonds).
+bond (tested with methane, `tests/data/alchemy/xh-only-v1/`).
 
 Masses are the environment's for every existing particle (endpoint A's for the core) and package
 B's for appended ones; core mass changes are recorded. Masses do not enter the configurational

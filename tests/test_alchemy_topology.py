@@ -791,3 +791,27 @@ def test_the_internal_pair_force_never_sees_a_box(water):
     for system in (plan.system_a, plan.system_b):
         force = next(f for f in system.getForces() if f.getName() == name)
         assert not force.usesPeriodicBoundaryConditions()
+
+
+def test_an_environment_that_cannot_name_its_constraint_policy_is_refused():
+    """Methane's bonds are all C-H: HBonds and AllBonds constrain the same pairs around it.
+
+    Endpoint B = ethane has a C-C bond whose treatment depends on which policy it was, so the
+    plan is refused; B = methane has none, so the same environment builds.
+    """
+    from openmm import app
+
+    from md_tools.alchemy.topology import TopologyError
+    from md_tools.alchemy.topology_mapping import AtomMap
+    from tests.alchemy_fixtures import METHANE
+
+    methane, ethane = package(METHANE), package(ETHANE)
+    env = vacuum_environment(methane, constraints=app.HBonds)
+    assert env.system.getNumConstraints() == 4
+    with pytest.raises(TopologyError, match="HBonds or AllBonds"):
+        _build(methane, ethane, AtomMap.from_pairs(
+            methane, ethane, {n: n for n in ("C1", "H1", "H2", "H3")}), env, "hybrid")
+    plan = _build(methane, methane, AtomMap.from_pairs(
+        methane, methane, {n: n for n in ("C1", "H1", "H2", "H3")}), env, "hybrid")
+    assert plan.record["constraints"]["policy"] == "HBonds"
+    assert len(plan.b_only) == 1

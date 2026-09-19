@@ -34,6 +34,10 @@ ETHANOL = "LOCAL-LFQSCWFLJHTTHZ/param_d66453ef683a"
 INTERNAL_PACKAGES = FIXTURE_ROOT.parent / "internal-v1" / "packages"
 PENTANE = "LOCAL-OFBQJSOFQDEBGM/param_2ef743cf164f"
 
+#: `tests/data/alchemy/xh-only-v1/`: methane, a ligand whose every bond is X-H.
+XH_ONLY_PACKAGES = FIXTURE_ROOT.parent / "xh-only-v1" / "packages"
+METHANE = "LOCAL-VNWKTOKETHGBQD/param_7e58d629eea7"
+
 #: The ethyl fragment every fixture shares, by package atom name.
 CORE = ("C1", "C2", "H1", "H2", "H3", "H4", "H5")
 
@@ -47,7 +51,7 @@ ENERGY_TOL_KJ = 1e-7
 def package(reference: str):
     from md_tools.ligands import load_package
 
-    root = INTERNAL_PACKAGES if reference == PENTANE else PACKAGES
+    root = {PENTANE: INTERNAL_PACKAGES, METHANE: XH_ONLY_PACKAGES}.get(reference, PACKAGES)
     return load_package(root / reference)
 
 
