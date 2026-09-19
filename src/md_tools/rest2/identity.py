@@ -33,9 +33,10 @@ import re
 #: Bumped when the canonicalisation changes, because a fingerprint is only comparable to one
 #: produced the same way. v2: the selection records unscaled central bonds of every class and
 #: whether impropers are unscaled (REST2 convention v3), where v1 recorded omega bonds only.
-#: v3 (0.6.1): `selection_sha256` hashes the FULL md-tools-solute-selection/2.0 document --
-#: mode, masks, owned torsion bonds, CMAP decisions, ligand instances -- because under selective
-#: REST2 two selections with one nonbonded atom set can still be two Hamiltonians.
+#: v3 (0.6.1): `selection_sha256` hashes the Hamiltonian-determining projection of the
+#: md-tools-solute-selection/2.0 document (`hamiltonian_selection_projection`): hot atoms, torsion
+#: and CMAP decisions, protected bonds, ligand instances -- because under selective REST2 two
+#: selections with one nonbonded atom set can still be two Hamiltonians -- and NOT its provenance.
 FINGERPRINT_FORMAT = "md-tools-hamiltonian-identity/v3"
 #: What 0.6.0 wrote. Read, and accepted ONLY through `_legacy_v2_agrees` (shared contract §3).
 LEGACY_FINGERPRINT_FORMAT = "md-tools-hamiltonian-identity/v2"
@@ -143,6 +144,71 @@ def _legacy_selection_document(solute_indices, excluded_bonds, unscaled_improper
             "improper_policy": {"unscaled_impropers": bool(unscaled_impropers)}}
 
 
+def hamiltonian_selection_projection(document):
+    """The part of a selection document (md-tools-solute-selection/2.0, or 1.0) that DETERMINES
+    the Hamiltonian -- and nothing else. THE one definition: the identity hashes it,
+    `ScalingSelection.digest()` hashes it, and `regions.claimed_region_differences` compares
+    through it (S0 ruling, 2026-09-19).
+
+    Kept: the hot nonbonded atoms; the scaled torsion central bonds and the protected ones; per
+    CMAP term whether it is scaled; the improper policy; the detector and selection-policy
+    versions; per ligand instance its residue identity, its parameter package and the RESOLVED
+    content of its exclusion file (the package and the named bonds).
+
+    Left out, as PROVENANCE: mask spellings, instance labels, file paths, the raw bytes of an
+    exclusion file (a comment is not a Hamiltonian), the residue-map display fields, notes and
+    labels. Two records differing only there describe one Hamiltonian, and a run must resume
+    across them -- a field that does not determine the calculation must never make a run
+    unresumable (the 20260909 defect).
+    """
+    document = dict(document or {})
+    fmt = document.get("format")
+    mode = document.get("selection_mode", LEGACY_SELECTION_MODE) \
+        if fmt == "md-tools-solute-selection/2.0" else LEGACY_SELECTION_MODE
+    atoms = document.get("selected_nonbonded_atoms")
+    if atoms is None:
+        atoms = document.get("solute_atoms") or ()
+    excluded = document.get("excluded_central_bonds")
+    if excluded is None:
+        excluded = document.get("unscaled_torsion_central_bonds") or ()
+    policy = document.get("improper_policy") or {}
+    projection = {
+        "selection_mode": mode,
+        "selected_nonbonded_atoms": sorted(int(i) for i in atoms),
+        "excluded_central_bonds": sorted(sorted(int(a) for a in b) for b in excluded),
+        "unscaled_impropers": bool(policy.get("unscaled_impropers", True)),
+    }
+    if mode == LEGACY_SELECTION_MODE:
+        return projection
+    instances = []
+    for entry in document.get("ligand_instances") or ():
+        block = entry.get("torsion_exclusions") or {}
+        instances.append({
+            "residue_key": [str(x) for x in entry.get("residue_key") or ()],
+            "parameter_id": (entry.get("package") or {}).get("parameter_id"),
+            "exclusions": {"mode": block.get("mode", "auto"),
+                           "parameters": block.get("parameters"),
+                           "central_bonds": sorted(sorted(str(n) for n in pair)
+                                                   for pair in block.get("central_bonds") or ())},
+        })
+    projection.update({
+        "selected_torsion_central_bonds": sorted(
+            sorted(int(a) for a in b) for b in document.get("selected_torsion_central_bonds")
+            or ()),
+        "cmap": sorted([int(d["term"]), int(d["map"]), bool(d["scaled"])]
+                       for d in document.get("cmap_decisions") or ()),
+        "detector_policy_version": document.get("detector_policy_version"),
+        "policy": document.get("policy"),
+        "ligand_instances": sorted(instances, key=lambda e: e["residue_key"]),
+    })
+    return projection
+
+
+def selection_identity_sha256(document):
+    """sha256 of `hamiltonian_selection_projection(document)`: what `selection_sha256` is."""
+    return _canonical_sha256(hamiltonian_selection_projection(document))
+
+
 def _canonical_sha256(document):
     import json
 
@@ -174,7 +240,9 @@ def identity_record(system, *, tau, temperature_k, ensemble, solute_indices=(),
         "format": FINGERPRINT_FORMAT,
         "system_sha256": system_fingerprint(system),
         "selection_mode": mode,
-        "selection_sha256": _canonical_sha256(selection),
+        # The Hamiltonian-determining projection ONLY. Provenance (mask text, labels, paths) is
+        # recorded with the states and never part of the identity.
+        "selection_sha256": selection_identity_sha256(selection),
         # The v2 way, so a 0.6.0 record of a legacy selection can be checked field for field.
         "v2_selection_sha256": _v2_selection_sha256(solute_indices, excluded_bonds,
                                                     unscaled_impropers),

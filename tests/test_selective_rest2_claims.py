@@ -80,14 +80,14 @@ def test_the_same_residue_in_another_category_differs(fx):
 def test_the_twin_copy_differs(fx):
     claim = dict(BASE, ligand_scaling_dict={"L01": {"mask": f":{RESIDUE['LGA#2']}"}})
     differences = _compare(fx, claim, _record(fx, BASE))
-    assert any("residue 13: recorded LGA as ligand (instance L01), claimed not selected" in d
-               for d in differences), differences
+    assert "residue 13: recorded LGA as ligand, claimed not selected" in differences
+    assert "residue 15: recorded not selected, claimed LGA as ligand" in differences
 
 
-def test_a_relabelled_instance_differs(fx):
+def test_a_relabelled_instance_agrees(fx):
+    """A label is provenance: the same copy under another name is the same Hamiltonian."""
     claim = dict(BASE, ligand_scaling_dict={"L99": {"mask": ":13"}})
-    differences = _compare(fx, claim, _record(fx, BASE))
-    assert any("label recorded 'L01', claimed 'L99'" in d for d in differences), differences
+    assert _compare(fx, claim, _record(fx, BASE)) == []
 
 
 def test_an_exclusion_file_elsewhere_with_the_same_content_agrees(fx, tmp_path):
@@ -101,7 +101,20 @@ def test_an_exclusion_file_elsewhere_with_the_same_content_agrees(fx, tmp_path):
     assert _compare(fx, claim, recorded, second) == []
     _exclusions(second / "L01.yaml", [("N1", "C4")])
     differences = _compare(fx, claim, recorded, second)
-    assert any("torsion exclusions (mode, content sha256)" in d for d in differences), differences
+    assert any("torsion exclusions (resolved content)" in d for d in differences), differences
+
+
+def test_an_exclusion_file_differing_only_by_a_comment_agrees(fx, tmp_path):
+    """The file's BYTES are provenance; the bonds it names are the Hamiltonian."""
+    first, second = tmp_path / "a", tmp_path / "b"
+    first.mkdir(), second.mkdir()
+    _exclusions(first / "L01.yaml", [("C2", "C3")])
+    _exclusions(second / "L01.yaml", [("C2", "C3")])
+    with (second / "L01.yaml").open("a", encoding="utf-8") as handle:
+        handle.write("# reviewed 2026-09-19\n")
+    claim = dict(BASE, ligand_scaling_dict={"L01": {"mask": ":13",
+                                                    "torsion_exclusions": "L01.yaml"}})
+    assert _compare(fx, claim, _record(fx, claim, first), second) == []
 
 
 def test_an_auto_claim_against_a_file_record_differs(fx, tmp_path):

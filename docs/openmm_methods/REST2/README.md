@@ -209,13 +209,18 @@ trajectories and restraints are about:
 * `selection`: `md-tools-solute-selection/2.0`, carrying the mode, the masks as written, the
   residue map, the nonbonded atoms, the owned central bonds, per-term CMAP decisions, and the
   ligand instances;
-* `selection_sha256`;
+* `selection_sha256`: the identity, over only what determines the Hamiltonian;
+* `selection_provenance_sha256`: over the whole record, provenance included;
 * `scaler_arguments`: exactly the arguments `build_scaled_system` takes besides τ, so every state
   rebuilds from the record alone.
 
-Hamiltonian identity is `md-tools-hamiltonian-identity/v3`, which hashes the full selection. A
-0.6.0 (v2) identity is still accepted, but only for a legacy selection and only when every v2
-field matches.
+Hamiltonian identity is `md-tools-hamiltonian-identity/v3`. Its `selection_sha256` hashes only
+what determines the Hamiltonian: the hot atoms, the scaled and protected torsion bonds, each CMAP
+decision, the improper policy and rule versions, and each ligand instance's residue, package and
+resolved exclusions. Mask spelling, instance labels, file paths and an exclusion file's comments
+are **provenance**. They are recorded, but they never make a run unresumable. A 0.6.0 (v2)
+identity is still accepted, but only for a legacy selection and only when every v2 field
+matches.
 
 ## What MD-tools implements
 
