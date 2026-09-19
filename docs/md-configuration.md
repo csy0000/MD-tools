@@ -77,7 +77,7 @@ Catalog identity of the molecule for kind: ligand or peptide-like: a ChEMBL id (
 
 type: list · default: `[]`
 
-Searchable names stored with a package this build creates: `[paracetamol, acetaminophen, TYL]`. Names, not identities.
+Searchable names stored with a package this build creates: `[paracetamol, acetaminophen, TYL]`. Names, not identities, so they never decide whether a catalog package is reused. A REUSED package keeps the aliases it was written with; any stated here that it lacks are reported on stderr and recorded in built.log as `stated_aliases_not_applied`. Refused beside a stated `parameters` reference, where they could never apply.
 
 #### `solute.parameters`
 

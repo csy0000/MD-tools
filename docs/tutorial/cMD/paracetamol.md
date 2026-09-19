@@ -96,17 +96,15 @@ declares the readable copies, and a load verifies they are there.
 `aliases` are the searchable names — they are **names, not identities**, so they do not enter the
 parameter id, and a package written with different aliases is the same package.
 
-!!! warning "Set the aliases before you register, or they never land"
-    `data-register --ligand-package` is write-once: a package already in the catalog under that
-    identity is KEPT, and a later copy carrying more aliases registers as "already registered,
-    kept" — accepted, and silently without effect. Worse, once the package is in your catalog,
-    `--parameterize` finds it by search and reuses it, so a configuration stating aliases produces
-    a package that has none and says nothing about it.
-
-    `data-register --find-ligand` searches the compound id, the residue name and the canonical
-    SMILES as well, so a package with no aliases is still findable as `CHEMBL112` or `TYL` — just
-    not as "paracetamol". To change the aliases of a package already registered, the catalog entry
-    has to be removed first.
+!!! note "Set the aliases before you register"
+    A package's aliases are fixed when it is written. `data-register --ligand-package` is
+    write-once, so an aliased copy of a package already in the catalog is kept out, and a build
+    that finds the package by search reuses it with the names it already has. Both say so on
+    stderr (`NOTE: ... were NOT added` / `were NOT applied`), and the build records the dropped
+    names in built.log as `stated_aliases_not_applied`. `data-register --find-ligand` also
+    searches the compound id, the residue name and the canonical SMILES, so a package without
+    aliases can still be found as `CHEMBL112` or `TYL`, but not as "paracetamol". To change the
+    aliases of a registered package, remove its catalog entry first.
 
 Add `--register` to copy the finished package into the shared catalog under
 `$MD_DATA/parameters/ligands/`. That is optional throughout: every build below reads the folder

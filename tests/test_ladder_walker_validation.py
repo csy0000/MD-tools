@@ -275,3 +275,55 @@ def test_an_invalid_ladder_is_refused_an_extension_before_outputs_appear(finishe
     assert "Nothing was written" in done.stderr, done.stderr[-3000:]
     assert not extension.exists() or not any(extension.iterdir()), (
         f"the refused extension left {sorted(p.name for p in extension.iterdir())}")
+
+
+def _extend(finished, parent, extension):
+    root, _run = finished
+    base = dict(os.environ)
+    base["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO / "src"), *([base["PYTHONPATH"]] if base.get("PYTHONPATH") else [])])
+    base["MD_TOOLS_CONFIG"] = str(root / "user.config")
+    return subprocess.run(
+        [sys.executable, str(root / "REST2-run1" / "REST2.py"),
+         "-p", str(root / "build" / "built.pdb"),
+         "--groupfile", str(ladder_group_file(root, extension)),
+         "-odir", str(extension), "--cpu",
+         "--extend", "2", "--extend-from", str(parent)],
+        cwd=root / "REST2-run1", capture_output=True, text=True, timeout=1800, env=base)
+
+
+def test_an_extension_onto_other_saved_states_is_refused_before_outputs_appear(finished,
+                                                                               tmp_path):
+    """A healthy parent, and a group file naming states other than the ones it integrated.
+
+    The identity comparison used to happen only in the driver, AFTER `replica_main` had
+    published `_protocol.py` and `solute.yaml` and opened the logs -- so the refusal landed in
+    the new directory's `REST2.out`, and a refused continuation left a tree that read as a
+    started extension. The group file and the parent's `solute.yaml` answer this question
+    alone, so it is asked before `-odir` holds anything.
+    """
+    destination = _copy(finished, tmp_path)
+    record = destination / "solute.yaml"
+    text = record.read_text(encoding="utf-8")
+    ran = yaml.safe_load(text)["rest2"]["scaled_states"]["states"]
+    # The parent recorded integrating a different state 1: a rebuilt scaler, a new selection.
+    record.write_text(text.replace(ran[1], "f" * 64), encoding="utf-8")
+
+    extension = tmp_path / "extended"
+    done = _extend(finished, destination, extension)
+    assert done.returncode != 0, done.stdout[-3000:]
+    assert "does not describe the same run as its parent" in done.stderr, done.stderr[-3000:]
+    assert "state 1: parent ffffffffffff" in done.stderr, done.stderr[-3000:]
+    assert "Nothing was written" in done.stderr, done.stderr[-3000:]
+    assert not extension.exists() or not any(extension.iterdir()), (
+        f"the refused extension left {sorted(p.name for p in extension.iterdir())}")
+
+
+def test_an_extension_onto_the_same_saved_states_is_accepted(finished, tmp_path):
+    """The control: the early comparison must not refuse the extension it exists to allow."""
+    destination = _copy(finished, tmp_path)
+    extension = tmp_path / "extended"
+    done = _extend(finished, destination, extension)
+    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+    manifest = json.loads((extension / "restart.json").read_text(encoding="utf-8"))
+    assert manifest["run_status"] == "completed"

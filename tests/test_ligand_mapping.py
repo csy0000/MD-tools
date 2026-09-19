@@ -309,6 +309,110 @@ def test_an_incompatible_one_four_convention_is_refused_before_loading(tmp_path)
         load_packages_into(other, [tyl])
 
 
+@pytest.mark.parametrize("xmls", [("amber19-all.xml", "amber19/opc.xml"),
+                                  ("amber14-all.xml", "amber14/opc.xml"),
+                                  ("amber19/opc.xml",)])
+def test_opc_builds_accept_a_package_and_record_the_scale_applied(tmp_path, xmls):
+    """The documented ff19SB + OPC pairing, the ff14SB one, and a ligand alone in OPC water.
+
+    Each OPC XML writes 5/6 as `0.833333`, and the first NonbondedForce definition loaded is the
+    one the System applies. Compared exactly, every package was refused in every OPC build.
+    """
+    from openmm import app
+
+    from md_tools.ligands.mapping import load_packages_into
+
+    tyl = _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    forcefield = app.ForceField(*xmls)
+    report = load_packages_into(forcefield, [tyl])
+    entry = report["packages"][0]
+    assert entry["coulomb14scale"] == 5.0 / 6.0
+    assert entry["applied"]["coulomb14scale"] == 0.833333
+    assert entry["applied"]["tolerance"] == 1e-5
+
+
+def test_under_opc_only_the_one_four_coulomb_pairs_differ_and_by_exactly_the_recorded_ratio(
+        tmp_path):
+    """Where the identical-parameters promise bends, measured rather than asserted.
+
+    The package alone applies its own 5/6. In OPC water the System applies the water XML's
+    0.833333 to every 1-4 Coulomb pair, the ligand's included. Everything else -- charges,
+    Lennard-Jones, exclusions, the 1-4 Lennard-Jones pairs -- must be bit-identical, and the 1-4
+    Coulomb pairs must differ by exactly applied / package, the two numbers the record carries.
+    """
+    import openmm
+    from openmm import app
+
+    from md_tools.ligands.mapping import load_packages_into
+    from md_tools.ligands.parameters import ligand_system, topology_for_molecule
+
+    tyl = _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    alone = ligand_system(tyl.ffxml_text, tyl.mol, tyl.atom_names, tyl.template_name)
+    forcefield = app.ForceField("amber19/opc.xml")
+    report = load_packages_into(forcefield, [tyl])
+    applied = report["packages"][0]["applied"]["coulomb14scale"]
+    ratio = applied / tyl.conventions["coulomb14scale"]
+    topology = topology_for_molecule(tyl.mol, tyl.atom_names, tyl.template_name[:3])
+    residue = next(iter(topology.residues()))
+    in_opc = forcefield.createSystem(topology, nonbondedMethod=app.NoCutoff, constraints=None,
+                                     rigidWater=False, removeCMMotion=False,
+                                     residueTemplates={residue: tyl.template_name})
+
+    def nonbonded(system):
+        return next(f for f in system.getForces() if isinstance(f, openmm.NonbondedForce))
+
+    a, b = nonbonded(alone), nonbonded(in_opc)
+    assert [a.getParticleParameters(i) for i in range(a.getNumParticles())] == \
+        [b.getParticleParameters(i) for i in range(b.getNumParticles())]
+
+    def exceptions(force):
+        out = {}
+        for k in range(force.getNumExceptions()):
+            i, j, q, sigma, epsilon = force.getExceptionParameters(k)
+            out[(min(i, j), max(i, j))] = (q.value_in_unit(q.unit), sigma, epsilon)
+        return out
+
+    ea, eb = exceptions(a), exceptions(b)
+    assert set(ea) == set(eb)
+    scaled = 0
+    for pair, (qa, sa, epa) in ea.items():
+        qb, sb, epb = eb[pair]
+        assert (sa, epa) == (sb, epb), pair
+        if qa == 0.0:
+            assert qb == 0.0, pair
+        else:
+            scaled += 1
+            assert abs(qb / qa - ratio) < 1e-12, (pair, qb / qa, ratio)
+    assert scaled > 0
+    assert abs(ratio - 1.0) < 5e-7          # 0.833333 / (5/6): about 4e-7 relative
+
+
+def test_the_force_field_record_carries_the_applied_one_four_scales():
+    """The builder reported them and `_ligand_record` dropped them, so built.log could not say
+    which 1-4 scale a package's ligand was built under. Every route keeps the key, null or not."""
+    from md_tools.openmm.forcefield_record import _ligand_record, _null_ligand
+
+    report = {"packages": [{"reference": "X/param_0", "coulomb14scale": 5.0 / 6.0,
+                            "applied": {"coulomb14scale": 0.833333}}]}
+    record = _ligand_record(is_ligand=True, reported={"ligand": {"nonbonded_compatibility": report}},
+                            requested={}, checksums={})
+    assert record["nonbonded_compatibility"] == report
+    assert set(record) == set(_null_ligand())
+    assert _null_ligand()["nonbonded_compatibility"] is None
+
+
+def test_a_one_four_scale_just_outside_openmms_tolerance_is_still_refused(tmp_path):
+    from openmm import app
+
+    from md_tools.ligands.mapping import MappingError, load_packages_into
+
+    tyl = _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    near = app.ForceField(io.StringIO(
+        '<ForceField><NonbondedForce coulomb14scale="0.83332" lj14scale="0.5"/></ForceField>'))
+    with pytest.raises(MappingError, match="1-4 scales"):
+        load_packages_into(near, [tyl])
+
+
 def test_unmapped_non_standard_residues_are_listed(tmp_path):
     from md_tools.ligands.mapping import LigandSelector, unmapped_residues
 

@@ -213,3 +213,34 @@ def test_the_workflow_does_not_claim_a_three_command_interface():
     """`md-openmm` has four public commands, and the job's own summary said three."""
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "three-command" not in text, "the workflow still calls this a three-command interface"
+
+
+def test_the_catalog_this_suite_sees_is_not_this_machines(tmp_path):
+    """`conftest._md_data_is_not_this_machines` must have POWER, not merely be present.
+
+    Two ligand tests once passed only because this machine's catalog happened to be empty, and
+    went red the day a person registered a package into it -- a documented, supported action.
+    `build.top.catalog_roots` searches a configuration's own `ligand_catalog.path` AND THEN the
+    machine-wide catalog, so a test that builds its own catalog is not isolated by doing so.
+
+    The fixture sets `$MD_DATA` to a temporary directory. This asserts what that BUYS: the catalog
+    the package code resolves is under pytest's own temporary root, it does not hold whatever this
+    machine holds, and it is live -- a package registered into it is found. Without the last part
+    a change that stopped setting the variable would still show an empty search and look green.
+    """
+    from md_tools.ligands.catalog import default_catalog_root, register_package, search_catalog
+
+    from tests.test_ligand_mapping import _package
+
+    root = default_catalog_root()
+    assert root is not None, "the fixture must SET $MD_DATA, never unset it: unset falls back to " \
+                             "the user configuration and finds this machine's root again"
+    assert Path(os.environ["MD_DATA"]).is_absolute()
+    assert "isolated-MD_DATA" in str(root), f"the catalog is this machine's, not the suite's: {root}"
+    assert list(search_catalog("CHEMBL112", root)) == [], \
+        f"a package registered on this machine is visible to the suite: {root}"
+
+    package = _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    _, placed, written = register_package(package.path, root)
+    assert written and placed.is_dir()
+    assert [hit["reference"] for hit in search_catalog("CHEMBL112", root)] == [package.reference]
