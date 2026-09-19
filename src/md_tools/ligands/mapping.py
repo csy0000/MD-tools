@@ -830,9 +830,13 @@ def _contacts(topology, positions_nm, residue, heavy, instance, where) -> list[d
 def check_forcefield_compatibility(forcefield, packages: Iterable[LigandPackage]) -> dict[str, Any]:
     """Refuse a package whose nonbonded conventions differ from the force field it joins.
 
-    Checked EXACTLY, before the package is loaded. OpenMM merges NonbondedForce definitions whose
-    1-4 scales agree within 1e-5 and keeps the first one silently, so its own check would let a
-    near-miss through with the ligand quietly built under the protein's convention.
+    Checked before the package is loaded, within OpenMM's own merge tolerance
+    (`NonbondedGenerator.SCALETOL`, 1e-5). This used to be exact, so that a near-miss would not be
+    built QUIETLY under the protein's convention; but OpenMM merges any definitions within that
+    tolerance and applies the FIRST one to the whole System, and several shipped water XMLs write
+    5/6 as `0.833333`, so the exact check refused every package under OPC. A difference below
+    1e-5 in a 1-4 scale is not a different convention, and it is no longer quiet: the report
+    records, per package, its own scales beside the ones the System applies.
     """
     from openmm.app.forcefield import NonbondedGenerator
 
@@ -849,18 +853,31 @@ def check_forcefield_compatibility(forcefield, packages: Iterable[LigandPackage]
         generator = generators[0]
         report["force_field_nonbonded"] = {"coulomb14scale": generator.coulomb14scale,
                                            "lj14scale": generator.lj14scale}
+    # OPENMM'S OWN CRITERION, not bit-equality. Several shipped water XMLs write 5/6 rounded to
+    # `0.833333` (amber14/opc.xml, amber19/opc.xml and their opc3 siblings), and whichever
+    # NonbondedForce definition loads first is the one the whole System applies, the ligand's
+    # exceptions included; OpenMM merges any later definition within `SCALETOL` into it. An exact
+    # comparison therefore refused every package in every OPC build -- the documented ff19SB
+    # alternative -- over a difference OpenMM itself treats as none. What is RECORDED is the
+    # value actually applied, beside each package's own.
+    tolerance = NonbondedGenerator.SCALETOL
     for package in packages:
         conventions = package.conventions
         entry = {"reference": package.reference, **{k: conventions[k] for k in
                                                    ("coulomb14scale", "lj14scale")}}
+        if generators:
+            entry["applied"] = {"coulomb14scale": generators[0].coulomb14scale,
+                                "lj14scale": generators[0].lj14scale, "tolerance": tolerance}
         report["packages"].append(entry)
-        if generators and (conventions["coulomb14scale"] != generators[0].coulomb14scale
-                           or conventions["lj14scale"] != generators[0].lj14scale):
+        if generators and (
+                abs(conventions["coulomb14scale"] - generators[0].coulomb14scale) > tolerance
+                or abs(conventions["lj14scale"] - generators[0].lj14scale) > tolerance):
             raise MappingError(
                 f"package {package.reference} uses 1-4 scales coulomb "
                 f"{conventions['coulomb14scale']!r} / LJ {conventions['lj14scale']!r}, the force "
                 f"field it is combined with uses {generators[0].coulomb14scale!r} / "
-                f"{generators[0].lj14scale!r}. One System has one convention; a package "
+                f"{generators[0].lj14scale!r} (compared within OpenMM's own {tolerance:g}). "
+                f"One System has one convention; a package "
                 f"parameterised for another one needs a package made for this force field.")
     return report
 

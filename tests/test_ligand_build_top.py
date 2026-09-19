@@ -266,7 +266,7 @@ def test_build_top_searches_the_catalog_and_reuses_or_parameterises(tmp_path):
     tyl = _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
     catalog = tmp_path / "catalog"
 
-    def build(name, smiles, parameters=None):
+    def build(name, smiles, parameters=None, aliases=None):
         work = tmp_path / name
         work.mkdir()
         (work / "in.smi").write_text(f"{smiles} molecule\n", encoding="utf-8")
@@ -276,6 +276,7 @@ solute:
   residue_name: TYL
   compound_id: CHEMBL112
 {f'  parameters: {parameters}' if parameters else ''}
+{f'  aliases: {aliases}' if aliases else ''}
 ligand_catalog:
   path: {catalog}
 solvent:
@@ -283,11 +284,16 @@ solvent:
   padding_nm: 1.0
 """)
         assert result.returncode == 0, result.stderr[-3000:]
-        return _record(work / "build" / "built.log")["ligand_packages"]["attached"]
+        attached = _record(work / "build" / "built.log")["ligand_packages"]["attached"]
+        return {**attached, "stderr": result.stderr}
 
     # 1. The catalog holds exactly this molecule, state, charge implementation and force field.
-    reused = build("reuse", "CC(=O)Nc1ccc(O)cc1")
+    # Aliases are names, not identity: they never prevent the match, and the reused package
+    # keeps its own -- which the record and stderr both say, instead of dropping them silently.
+    reused = build("reuse", "CC(=O)Nc1ccc(O)cc1", aliases=["paracetamol"])
     assert reused["how"] == "reused (catalog search)"
+    assert reused["stated_aliases_not_applied"] == ["paracetamol"]
+    assert "build-top: NOTE: solute.aliases ['paracetamol'] were NOT applied" in reused["stderr"]
     assert reused["reference"] == tyl.reference
     assert reused["charges_generated_in_this_build"] is False
     assert reused["matched_on"] == {"topology": "same", "protonation": "same",

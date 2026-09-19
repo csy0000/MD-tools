@@ -285,9 +285,19 @@ def _ligand_catalog_command(args) -> int:
                       f"({'already present' if destination.exists() else 'new'}; $MD_DATA from "
                       f"{origin})")
             return 0
+        offered = package.summary()["aliases"]
         package, placed, written = register_package(Path(args.ligand_package), catalog)
         print(f"{'registered' if written else 'already registered, kept'} {package.reference} "
               f"at {placed}")
+        # Write-once compares identity, and aliases are not identity: an aliased copy of a
+        # registered package is kept out, correctly -- and its names with it, which is said.
+        kept = package.summary()["aliases"]
+        dropped = [a for a in offered if a not in kept]
+        if not written and dropped:
+            print(f"data-register: NOTE: aliases {dropped} in {args.ligand_package} were NOT "
+                  f"added; the catalog entry is write-once and keeps its own "
+                  f"({kept or 'none'}). Remove the entry and register again to change its names.",
+                  file=sys.stderr)
         return 0
     except (PackageError, RegistrationError) as exc:
         print(f"data-register: {exc}", file=sys.stderr)

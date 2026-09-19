@@ -142,6 +142,9 @@ class LigandPackage:
         return {
             "reference": self.reference,
             "compound_id": self.compound_id,
+            # Searchable names, never identity: two packages differing only here are one package,
+            # so the record says which names the package it USED carries, not the ones asked for.
+            "aliases": list(self.metadata["compound"].get("aliases", [])),
             "parameter_id": self.parameter_id,
             "template_name": self.template_name,
             "residue_name": self.residue_name,
