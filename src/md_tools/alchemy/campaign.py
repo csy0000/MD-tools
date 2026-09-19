@@ -40,6 +40,11 @@ def prepare_leg(directory, *, plan, hamiltonian, path: AlchemicalPath, s_values:
     if directory.exists():
         raise WindowError(f"{directory} exists; a leg is prepared once, into a new directory")
     states = window_states(path, s_values, temperature_k=temperature_k, pressure_bar=pressure_bar)
+    solvation = plan.record.get("environment", {}).get("solvation")
+    if solvation is None:
+        raise WindowError("the plan records no environment solvation (S2's "
+                          "plan.record['environment']['solvation']); a window cannot know whether "
+                          "it is a vacuum leg, and must not guess from periodicity")
     directory.mkdir(parents=True)
     system_xml = openmm.XmlSerializer.serialize(hamiltonian.system)
     (directory / "system.xml").write_text(system_xml)
@@ -60,6 +65,7 @@ def prepare_leg(directory, *, plan, hamiltonian, path: AlchemicalPath, s_values:
         # S2's ligand-side Hamiltonian digest; None until S2's plan record carries it, and the
         # relative cycles refuse a leg without it.
         "ligand_hamiltonian_sha256": plan.record.get("ligand_hamiltonian_sha256"),
+        "solvation": solvation,
         "hamiltonian": {k: v for k, v in (getattr(hamiltonian, "record", {}) or {}).items()
                         if k in ("schema", "softcore", "settings")},
         "system_sha256": hashlib.sha256(system_xml.encode()).hexdigest(),
@@ -91,7 +97,7 @@ def run_leg(directory, *, hamiltonian, settings: WindowSettings, windows: Sequen
     out = directory / "windows" / repeat
     return [run_window(topology=directory / "topology.pdb", system=directory / "system.xml",
                        hamiltonian=hamiltonian, path=path, states=states, window_id=wid,
-                       out_dir=out, settings=settings, **run_kw)
+                       out_dir=out, settings=settings, solvation=record["solvation"], **run_kw)
             for wid in wanted]
 
 
