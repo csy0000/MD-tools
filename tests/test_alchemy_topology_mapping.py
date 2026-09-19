@@ -323,3 +323,21 @@ def test_an_automatic_map_builds_a_plan_that_recovers():
     amap, _ = propose_map(a, b, "hybrid")
     plan = build_topology_plan(a, b, amap, water_environment(), mode="hybrid")
     assert len(plan.common) == 7 and len(plan.a_only) == 1 and len(plan.b_only) == 1
+
+
+def test_a_proposed_map_written_for_review_reproduces_the_plan():
+    """The review file the CLI would write: the proposal's map record, as YAML, read back through
+    AtomMap.from_record, builds the identical plan."""
+    import yaml
+
+    from md_tools.alchemy.topology import build_topology_plan
+    from md_tools.alchemy.topology_mapping import AtomMap, propose_map
+    from tests.alchemy_fixtures import water_environment
+
+    a, b = package(ETHANE), package(CHLOROETHANE)
+    proposed, _ = propose_map(a, b, "hybrid")
+    reread = AtomMap.from_record(yaml.safe_load(yaml.safe_dump(proposed.record(a, b))), a, b)
+    assert reread == proposed
+    env = water_environment()
+    assert build_topology_plan(a, b, proposed, env, mode="hybrid").sha256 == \
+        build_topology_plan(a, b, reread, env, mode="hybrid").sha256
