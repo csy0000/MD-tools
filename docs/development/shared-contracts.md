@@ -179,6 +179,18 @@ A v2 record meeting an **explicit** selection is refused by name, and so is any 
 The acceptance is a named compatibility branch with three tests — legacy resumes, explicit
 refused, one-field mismatch refused — not a relaxed comparison. Anything written by 0.6.1 is v3.
 
+**Decided 2026-09-19: the v3 identity hashes the Hamiltonian, not the provenance.** An identity
+that changed when a mask was respelled (`":2,3"` / `":2-3"`) or a ligand instance relabelled
+would refuse to resume an identical Hamiltonian -- the 20260909 defect again.
+`rest2.identity.hamiltonian_selection_projection` is the ONE definition of what determines the
+Hamiltonian: selection mode, hot nonbonded atoms, scaled and protected torsion central bonds, CMAP
+decisions, improper and detector policy, and per instance its `residue_key`, package
+`parameter_id` and RESOLVED exclusions (package plus named bonds; comments and file bytes are
+provenance). `selection_sha256` is the sha256 of that projection and is the identity;
+`selection_provenance_sha256` covers the whole document and is never compared.
+`claimed_region_differences` compares through the same projection. v3 records written on the
+worker branch before `323779f` hashed the whole document; none left a test.
+
 ### The REST2 selection configuration keys
 
 **Decided 2026-09-19.** Optional top-level keys of the scaler configuration (`SCALER_SCHEMA`,
@@ -193,9 +205,13 @@ ligand_scaling_dict:
     torsion_exclusions: L01-exclusions.yaml   # or: auto
 ~~~
 
-None present → legacy full solute. The REST2 workflow configuration (`configs/md/REST2.config`)
-forwards the same keys through `build-md`; that forwarding and its schema are S0's, and a key
-declared in both places must agree or the build is refused.
+None present → legacy full solute. In the REST2 workflow configuration the same three keys, under
+`rest2:`, are **claims** about the saved states: `build-md` resolves a claim through the one
+resolver and refuses it unless it is the region `scaler.yaml` records, as it does for
+`number_of_replicas` and `tau_max`; no claim accepts the record and `build-md.log` prints it. A
+claim is a build-md instruction like `cv_generate`: it is not carried into `resolved.config` or a
+generated input, and `md-run` refuses it by name in an input. Adding the keys moved the resume
+gate's `SCHEMA_VERSION` to 4, without which every 0.6.0 ladder would have been refused on resume.
 
 **The compact form `L01: <path>` is refused by name in 0.6.1**, with the explicit form printed as
 the fix. The user asked for it when `L01` is an existing, unambiguous recorded instance alias, and
