@@ -18,4 +18,9 @@ maintained alongside the thing it counts eventually lies about it.
 from __future__ import annotations
 
 #: Every subcommand `md-openmm` offers.
-PUBLIC_COMMANDS = ("build-top", "build-md", "md-run", "data-register", "export-reference")
+#:
+#: `combine-topology` (0.7.0, under construction) was added by the user's explicit authorization in
+#: docs/claudecode-instructions/20260918_parallel-0.6.1-0.7.x-development.md, section 1: a dedicated
+#: subcommand of the one executable, not a second one.
+PUBLIC_COMMANDS = ("build-top", "build-md", "md-run", "data-register", "export-reference",
+                   "combine-topology")

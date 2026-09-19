@@ -29,6 +29,11 @@ md-openmm md-run         an Amber-like .in -> a stage, a ladder, or AIS switchin
 md-openmm data-register  a finished tree   -> a verified dataset under $MD_DATA
 ```
 
+**On the 0.7.0 line only**, `md-openmm combine-topology` (two ligand parameter packages, one
+environment and an atom map -> an alchemical topology plan) is the one authorized addition. It is
+UNDER CONSTRUCTION: `md_tools.build.combine` is its surface, `md_tools.alchemy.topology` does the
+work, and nothing downstream consumes a plan yet. See [0.7.0 status](docs/development/0.7.0/STATUS.md).
+
 AIS is `protocol: AIS` in a `build-md` configuration and `protocol = AIS` in an `.in` file. **Do
 not add a fifth command**, and do not add a second executable: `md-run` is a SUBCOMMAND.
 
