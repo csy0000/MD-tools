@@ -329,6 +329,10 @@ CUDA_SITES = {
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
 #: named exemption rather than an omission -- and the reason is checkable by reading the callsite.
 NON_CUDA_CONTEXT_SITES = {
+    "alchemy/hamiltonian.py::_check_internal_force":
+        "walks `System.getForces()` -- the host-side list of Force OBJECTS -- of both end states to find the plan's UniqueGroupInternalNonbonded CustomBondForce and compare its bond parameters with the Hamiltonian's own internal pairs. Host-side accessors; no Context.",
+    "alchemy/hamiltonian.py::_connected_groups":
+        "the same `System.getForces()` list, reading HarmonicBondForce bonds and System constraints to split a softcore region into connected groups. Host-side accessors; no Context.",
     "alchemy/hamiltonian.py::_pme_parameters":
         "creates a Context to read the PME parameters OpenMM chooses for end state A's NonbondedForce, so both end states' forces are given the same explicit alpha and grid -- on the REFERENCE platform, by the module constant `BUILD_PROBE_PLATFORM`, with no argument that could change it. Construction-time, deterministic, nothing propagated; the numbers it reads are written into the Hamiltonian's System. Never CUDA evidence.",
     "alchemy/hamiltonian.py::_dispersion_force":
