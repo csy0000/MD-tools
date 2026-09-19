@@ -253,13 +253,25 @@ contradict "a scaled Hamiltonian is built once, as a file, never re-derived".
 - **Caller-supplied rungs require an explicit declaration**: `rung_source="caller-supplied"` and a
   non-empty `rung_source_reason`. Without it, supplied `rung_systems` are refused. The saved-state
   preflight sets `rung_source="saved-states"`; a caller cannot set that value.
-- **Every rung's origin is recorded**, in `restart.json` and `solute.yaml`: its canonical System
-  digest and, compared against the `scaler.yaml` states, either `saved-state <i> (verified)` or
-  `caller-modified`, together with the declared reason. A caller-modified rung is allowed — a biased
+- **Every rung's origin is recorded, in `restart.json`**: `rung_source`, `rung_source_reason`, and
+  per rung its canonical System digest (`rest2.identity.system_fingerprint`, stable under
+  XmlSerializer round trip), its tau, and — compared against the `scaler.yaml` states — either
+  `saved-state <i> (verified)` or `caller-modified`. Origin is verified on the rung BEFORE ladder
+  restraints are added, and a restrained rung says so. A caller-modified rung is allowed — a biased
   auxiliary rung is a legitimate method — but it is never presented as a saved state.
+  `solute.yaml` is content-addressed and already records every saved state's sha256; on the
+  saved-states path it stays byte-identical, so no existing ladder becomes a stale helper.
+- **Finding the saved states for a direct caller**, in order: an optional
+  `LadderPreflight.saved_states_record`; else the `scaler.yaml` of `files.system` when that is a
+  saved state; else `<dir of files.system>/REST2/scaler.yaml`, accepted only when its
+  `source.system_sha256` equals `files.system`'s. None found: caller-supplied rungs are refused by
+  name, because they cannot be checked.
 - Count, particle number, masses and constraints are checked against the saved states' System.
-- The declaration and each rung's origin are part of the ladder identity, so resuming with a
-  different set of rungs, or a different declaration, is refused.
+- The declaration and each rung's origin are part of the ladder identity (`rungs`), so resuming
+  with a different set of rungs, a different declaration or a different reason is refused. A stored
+  identity with no `rungs` entry — every pre-0.6.1 ladder — agrees through a named compatibility
+  branch if and only if the current ladder is `saved-states` with every rung verified, which is
+  exactly what such a ladder ran.
 
 The first user of this path is hpREST2's OPES-REST2 (six saved-state tau rungs plus one hot rung
 carrying a bias force). It must keep working with the declaration added and nothing else changed.
