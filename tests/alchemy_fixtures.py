@@ -63,7 +63,8 @@ def water_environment():
 
     return Environment.from_files(FIXTURE_ROOT / "ethane-tip3p" / "built.xml",
                                   FIXTURE_ROOT / "ethane-tip3p" / "built.pdb",
-                                  LigandSelector(resname="ETA"))
+                                  LigandSelector(resname="ETA"),
+                                  record=FIXTURE_ROOT / "ethane-tip3p" / "built.log")
 
 
 def vacuum_environment(pkg, *, constraints=None):
@@ -82,8 +83,14 @@ def vacuum_environment(pkg, *, constraints=None):
                                                        pkg.template_name})
     conformer = pkg.mol.GetConformer()
     positions = np.array([list(conformer.GetAtomPosition(i)) for i in range(pkg.mol.GetNumAtoms())])
+    own = {k: pkg.conventions[k] for k in ("coulomb14scale", "lj14scale")}
+    # Built here from the package's ffxml alone, so the System applies the package's own scales:
+    # stated by the builder of the System, as an in-memory environment must.
     return Environment(system=system, topology=topology, positions_nm=positions / 10.0,
-                       ligand=LigandSelector(resname=pkg.residue_name))
+                       ligand=LigandSelector(resname=pkg.residue_name),
+                       nonbonded_compatibility={"packages": [
+                           {"reference": pkg.reference, **own, "applied": own}]},
+                       compatibility_source="stated: System built from the package ffxml alone")
 
 
 def core_map(a, b, extra=None):
@@ -108,7 +115,8 @@ def acetate_environment():
 
     return Environment.from_files(CHARGED_ROOT / "acetate-tip3p" / "built.xml",
                                   CHARGED_ROOT / "acetate-tip3p" / "built.pdb",
-                                  LigandSelector(resname="ACT"))
+                                  LigandSelector(resname="ACT"),
+                                  record=CHARGED_ROOT / "acetate-tip3p" / "built.log")
 
 
 #: `tests/data/alchemy/complex-v1/`: capped alanine (ff14SB) and one ethane in TIP3P, built by
@@ -117,12 +125,20 @@ COMPLEX_ROOT = FIXTURE_ROOT.parent / "complex-v1"
 COMPLEX_FORCEFIELD = ("amber14-all.xml", "amber14/tip3p.xml")
 
 
-def complex_environment():
+def complex_environment(root=None):
     from md_tools.alchemy.topology import Environment
     from md_tools.ligands.mapping import LigandSelector
 
-    return Environment.from_files(COMPLEX_ROOT / "built.xml", COMPLEX_ROOT / "built.pdb",
-                                  LigandSelector(chain="B", resid="201"))
+    root = root or COMPLEX_ROOT
+    return Environment.from_files(root / "built.xml", root / "built.pdb",
+                                  LigandSelector(chain="B", resid="201"),
+                                  record=root / "built.log")
+
+
+#: `tests/data/alchemy/complex-cmap-v1/`: the same structure built with ff19SB + OPC -- CMAP
+#: present, and OPC's rounded 1-4 scale (0.833333) applied to every 1-4 pair, the ligand's too.
+CMAP_ROOT = FIXTURE_ROOT.parent / "complex-cmap-v1"
+CMAP_FORCEFIELD = ("amber19-all.xml", "amber19/opc.xml")
 
 
 def independent_reference(plan, environment, pkg, side: str,
