@@ -47,16 +47,20 @@ def _energy(system, x):
     return _context(system, x).getState(getEnergy=True).getPotentialEnergy()._value
 
 
-@pytest.fixture(scope="module", params=["chloroethane", "ethanol", "pentane"])
+@pytest.fixture(scope="module", params=["chloroethane", "ethanol", "pentane", "complex-cmap"])
 def plan(request):
     """`pentane` (fixture internal-v1) leaves a propyl group appearing, with internal 1-4s and 1-5
     pairs: the plan keeps them physical at its dummy end (contract section 4), in the NonbondedForce
-    and in its UniqueGroupInternalNonbonded force."""
+    and in its UniqueGroupInternalNonbonded force. `complex-cmap` (complex-cmap-v1) is ethane ->
+    chloroethane beside a capped alanine (ff19SB, CMAP) in OPC water: 180 environment virtual
+    sites, and the environment's 1-4 scale applied to both endpoints' ligand exceptions."""
     from md_tools.alchemy.topology import build_topology_plan
     a = af.package(af.ETHANE)
+    name = request.param
     b = af.package({"chloroethane": af.CHLOROETHANE, "ethanol": af.ETHANOL,
-                    "pentane": af.PENTANE}[request.param])
-    return build_topology_plan(a, b, af.core_map(a, b), af.water_environment(), mode="hybrid")
+                    "pentane": af.PENTANE, "complex-cmap": af.CHLOROETHANE}[name])
+    env = af.complex_environment(af.CMAP_ROOT) if name == "complex-cmap" else af.water_environment()
+    return build_topology_plan(a, b, af.core_map(a, b), env, mode="hybrid")
 
 
 def test_the_end_states_are_the_plans_systems(plan):
