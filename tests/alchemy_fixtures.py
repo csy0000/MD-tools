@@ -51,7 +51,9 @@ ENERGY_TOL_KJ = 1e-7
 def package(reference: str):
     from md_tools.ligands import load_package
 
-    root = {PENTANE: INTERNAL_PACKAGES, METHANE: XH_ONLY_PACKAGES}.get(reference, PACKAGES)
+    root = {PENTANE: INTERNAL_PACKAGES, METHANE: XH_ONLY_PACKAGES,
+            ACETATE: CHARGED_ROOT / "packages",
+            PROPANOATE: CHARGED_ROOT / "packages"}.get(reference, PACKAGES)
     return load_package(root / reference)
 
 
@@ -90,6 +92,23 @@ def core_map(a, b, extra=None):
     pairs = {name: name for name in CORE}
     pairs.update(extra or {})
     return AtomMap.from_pairs(a, b, pairs)
+
+
+#: `tests/data/alchemy/charged-v1/`: acetate and propanoate, both -1, and acetate + Na+ in TIP3P.
+CHARGED_ROOT = FIXTURE_ROOT.parent / "charged-v1"
+ACETATE = "LOCAL-QTBSBXVTEAMEQO/param_c565813e02ae"
+PROPANOATE = "LOCAL-XBDQKXXYIPTUBI/param_fa700052a552"
+#: acetate local name -> propanoate local name
+ACETATE_TO_PROPANOATE = {"C1": "C2", "C2": "C3", "O1": "O1", "O2": "O2", "H1": "H4", "H2": "H5"}
+
+
+def acetate_environment():
+    from md_tools.alchemy.topology import Environment
+    from md_tools.ligands.mapping import LigandSelector
+
+    return Environment.from_files(CHARGED_ROOT / "acetate-tip3p" / "built.xml",
+                                  CHARGED_ROOT / "acetate-tip3p" / "built.pdb",
+                                  LigandSelector(resname="ACT"))
 
 
 #: `tests/data/alchemy/complex-v1/`: capped alanine (ff14SB) and one ethane in TIP3P, built by

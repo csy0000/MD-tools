@@ -869,3 +869,46 @@ def test_the_complex_leg_keeps_protein_numbering_for_masks(eta, cle):
     assert before[2][0] == "ALA" and after[2] == before[2]
     assert all(after[i] == before[i] for i in before)
     assert after[len(before) + 1][0] == "CLE"
+
+
+# ------------------------------------------------------------------------------------------------
+# equal nonzero net charge: allowed, and the box stays neutral at both ends
+# ------------------------------------------------------------------------------------------------
+def _charged_plan():
+    from md_tools.alchemy.topology_mapping import AtomMap
+    from tests.alchemy_fixtures import (ACETATE, ACETATE_TO_PROPANOATE, PROPANOATE,
+                                        acetate_environment)
+
+    a, b, env = package(ACETATE), package(PROPANOATE), acetate_environment()
+    plan = _build(a, b, AtomMap.from_pairs(a, b, ACETATE_TO_PROPANOATE), env, "hybrid")
+    return a, b, env, plan
+
+
+def test_an_equal_charge_pair_keeps_the_box_neutral_at_both_endpoints():
+    from openmm import NonbondedForce
+
+    a, b, env, plan = _charged_plan()
+    net = next(c for c in plan.record["checks"] if c["check"] == "net-charge-preserved")
+    assert net["detail"]["net_formal_charge"] == -1
+    for system in (plan.system_a, plan.system_b):
+        nb = next(f for f in system.getForces() if isinstance(f, NonbondedForce))
+        total = sum(nb.getParticleParameters(i)[0]._value for i in range(system.getNumParticles()))
+        assert abs(total) < 1e-9          # the neutralising Na+ and the -1 ligand, at A and at B
+
+
+@pytest.mark.parametrize("side", ["A", "B"])
+def test_an_equal_charge_pair_recovers_both_endpoints(side):
+    a, b, env, plan = _charged_plan()
+    _assert_closes(_accounting(plan, env, a if side == "A" else b, side), raw_at_least=1e-2)
+
+
+def test_a_real_charge_changing_pair_is_refused():
+    """The stand-in refusal test, repeated with registered-form packages: acetate -> ethane."""
+    from md_tools.alchemy.topology import TopologyError
+    from md_tools.alchemy.topology_mapping import AtomMap
+    from tests.alchemy_fixtures import ACETATE, acetate_environment
+
+    a, b = package(ACETATE), package(ETHANE)
+    with pytest.raises(TopologyError, match="net formal charge changes from -1 to 0"):
+        _build(a, b, AtomMap.from_pairs(a, b, {"C1": "C1", "C2": "C2"}),
+               acetate_environment(), "hybrid")

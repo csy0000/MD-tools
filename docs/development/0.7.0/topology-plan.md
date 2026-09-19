@@ -197,4 +197,5 @@ Every refusal happens in `build_topology_plan`, before anything is written.
 `tests/data/alchemy/v1/` (see its README): ethane, chloroethane and ethanol packages (AM1-BCC,
 openff-2.2.1) and ethane in TIP3P built by `build-top`. `tests/data/alchemy/internal-v1/`:
 n-pentane, whose unmapped propyl group has internal 1-4 and 1-5 pairs. `xh-only-v1/`: methane.
-`complex-v1/`: capped alanine and ethane in TIP3P (ff14SB, no CMAP; see its README for why). Loaders in `tests/alchemy_fixtures.py`.
+`complex-v1/`: capped alanine and ethane in TIP3P (ff14SB, no CMAP; see its README for why).
+`charged-v1/`: acetate and propanoate (both -1) and acetate + Na+ in TIP3P. Loaders in `tests/alchemy_fixtures.py`.
