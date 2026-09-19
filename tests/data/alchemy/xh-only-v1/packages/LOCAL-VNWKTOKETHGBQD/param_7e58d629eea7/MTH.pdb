@@ -1,0 +1,8 @@
+COMPND    MTH
+HETATM    1 C1   MTH     1       0.000  -0.000   0.000  1.00  0.00           C  
+HETATM    2 H1   MTH     1      -0.628  -0.769  -0.456  1.00  0.00           H  
+HETATM    3 H2   MTH     1      -0.377   0.988  -0.274  1.00  0.00           H  
+HETATM    4 H3   MTH     1      -0.022  -0.109   1.087  1.00  0.00           H  
+HETATM    5 H4   MTH     1       1.027  -0.110  -0.356  1.00  0.00           H  
+CONECT    1    2    3    4    5
+END

@@ -817,7 +817,9 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
             for name in ("chargeprod", "sigma", "epsilon"):
                 force.addPerBondParameter(name)
             force.setName(INTERNAL_FORCE_NAME)
-            force.setUsesPeriodicBoundaryConditions(bool(env_info["periodic"]))
+            # never periodic, whatever the environment: the term must be identical in every leg
+            # of a cycle for it to cancel, so no box may enter it (contract section 4)
+            force.setUsesPeriodicBoundaryConditions(False)
             endpoint = "A" if system is system_a else "B"
             for k, pair in enumerate(internal_pairs):
                 params = pair["physical"] if pair["dummy_at"] == endpoint else \
