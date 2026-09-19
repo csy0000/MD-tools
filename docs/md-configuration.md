@@ -427,7 +427,7 @@ The hottest rung's tau. The ladder is linear from 0.0 to this value. tau = 0 is 
 
 type: string or null · default: `null`
 
-Selective REST2: a CLAIM about the saved states, not a way to make them. The residues whose BACKBONE is hot, as a quoted AMBER residue mask of one-based topology residue indices (":45,46,59", ":45-50"). The region is chosen when `md-openmm build-top --rest2-scaler` builds the states; build-md resolves this claim and refuses it unless it is the region that build/REST2/scaler.yaml records, as it does for number_of_replicas and tau_max. Masks are compared as resolved regions, not as text. Leave all three selector keys out to accept whatever region the record holds; build-md.log then prints it.
+Selective REST2: a CLAIM about the saved states, not a way to make them. The residues whose BACKBONE is hot, as a quoted AMBER residue mask of one-based topology residue indices (":45,46,59", ":45-50"). The region is chosen when `md-openmm build-top --rest2-scaler` builds the states; build-md resolves this claim and refuses it unless it is the region that build/REST2/scaler.yaml records, as it does for number_of_replicas and tau_max. Masks are compared as resolved regions, not as text. Leave all three selector keys out to accept whatever region the record holds; build-md.log then prints it. A claim is checked at generation and is not carried into resolved.config or the generated input: it is not a run setting, and `md-run` refuses it in an input.
 
 #### `rest2.sidechain_scaling_list`
 

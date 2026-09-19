@@ -199,7 +199,9 @@ MD_SCHEMA = Schema(
                       "region that build/REST2/scaler.yaml records, as it does for "
                       "number_of_replicas and tau_max. Masks are compared as resolved regions, "
                       "not as text. Leave all three selector keys out to accept whatever region "
-                      "the record holds; build-md.log then prints it."),
+                      "the record holds; build-md.log then prints it. A claim is checked at "
+                      "generation and is not carried into resolved.config or the generated "
+                      "input: it is not a run setting, and `md-run` refuses it in an input."),
             Field("sidechain_scaling_list", str, default=None, nullable=True,
                   doc="Selective REST2: a claim, as for backbone_scaling_list, naming the "
                       "residues whose SIDECHAIN is hot. Chi1 belongs to the sidechain."),
@@ -2137,6 +2139,16 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         ladder_states = _saved_ladder_states(
             resolved, dataset,
             config_dir=Path(config_path).parent if config_path is not None else Path.cwd())
+        # The claim has done its job: it was checked against the states, and the region the run
+        # integrates is recorded in their scaler.yaml. It is not a run setting, so it is not
+        # carried into resolved.config or any generated input -- which could not express it, and
+        # whose `md-run` would refuse it by name. build-md.log records what was claimed.
+        claimed_region = {key: resolved["rest2"][key] for key in
+                          ("backbone_scaling_list", "sidechain_scaling_list", "ligand_scaling_dict")
+                          if resolved["rest2"].get(key) is not None}
+        for key in claimed_region:
+            resolved["rest2"][key] = None
+        ladder_states["claimed_region"] = claimed_region
 
     # THE WHOLE CHAIN, VALIDATED BEFORE THE FIRST SCRIPT IS WRITTEN.
     #
@@ -2632,6 +2644,9 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         mode = selection.get("mode") or selection.get("selection_mode")
         log.field("hot region", "the whole solute (legacy)" if mode in (None, "legacy-full-solute")
                   else f"{mode}, as recorded in the saved states")
+        if ladder_states.get("claimed_region"):
+            log.field("claimed region", f"{ladder_states['claimed_region']} -- agrees with the "
+                                        f"saved states")
         if mode not in (None, "legacy-full-solute"):
             from ..rest2.regions import print_residue_map
 

@@ -122,3 +122,35 @@ def test_a_claim_under_another_protocol_is_refused_by_name(tmp_path):
     with pytest.raises(ConfigError, match="rest2.backbone_scaling_list is set but protocol is cMD"):
         _generate(tmp_path, protocol="cMD", backbone_scaling_list=":2")
     assert not list(tmp_path.glob("*-run1"))
+
+
+def test_a_verified_claim_is_not_carried_into_the_run(explicit_root):
+    """A claim is not a run setting: once checked, nothing the run reads carries it, and every
+    generated input still parses -- the `.in` language could not have said it, and md-run refuses
+    it by name."""
+    from md_tools.run.inputs import parse_run_input
+
+    run = _generate(explicit_root, backbone_scaling_list=":2", sidechain_scaling_list=":2")
+    written = [p for p in explicit_root.rglob("*")
+               if p.is_file() and (p.suffix == ".in" or p.name == "resolved.config")]
+    assert written
+    for path in written:
+        text = path.read_text(encoding="utf-8")
+        assert ":2" not in text.replace("tau", ""), path
+        if path.suffix == ".in":
+            assert "scaling" not in text, path
+    assert parse_run_input(explicit_root / "input" / "REST2.in").resolved["rest2"][
+        "backbone_scaling_list"] is None
+    assert "claimed region" in (run / "build-md.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("line", ["backbone_scaling_list = ':2'",
+                                  "ligand_scaling_dict = 'L01'"])
+def test_an_input_naming_a_claim_is_refused_by_name(tmp_path, line):
+    from md_tools.build.strict import ConfigError
+    from md_tools.run.inputs import parse_run_input
+
+    path = tmp_path / "REST2.in"
+    path.write_text(f"&remd\n  {line}\n/\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="claim `md-openmm build-md` checks"):
+        parse_run_input(path)
