@@ -5,7 +5,8 @@ parameters of ONE chemical state of a small molecule as they were generated, onc
 Lennard-Jones, bonds, angles, torsions and 1-4 exceptions. Every build that uses the compound
 loads that file, whether the environment is water, a protein pocket or anything else `build-top`
 builds. Nothing is regenerated, so results from different environments rest on identical ligand
-parameters.
+parameters -- with one measured exception: in OPC water, the ligand's 1-4 Coulomb pairs are scaled by
+`0.833333` rather than 5/6 (see *Nonbonded conventions* below).
 
 This is not only a matter of speed. The OpenFF toolkit computes AM1-BCC charges on a conformer it
 generates itself, without a seed (`docs/backlog.md`, entry 6), so a flexible molecule parameterised
@@ -108,8 +109,19 @@ writes no package.
 **Nonbonded conventions.** A package stores the electrostatic 1-4 scale as exactly 5/6. SMIRNOFF
 files write it as `0.8333333333`, and OpenMM silently keeps the first file's value when two agree
 within 1e-5, so a ligand loaded after ff14SB would otherwise get slightly different exceptions than
-the same ligand built alone. Combining a package with a force field whose 1-4 scales differ, or
-that uses a custom Lennard-Jones representation, is refused before the package is loaded.
+the same ligand built alone. Combining a package with a force field whose 1-4 scales differ by
+more than OpenMM's own merge tolerance (1e-5), or that uses a custom Lennard-Jones
+representation, is refused before the package is loaded. Within the tolerance the System applies
+the force field's value, to the ligand as to everything else, and built.log records it beside the
+package's own under `forcefield_record.ligand.nonbonded_compatibility`.
+
+That tolerance is used by exactly one shipped case: `amber14/opc.xml` and `amber19/opc.xml` (and
+their `opc3` siblings) write 5/6 as `0.833333`, and OpenMM applies whichever definition loads first
+-- the water's, even behind `amber19-all.xml`. So under OPC, and only there, a ligand's 1-4
+Coulomb pairs differ from the package's by a factor `0.833333 / (5/6)`, about 4e-7 relative. Its
+charges, Lennard-Jones terms, exclusions, 1-4 Lennard-Jones pairs and bonded terms are unchanged,
+and the protein's 1-4 pairs carry the same `0.833333`. A comparison of a built ligand against its
+package must use the applied scale the record names.
 
 ### The metadata
 

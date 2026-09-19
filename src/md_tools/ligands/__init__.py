@@ -4,7 +4,9 @@ A compound keeps IDENTICAL parameters in every environment it is simulated in --
 membrane, an organic solvent, a protein pocket -- so that results from those environments are
 comparable. That is only true if the parameters are generated once, saved as they are, and loaded
 by every build, rather than regenerated per build from a recipe whose output depends on a
-conformer, a charge backend and a toolkit version.
+conformer, a charge backend and a toolkit version. One measured exception: under OPC water the
+System applies the water XML's 1-4 Coulomb scale, `0.833333`, where the package says 5/6 (about
+4e-7 relative), and the build record names the value applied (`docs/ligand-packages.md`).
 
 Three identities are kept apart (see `docs/ligand-packages.md`):
 
