@@ -815,3 +815,23 @@ def test_an_environment_that_cannot_name_its_constraint_policy_is_refused():
         methane, methane, {n: n for n in ("C1", "H1", "H2", "H3")}), env, "hybrid")
     assert plan.record["constraints"]["policy"] == "HBonds"
     assert len(plan.b_only) == 1
+
+
+def test_a_barostat_environment_is_carried_unchanged_to_both_endpoints(eta, cle, water):
+    """Alchemical NPT is allowed (REST2's NVT rule is REST2's): the barostat is a passive force,
+    copied identically into both Systems, and recovery closes with it present."""
+    from openmm import MonteCarloBarostat, XmlSerializer
+
+    from md_tools.alchemy.topology import Environment
+
+    system = XmlSerializer.clone(water.system)
+    system.addForce(MonteCarloBarostat(1.0, 300.0, 25))
+    env = Environment(system=system, topology=water.topology, positions_nm=water.positions_nm,
+                      ligand=water.ligand)
+    plan = _build(eta, cle, core_map(eta, cle), env, "hybrid")
+    for endpoint in (plan.system_a, plan.system_b):
+        [barostat] = [f for f in endpoint.getForces() if isinstance(f, MonteCarloBarostat)]
+        assert (barostat.getDefaultPressure()._value, barostat.getDefaultTemperature()._value,
+                barostat.getFrequency()) == (1.0, 300.0, 25)
+    for side, pkg in (("A", eta), ("B", cle)):
+        _assert_closes(_accounting(plan, env, pkg, side), raw_at_least=1e-2)
