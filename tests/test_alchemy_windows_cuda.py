@@ -67,8 +67,10 @@ def test_g1_window_runs_on_cuda_and_says_so(model, machine):
     assert res["rows"] == 21
     acc = _record(out, "w002")["acceleration"]
     print(f"\nG1 acceleration record: {json.dumps(acc, sort_keys=True)[:600]}")
-    assert acc["platform"] == "CUDA"
-    assert acc["platform_selection"] != "cli-override"
+    # the key is `resolved_platform` (platform_policy.acceleration_record); the first G1 run
+    # asserted a `platform` key that record does not have, and failed on that alone
+    assert acc["resolved_platform"] == "CUDA"
+    assert acc["platform_selection"] == "machine-config" and acc["explicit_cpu"] is False
     done = json.loads(window_paths(out, "w002")["completion"].read_text())
     assert abs(done["evaluation_self_check_kJ_mol"]) < 1e-3
 

@@ -17,7 +17,7 @@ evidence. Every PASS row names the command that produced it; the counts are in
 | TI integration uncertainty σ_int | \|cubic spline − trapezoid\| per the path's segments | the quadrature bias is real (0.56 kJ/mol on the S4 fixture) and must be inside the gate, not beside it |
 | neighbour overlap | MBAR overlap O(k, k+1) ≥ 0.03, else `poor_overlap` | Klimovich, Shirts & Mobley 2015 |
 | EXP effective samples | Kish ESS ≥ 50, else `poor_overlap` | EXP dominated by a handful of weights is not an estimate |
-| cross-state self-check | own-state energy on the evaluation Context = sampling Context to 1e-3 kJ/mol + 1e-6 relative | two Contexts that disagree are two Hamiltonians |
+| cross-state self-check | own-state energy on the evaluation Context = sampling Context to 1e-3 kJ/mol + r·\|E\|; r = 1e-6 for double/Reference, **2e-5 for mixed/single** | two Contexts that disagree are two Hamiltonians. **Recalibrated after a failure, 2026-09-19**: r was 1e-6 for every precision, set before comparison but not measured. On CUDA mixed, two Contexts at identical positions differ by up to 1.8e-6 relative (median 1.5e-3, max 2.0e-2 kJ/mol over 200 frames, 1038-atom PME), and one Context re-evaluated moves 1.1e-3 kJ/mol; the G1 NPT run failed on that noise. Double agrees to 1e-10 and keeps 1e-6. A 0.5 kJ/mol disagreement is still refused (test) |
 | molecular sampling (A3–A5), before it starts | ≥ 3 independent repeats; ≥ 50 decorrelated samples per window; overlap ≥ 0.03 everywhere; EXP forward/reverse gap reported; gate as above against the matched reference | shared-contracts validation gate 5 |
 
 ## Rows
