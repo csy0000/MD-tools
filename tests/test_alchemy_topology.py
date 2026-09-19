@@ -781,3 +781,13 @@ def test_internal_terms_do_not_break_separability(water):
                   if c["check"] == "dummy-factorization")
     propyl = next(g for g in detail["groups"] if g["dummy_at"] == "A")
     assert propyl["retained_terms_max_variation_kj_mol"] < 1e-9
+
+
+def test_the_internal_pair_force_never_sees_a_box(water):
+    """Identical in every leg is what makes it cancel: no periodic images, whatever the box."""
+    a, b, plan = _pentane_plan(water)
+    assert water.system.usesPeriodicBoundaryConditions()
+    name = plan.record["nonbonded"]["unique_group_internal"]["force"]
+    for system in (plan.system_a, plan.system_b):
+        force = next(f for f in system.getForces() if f.getName() == name)
+        assert not force.usesPeriodicBoundaryConditions()
