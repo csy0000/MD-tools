@@ -1,0 +1,471 @@
+md-openmm build-top
+====================================================================
+
+Command
+-------
+  input                       input/complex.pdb
+  config                      build/build.config
+  system out                  build/built.xml
+  topology out                build/built.pdb
+
+Resolved configuration
+----------------------
+  solute.kind                 complex   (set)
+  solute.peptide              None   (default)
+  solute.ligand_forcefield    sage-2.2.1   (default)
+  solute.ligand_charge_method am1bcc   (default)
+  solute.compound_id          None   (default)
+  solute.aliases              []   (default)
+  solute.parameters           search   (default)
+  solute.residue_name         None   (default)
+  forcefield.protein          ff19SB   (set)
+  solvent.model               OPC   (set)
+  solvent.padding_nm          0.6   (set)
+  solvent.box_shape           cube   (set)
+  solvent.ionic_strength_molar0.0   (set)
+  solvent.positive_ion        Na+   (default)
+  solvent.negative_ion        Cl-   (default)
+  solvent.cutoff_nm           0.9   (set)
+  constraints.type            HBonds   (set)
+  constraints.rigid_water     True   (set)
+
+Input interpretation
+--------------------
+  interpreted as              protein-ligand complex (.pdb), 1 ligand instance(s) mapped to parameter packages
+  ligand ETA                  chain 'B' resid '201' icode '' -> LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4
+  coordinates                 the deposited pose; ligand hydrogens from each package
+  small-molecule FF           not run: parameters loaded from the packages
+  solvent treatment           explicit OPC, periodic
+  protein FF                  amber19-all.xml
+  water FF                    amber19/opc.xml
+
+Preparation
+-----------
+  ligand       : ETA chain 'B' resid '201' icode '' -> LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4
+  protonation  : pH 7.0, 18 -> 18 hydrogens; 1 ligand instance(s) kept as packaged
+  protonation  : method openmm
+  solvation    : 180 waters, ions {}, box cube (6.9 nm^3)
+  system       : PME, cutoff 0.9 nm, HBonds
+
+Validation
+----------
+  particle agreement          750 atoms == 750 particles  OK
+  periodicity                 periodic  OK (explicit)
+  box vectors (nm)            (1.900 0.000 0.000); (0.000 1.900 0.000); (0.000 0.000 1.900)
+  HMR                         NOT applied; masses are the force field's own, recommend 2.0 fs
+  distinct H masses           [1.0079, 1.008]
+
+Counts
+------
+  atoms                       750
+  residues                    184
+  solute atoms                30
+  waters                      180
+  ions                        {}
+  forcefield                  amber19-all.xml
+
+Outputs
+-------
+  built.xml                   build/built.xml
+  built.pdb                   build/built.pdb
+  built.solute.pdb            build/built.solute.pdb
+  ligand_mapping.json         build/ligand_mapping.json
+  re-read check               750 atoms == 750 particles  OK
+  ligand packages             LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4 (written)
+
+Summary
+-------
+  built 750 particles, 184 residues, explicit OPC
+  status: completed
+
+# ===== BEGIN md-tools machine record =====
+# schema_version: md-tools-record/2.0
+# record_type: build-top
+# status: completed
+# started_utc: '2026-09-19T10:49:45+00:00'
+# finished_utc: '2026-09-19T10:49:47+00:00'
+# command:
+# - <redacted>/md_tools/cli/md_openmm.py
+# - build-top
+# - -i
+# - input/complex.pdb
+# - --config
+# - build/build.config
+# - -os
+# - build/built.xml
+# - -op
+# - build/built.pdb
+# - -log
+# - build/built.log
+# environment:
+#   hostname: <redacted>
+#   platform: Linux-6.8.0-124-generic-x86_64-with-glibc2.39
+#   machine: x86_64
+#   user: <redacted>
+#   packages:
+#     python: 3.12.14
+#     md-tools: 0.5.4
+#     openmm: '8.6'
+#     openff-toolkit: 0.19.0
+#     openmmforcefields: 0.16.0
+#     parmed: 4.3.1
+#     rdkit: 2026.3.1
+#     ambertools: null
+#     numpy: 2.4.6
+#     pyyaml: 6.0.3
+#     openmm_build: 8.6.0.dev-c6173db
+#   md_tools_commit: ab6996165b7c421507c6d2280d2642e229c6562f
+# input:
+#   path: complex.pdb
+#   bytes: 1646
+#   sha256: 351aa483f5f8a744dcd1566577c3211ba24d727fe069432a53e1c080847623f7
+# resolved_config:
+#   constraints:
+#     hydrogen_mass_amu: null
+#     rigid_water: true
+#     type: HBonds
+#   engine: openmm
+#   engine_version: 8.6.0
+#   forcefield: &id002
+#     protein: amber19-all.xml
+#     water: amber19/opc.xml
+#   protonation:
+#     histidine_proximity_angstrom: 5.0
+#     method: openmm
+#     near_ph_window: 1.0
+#     overrides: []
+#     ph: 7.0
+#   schema_version: 1
+#   solute:
+#     kind: complex
+#     ligand_charge_method: am1bcc
+#     ligand_forcefield: sage-2.2.1
+#     peptide: true
+#   solvent:
+#     box_shape: cube
+#     cutoff_nm: 0.9
+#     ionic_strength_molar: 0.0
+#     model: OPC
+#     negative_ion: Cl-
+#     padding_nm: 0.6
+#     positive_ion: Na+
+#   solvation: explicit
+# warnings: []
+# stated_keys:
+#   solute:
+#   - kind
+#   forcefield:
+#   - protein
+#   solvent:
+#   - model
+#   - padding_nm
+#   - box_shape
+#   - ionic_strength_molar
+#   - cutoff_nm
+#   constraints:
+#   - type
+#   - rigid_water
+#   ligand_catalog:
+#   - path
+# interpretation:
+#   route: complex
+#   smiles: null
+#   residue_name: null
+#   input_format: pdb
+# forcefield_record:
+#   format: md-tools-forcefield/v1
+#   route: complex
+#   solvation: explicit
+#   source: builder report (resources actually loaded), with requested values labelled
+#   protein:
+#     forcefield: amber19-all.xml
+#     openmm_resource: amber19-all.xml
+#     openmm_resource_includes:
+#     - amber19/protein.ff19SB.xml
+#     - amber19/DNA.OL21.xml
+#     - amber14/RNA.OL3.xml
+#     - amber19/lipid21.xml
+#     tleap_resource: null
+#     requested_label: amber19-all.xml
+#   ligand:
+#     forcefield: openff-2.2.1
+#     openff_resource: openff-2.2.1
+#     requested_label: sage-2.2.1
+#     charge_method: am1bcc
+#     charge_scheme: am1bcc
+#     charge_model: null
+#     charge_model_sha256: null
+#     toolkit_registry: null
+#     net_charge_e: -1.3877787807814457e-17
+#     formal_charge: 0
+#     n_atoms: 8
+#     prepared_artifact: null
+#     prepared_artifact_sha256: null
+#     family: smirnoff
+#     typing: null
+#     installed_versions: null
+#     antechamber: null
+#     sqm: null
+#     ambertools: null
+#     nonbonded_compatibility:
+#       packages:
+#       - reference: LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4
+#         coulomb14scale: 0.8333333333333334
+#         lj14scale: 0.5
+#         applied:
+#           coulomb14scale: 0.833333
+#           lj14scale: 0.5
+#           tolerance: 1.0e-05
+#       force_field_nonbonded:
+#         coulomb14scale: 0.833333
+#         lj14scale: 0.5
+#   water:
+#     model: OPC
+#     openmm_resource: amber19/opc.xml
+#     requested_label: OPC
+#     rigid: true
+#   explicit_solvent:
+#     box_shape: cube
+#     padding_nm: 0.6
+#     ionic_strength_molar: 0.0
+#     positive_ion: Na+
+#     negative_ion: Cl-
+#     cutoff_nm: 0.9
+#     n_waters: 180
+#     ions: &id001 {}
+#     salt:
+#       requested_salt_molar: 0.0
+#       realized_salt_pair_molar: 0.0
+#       ionic_strength_molar: 0.0
+#       n_salt_pairs: 0
+#       n_neutralizing_ions: 0
+#       neutralizing_charge_e: 0
+#       solute_formal_charge: null
+#       charge_balanced: null
+#       n_positive_ions: 0
+#       n_negative_ions: 0
+#       n_ions_total: 0
+#       ion_counts: {}
+#       positive_ion_requested: Na+
+#       negative_ion_requested: Cl-
+#       n_water_molecules: 180
+#       box_volume_nm3: 6.859
+#       salt_pairs_per_55p5_mol_water: 0.0
+#       note: 'realized_salt_pair_molar counts ADDED salt only: min(n_positive, n_negative)
+#         over the box volume. Excess ions are neutralising counterions and are reported
+#         separately; they are not salt and are not ionic strength.'
+#     box_volume_nm3: 6.859000000000001
+#     box_vectors_nm:
+#     - - 1.9000000000000001
+#       - 0.0
+#       - 0.0
+#     - - 0.0
+#       - 1.9000000000000001
+#       - 0.0
+#     - - 0.0
+#       - 0.0
+#       - 1.9000000000000001
+#     box_geometry:
+#       padding_nm_requested: 0.6
+#       padding_semantics: openmm
+#       box_width_nm: 1.9
+#       box_width_requested_nm: 1.71509
+#       grown_for_cutoff: true
+#       solute_bounding_radius_nm: 0.55754
+#       shortest_lattice_translation_nm: 1.9
+#       solute_image_clearance_nm: 0.78491
+#       min_reduced_box_height_nm: 1.9
+#       required_cutoff_height_nm: 1.9
+#       max_legal_cutoff_nm: 0.95
+#       minimum_image_margin_nm: 0.1
+#     water_packing_model: tip4pew
+#     water_packing_substituted: true
+#     water_model_reconciled: null
+#   implicit_solvent: null
+#   nonbonded:
+#     method: PME
+#     requested_method: PME
+#     cutoff_nm: 0.9
+#     switching: false
+#     switch_distance_nm: null
+#     dispersion_correction: true
+#     ewald_error_tolerance: 0.0005
+#     minimum_image_margin_nm: 0.1
+#   constraints:
+#     type: HBonds
+#     rigid_water: true
+#     hydrogen_mass_amu: null
+#     hmr_scope: none
+#     n_hydrogens_repartitioned: 0
+#     hmr_performed_by: null
+#     hmr_verified_by: null
+#     hmr_group_conservation: null
+#   builder:
+#     route: openmm.app.ForceField.createSystem
+#     openmm_xml_loaded:
+#     - amber19-all.xml
+#     - amber19/opc.xml
+#     openmm_xml_includes:
+#       amber19-all.xml:
+#       - amber19/protein.ff19SB.xml
+#       - amber19/DNA.OL21.xml
+#       - amber14/RNA.OL3.xml
+#       - amber19/lipid21.xml
+#       amber19/opc.xml: []
+#     tleap_used: false
+#     notes: null
+#   package_versions:
+#     python: 3.12.14
+#     openmm: 8.6.0
+#     openff_toolkit: 0.19.0
+#     openmmforcefields: 0.16.0
+#     parmed: 4.3.1
+#     rdkit: 2026.3.1
+#     numpy: 2.4.6
+#     pyyaml: 6.0.3
+#   artifact_checksums: {}
+# counts:
+#   atoms: 750
+#   particles: 750
+#   residues: 184
+#   solute_atoms: 30
+#   waters: 180
+# periodic: true
+# box_vectors_nm:
+# - - 1.9000000000000001
+#   - 0.0
+#   - 0.0
+# - - 0.0
+#   - 1.9000000000000001
+#   - 0.0
+# - - 0.0
+#   - 0.0
+#   - 1.9000000000000001
+# box_geometry:
+#   box_shape: cube
+#   box_width_nm: 1.9
+#   box_width_requested_nm: 1.71509
+#   box_volume_nm3: 6.859
+#   grown_for_cutoff: true
+#   solute_bounding_radius_nm: 0.55754
+#   padding_nm_requested: 0.6
+#   padding_semantics: openmm
+#   shortest_lattice_translation_nm: 1.9
+#   solute_image_clearance_nm: 0.78491
+#   min_reduced_box_height_nm: 1.9
+#   nonbonded_cutoff_nm: 0.9
+#   minimum_image_margin_nm: 0.1
+#   required_cutoff_height_nm: 1.9
+#   max_legal_cutoff_nm: 0.95
+#   min_image_distance_nm: 1.9
+#   solute_image_gap_nm: 0.78491
+#   minimum_image_required_nm: 1.9
+#   legacy_field_note: min_image_distance_nm and solute_image_gap_nm are the REDUCED-BOX
+#     HEIGHT and that height minus the solute diameter. They are not the solute-to-periodic-copy
+#     distance; use shortest_lattice_translation_nm and solute_image_clearance_nm.
+#   box_vectors_nm:
+#   - - 1.9000000000000001
+#     - 0.0
+#     - 0.0
+#   - - 0.0
+#     - 1.9000000000000001
+#     - 0.0
+#   - - 0.0
+#     - 0.0
+#     - 1.9000000000000001
+# solvent:
+#   treatment: explicit
+#   model: OPC
+#   water_model: opc
+#   ions: *id001
+# forcefield: *id002
+# hmr:
+#   enabled: false
+#   applied: false
+#   target_hydrogen_mass_amu: null
+#   configured_hydrogen_mass_amu: 3.024
+#   ignored_because_disabled: enabled is false; the force field's own masses are serialised
+#   distinct_hydrogen_masses_amu:
+#   - 1.0079
+#   - 1.008
+#   total_mass_amu: 3417.1252
+#   recommended_timestep_fs: 2.0
+# platform:
+#   name: null
+#   properties: {}
+# validation:
+#   particle_counts_match: true
+#   periodicity_matches_solvent: true
+# structure_completion:
+#   missing_atoms_policy: refuse
+#   chain_breaks: []
+#   residues_missing_atoms: []
+#   missing_terminal_atoms: []
+#   atoms_added: []
+# protonation:
+#   method: openmm
+#   ph: 7.0
+#   addhydrogens_ph: 7.0
+#   hydrogen_seed: 1062893145
+#   near_ph_window: 1.0
+#   histidine_proximity_angstrom: 5.0
+#   n_hydrogens_before: 18
+#   n_hydrogens_after: 18
+#   frozen_residues:
+#   - B:201
+#   overrides: []
+#   assignments: []
+#   unsupported: []
+#   histidine_proximity: []
+#   warnings: []
+#   propka: null
+# outputs:
+#   system_xml:
+#     path: built.xml
+#     bytes: 500461
+#     sha256: 37b55d3bffa35a5863f5f3d225da63674b05cf6738fb6677b13d4daa0d0487e4
+#   topology_pdb:
+#     path: built.pdb
+#     bytes: 61408
+#     sha256: c48ba6c96772003557b8318b0335733fdd58b910e06962f14f8ea08071ed6a30
+#   solute_topology_pdb:
+#     path: built.solute.pdb
+#     bytes: 3061
+#     sha256: 567274dae014d0babbf775c8363c438e96d425d330e84d9866712372ab167aeb
+#   ligand_mapping:
+#     path: ligand_mapping.json
+#     bytes: 3742
+#     sha256: e77298864b73ac5d922bd4e7921c06219d0413b94b1a40ded4bbba4e308accb5
+# ligand_packages:
+#   catalog_searched:
+#   - ../catalog
+#   placed_in: ligands
+#   packages:
+#   - reference: LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4
+#     compound_id: LOCAL-OTMSDBZUPAUEDD
+#     aliases: []
+#     parameter_id: param_cf41a2bd76f4
+#     template_name: MDT_param_cf41a2bd76f4
+#     residue_name: ETA
+#     package_sha256: 072f729020298b7885f60c577c9d54db83361427d6b3ec31e4a3c4e049fac8fe
+#     parameter_digest: ee8e4342b155c39b04f7faa0c02d15752794b105aef3d2e4e3a7b3d7508f01bc
+#     chemical_state_digest: 4c1f3cd9d1569a33be4c2b749f13572c976bd204f17d831664de74f81f0b88d2
+#     forcefield: openff-2.2.1
+#     charge_method: am1bcc
+#     charge_backend_id: ambertools-sqm
+#     charge_backend_recorded: true
+#     net_formal_charge: 0
+#     n_atoms: 8
+#     path: ligands/LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4
+#     how: written
+#   attached: null
+#   instances:
+#   - selector:
+#       resname: ''
+#       chain: B
+#       resid: '201'
+#       insertion_code: ''
+#     residue_name: ETA
+#     parameters: LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4
+#     atom_map: null
+# ===== END md-tools machine record =====

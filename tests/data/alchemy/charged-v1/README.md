@@ -17,3 +17,12 @@ empty temporary root (still empty afterwards); inputs from RDKit `AddHs`, ETKDGv
 MMFF-optimised; packages by `build-top --parameterize` (`solute: {kind: ligand, parameters:
 generate}`), the environment by `build-top -i input/ACT.sdf --config build/build.config`, with
 the package path rewritten here to `../packages/...`. Nothing is registered.
+
+## Build record (added 2026-09-19)
+
+`acetate-tip3p/built.log` is that build's record, reproduced on released 0.6.0 (`ab69961`) with
+`MD_DATA` an empty temporary root: the rebuild gave byte-identical `built.xml` and `built.pdb`
+. Three machine-specific values are replaced by `<redacted>` -- `environment.hostname`,
+`environment.user`, and the absolute path of the invoked `md_openmm.py` in `command` -- and
+nothing else differs. `Environment.from_files` reads the applied 1-4 scales from it and checks its
+`outputs` sha256 against the two files.
