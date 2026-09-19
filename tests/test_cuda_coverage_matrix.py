@@ -224,6 +224,13 @@ CUDA_SITES = {
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
 #: named exemption rather than an omission -- and the reason is checkable by reading the callsite.
 NON_CUDA_CONTEXT_SITES = {
+    "rest2/regions.py::explicit_selection":
+        "matched as `derive` by `system.getForces()`, which is the System's own list of Force "
+        "objects, not `State.getForces()`. It reads PeriodicTorsionForce and CMAPTorsionForce "
+        "terms off the SERIALISED built System on the host, to check that an exclusion file's bond "
+        "is the central bond of a real proper torsion and to decide which CMAP terms a selective "
+        "REST2 region scales. It runs inside `md-openmm build-top --rest2-scaler`, before any state "
+        "exists, and creates no Context and asks no device for anything.",
     "build/md.py::_generated_cv_text":
         "reads the bond graph for `collective_variables.generate` off the SERIALISED built System "
         "-- `HarmonicBondForce.getBondParameters` and `System.getConstraintParameters` are System "
