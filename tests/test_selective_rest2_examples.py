@@ -73,3 +73,41 @@ def test_the_pages_exclusion_file_loads(tmp_path):
     loaded = load_torsion_exclusions(path, where="the REST2 page")
     assert loaded["parameters"] == "CHEMBL112/param_0123456789ab"
     assert loaded["central_bonds"] == [["C4", "N1"]]
+
+
+def _claim_block() -> dict:
+    return next(yaml.safe_load(b) for b in _section_blocks()
+                if "rest2:" in b and "backbone_scaling_list" in b)
+
+
+def _project_with(tmp_path, rest2_overrides):
+    """The page's example.config, with the given rest2 keys, against states built from the
+    selective example -- through the real build-md."""
+    from md_tools.build.md import build_scripts
+
+    root = make_dataset_root(tmp_path, solvent="explicit")
+    build = root / "build"
+    shutil.copy(EXAMPLE, build / "scaler.config")
+    build_scaled_states(system_path=build / "built.xml", topology_path=build / "built.pdb",
+                        config_path=build / "scaler.config", echo=False)
+    document = yaml.safe_load((REST2 / "example.config").read_text(encoding="utf-8"))
+    document["rest2"].update(rest2_overrides)
+    config = root / "REST2.config"
+    config.write_text(yaml.safe_dump(document), encoding="utf-8")
+    return build_scripts(config_path=config, out_dir=root / "REST2-run1", echo=False), root
+
+
+def test_the_pages_claim_block_is_accepted_by_build_md_against_the_example_states(tmp_path):
+    claim = _claim_block()["rest2"]
+    _record, root = _project_with(tmp_path, claim)
+    resolved = yaml.safe_load((root / "REST2-run1" / "resolved.config").read_text(
+        encoding="utf-8"))
+    assert resolved["rest2"]["backbone_scaling_list"] is None, "a verified claim is not carried"
+
+
+def test_a_claim_the_states_do_not_satisfy_is_refused(tmp_path):
+    from md_tools.build.strict import ConfigError
+
+    claim = dict(_claim_block()["rest2"], sidechain_scaling_list=None)
+    with pytest.raises(ConfigError, match="not the one"):
+        _project_with(tmp_path, claim)

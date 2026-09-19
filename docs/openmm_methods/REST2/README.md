@@ -107,10 +107,7 @@ are; a state is never scaled a second time.
 
 ## Selective REST2: choosing the hot region (0.6.1, in development)
 
-> **Not in a release.** This section describes branch `0.6.1` work (session S1). The scaler
-> resolves, records and builds selective states, and a run's Hamiltonian identity carries the
-> recorded selection. One piece is **not wired yet**: checking the keys when a `build-md` REST2
-> configuration claims them. Until that lands, the keys below are set in `scaler.config` only.
+> **Not in a release.** This section describes branch `0.6.1` work.
 
 With no selector, the hot region is the whole solute: every atom that is not solvent or a
 counter-ion. The states are byte-identical to 0.6.0's. Three optional `scaler.config` keys choose
@@ -128,6 +125,31 @@ ligand_scaling_dict:
 A complete, commented example for ACE-ALA-NME is
 [`selective-scaler.config`](selective-scaler.config) beside this page. It is resolved, and states
 are built from it, by a test.
+
+**The region is chosen in `scaler.config`, and only there.** In a `build-md` REST2 configuration
+the same three keys, under `rest2:`, are **claims** about the saved states, not settings. They
+work the way `rest2.number_of_replicas` and `rest2.tau_max` already do:
+
+* **A claim** is resolved by the same resolver and compared with the region recorded in
+  `build/REST2/scaler.yaml`. The comparison is of resolved regions, not text, so `":2,3"` and
+  `":2-3"` agree. Mask spelling, ligand labels and file paths are never compared. A disagreement
+  is refused, with the `build-top --rest2-scaler` command that would rebuild the states.
+* **No claim** accepts the recorded region, and `build-md.log` prints it, so a selective ladder
+  never runs unannounced.
+* **A verified claim is not carried into the run.** It is reset to null before `resolved.config`
+  and the `.in` files are written, like `collective_variables.generate`. An `.in` file naming a
+  claim key is refused by `md-run`.
+* **Another protocol** that sets the keys is refused by name, and so is the compact ligand form
+  `L01: <path>`.
+
+```yaml
+# REST2.config (build-md): a claim about build/REST2/, checked, never applied
+rest2:
+  number_of_replicas: 4
+  tau_max: 0.5
+  backbone_scaling_list: ":2"
+  sidechain_scaling_list: ":2"
+```
 
 **If any selector is present, the selection is explicit.** Only the named categories and instances
 are hot. An omitted category means *none*, not *all*. An explicit region that heats nothing is
