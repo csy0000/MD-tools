@@ -125,6 +125,11 @@ the dual restraint. `matched_legs(plan_1, plan_2)` refuses two plans whose diges
 names what differs; S4's cycles refuse legs whose digests differ or are missing. A vacuum leg and a
 TIP3P leg built from the same packages, map and mode (and the same constraints) match.
 
+The vacuum leg comes from `build-top` with `solvent.model: vacuum` (ligand only, NoCutoff, no
+box, constraints as configured, the usual record), so it goes through `Environment.from_files`
+exactly as a solvated leg does; `tests/data/alchemy/vacuum-v1/` is the ethane one, and it is the
+matched vacuum leg of the ethane TIP3P cycle.
+
 Hydration cycles with OPC water are refused until the vacuum leg can apply the solvent leg's
 scale: an OPC leg applies 0.833333 to the ligand's 1-4 pairs and a vacuum leg the package's 5/6,
 which makes the ligand's intramolecular Hamiltonian a different function in the two legs.
@@ -203,4 +208,5 @@ openff-2.2.1) and ethane in TIP3P built by `build-top`. `tests/data/alchemy/inte
 n-pentane, whose unmapped propyl group has internal 1-4 and 1-5 pairs. `xh-only-v1/`: methane.
 `complex-v1/`: capped alanine and ethane in TIP3P (ff14SB). `complex-cmap-v1/`: the same with
 ff19SB + OPC (CMAP; OPC's 0.833333 applied to every 1-4 pair).
-`charged-v1/`: acetate and propanoate (both -1) and acetate + Na+ in TIP3P. Loaders in `tests/alchemy_fixtures.py`.
+`charged-v1/`: acetate and propanoate (both -1) and acetate + Na+ in TIP3P. `vacuum-v1/`: ethane
+built by `build-top` with `solvent.model: vacuum`. Loaders in `tests/alchemy_fixtures.py`.
