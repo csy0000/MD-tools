@@ -1100,3 +1100,54 @@ def test_a_periodic_environment_cannot_claim_to_be_vacuum(eta, cle, water):
     with pytest.raises(TopologyError, match="says vacuum but its System is periodic"):
         _build(eta, cle, core_map(eta, cle), dataclasses.replace(water, solvation="vacuum"),
                "hybrid")
+
+
+# ------------------------------------------------------------------------------------------------
+# ethane-tip3p v2: a box an NPT window can breathe in
+# ------------------------------------------------------------------------------------------------
+def test_the_v2_box_leaves_room_for_npt_fluctuation():
+    """Every reduced-box height at least 2 x cutoff + 0.8 nm; v1's 1.9 nm cube failed under NPT."""
+    from openmm import NonbondedForce
+
+    from tests.alchemy_fixtures import NPT_BOX_MARGIN_NM, water_environment_v2
+
+    def margin(env):
+        nb = next(f for f in env.system.getForces() if isinstance(f, NonbondedForce))
+        cutoff = nb.getCutoffDistance()._value
+        a, b, c = (np.array([x._value for x in v])
+                   for v in env.system.getDefaultPeriodicBoxVectors())
+        # the perpendicular widths of the cell: what the minimum-image convention needs
+        volume = abs(np.dot(a, np.cross(b, c)))
+        heights = [volume / np.linalg.norm(np.cross(b, c)),
+                   volume / np.linalg.norm(np.cross(c, a)),
+                   volume / np.linalg.norm(np.cross(a, b))]
+        return cutoff, min(heights) - 2 * cutoff
+
+    cutoff, room = margin(water_environment_v2())
+    assert cutoff == pytest.approx(0.9)
+    assert room >= NPT_BOX_MARGIN_NM, room
+    # the check can fail: v1's 1.9 nm cube has 0.1 nm of room, and it did fail under NPT
+    assert margin(water_environment())[1] < NPT_BOX_MARGIN_NM
+
+
+@pytest.mark.parametrize("side", ["A", "B"])
+def test_the_v2_hybrid_plan_recovers_both_endpoints(eta, cle, side):
+    from tests.alchemy_fixtures import water_environment_v2
+
+    env = water_environment_v2()
+    plan = _build(eta, cle, core_map(eta, cle), env, "hybrid")
+    _assert_closes(_accounting(plan, env, eta if side == "A" else cle, side), raw_at_least=1e-2)
+
+
+def test_the_v2_solvent_leg_and_the_vacuum_leg_are_matched(eta, cle):
+    from md_tools.alchemy.topology import Environment, matched_legs
+    from md_tools.ligands.mapping import LigandSelector
+    from tests.alchemy_fixtures import FIXTURE_ROOT, water_environment_v2
+
+    vacuum_root = FIXTURE_ROOT.parent / "vacuum-v1"
+    vacuum = Environment.from_files(vacuum_root / "built.xml", vacuum_root / "built.pdb",
+                                    LigandSelector(resname="ETA"),
+                                    record=vacuum_root / "built.log")
+    solvent = _build(eta, cle, core_map(eta, cle), water_environment_v2(), "hybrid")
+    report = matched_legs(solvent, _build(eta, cle, core_map(eta, cle), vacuum, "hybrid"))
+    assert report["ligand_hamiltonian_sha256"] == solvent.record["ligand_hamiltonian_sha256"]

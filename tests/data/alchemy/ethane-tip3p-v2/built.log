@@ -1,0 +1,462 @@
+md-openmm build-top
+====================================================================
+
+Command
+-------
+  input                       input/ETA.sdf
+  config                      build/build.config
+  system out                  build/built.xml
+  topology out                build/built.pdb
+
+Resolved configuration
+----------------------
+  solute.kind                 ligand   (set)
+  solute.peptide              None   (default)
+  solute.ligand_forcefield    sage-2.2.1   (default)
+  solute.ligand_charge_method am1bcc   (default)
+  solute.compound_id          None   (default)
+  solute.aliases              []   (default)
+  solute.parameters           ../pkg/param_cf41a2bd76f4   (set)
+  solute.residue_name         ETA   (set)
+  forcefield.protein          ff14SB   (default)
+  solvent.model               TIP3P   (set)
+  solvent.padding_nm          1.35   (set)
+  solvent.box_shape           cube   (set)
+  solvent.ionic_strength_molar0.0   (set)
+  solvent.positive_ion        Na+   (default)
+  solvent.negative_ion        Cl-   (default)
+  solvent.cutoff_nm           0.9   (set)
+  constraints.type            HBonds   (set)
+  constraints.rigid_water     True   (set)
+
+Input interpretation
+--------------------
+  interpreted as              single-molecule SDF
+  coordinates                 supplied by the SDF, used as given (no embedding, no minimisation)
+  residue name                ETA   (stated)
+  small-molecule FF           sage-2.2.1
+  solvent treatment           explicit TIP3P, periodic
+  protein FF                  not used
+  water FF                    amber14/tip3p.xml
+
+Preparation
+-----------
+  ligand       : [H]C([H])([H])C([H])([H])[H]
+  parameters   : LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4 (reused (stated reference))
+  protonation  : pH 7.0, 6 -> 6 hydrogens
+  solvation    : 620 waters, ions {}, box cube (19.7 nm^3)
+  box geometry : requested 1.35 nm padding -> solute-to-copy clearance 2.39336 nm, reduced-box height 2.7 nm (needs 1.9 nm for a 0.9 nm cutoff)
+  system       : PME, cutoff 0.9 nm, switching False, dispersion correction True, Ewald tolerance 0.0005, HBonds
+
+Validation
+----------
+  particle agreement          1868 atoms == 1868 particles  OK
+  solute residue              ETA  OK
+  periodicity                 periodic  OK (explicit)
+  box vectors (nm)            (2.700 0.000 0.000); (0.000 2.700 0.000); (0.000 0.000 2.700)
+  HMR                         NOT applied; masses are the force field's own, recommend 2.0 fs
+  distinct H masses           [1.0079]
+
+Counts
+------
+  atoms                       1868
+  residues                    621
+  solute atoms                8
+  waters                      620
+  ions                        {}
+  forcefield                  openff-2.2.1
+
+Outputs
+-------
+  built.xml                   build/built.xml
+  built.pdb                   build/built.pdb
+  built.solute.pdb            build/built.solute.pdb
+  ETA.sdf                     build/ETA.sdf
+  re-read check               1868 atoms == 1868 particles  OK
+  ligand packages             LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4 (written)
+
+Summary
+-------
+  built 1868 particles, 621 residues, explicit TIP3P
+  status: completed
+
+# ===== BEGIN md-tools machine record =====
+# schema_version: md-tools-record/2.0
+# record_type: build-top
+# status: completed
+# started_utc: '2026-09-19T12:00:50+00:00'
+# finished_utc: '2026-09-19T12:00:52+00:00'
+# command:
+# - <redacted>/md_tools/cli/md_openmm.py
+# - build-top
+# - -i
+# - input/ETA.sdf
+# - --config
+# - build/build.config
+# - -os
+# - build/built.xml
+# - -op
+# - build/built.pdb
+# - -log
+# - build/built.log
+# environment:
+#   hostname: <redacted>
+#   platform: Linux-6.8.0-124-generic-x86_64-with-glibc2.39
+#   machine: x86_64
+#   user: <redacted>
+#   packages:
+#     python: 3.12.14
+#     md-tools: 0.5.4
+#     openmm: '8.6'
+#     openff-toolkit: 0.19.0
+#     openmmforcefields: 0.16.0
+#     parmed: 4.3.1
+#     rdkit: 2026.3.1
+#     ambertools: null
+#     numpy: 2.4.6
+#     pyyaml: 6.0.3
+#     openmm_build: 8.6.0.dev-c6173db
+#   md_tools_commit: 0b831fcadc3d101c64f6cc4fe94d0f1e48a34e2d
+# input:
+#   path: ETA.sdf
+#   bytes: 723
+#   sha256: af08a1cca6d93a9a5fed7ecec6a7fb3f5ebfb90f3757bb7e3551609a5bcf4cf7
+# resolved_config:
+#   constraints:
+#     hydrogen_mass_amu: null
+#     rigid_water: true
+#     type: HBonds
+#   engine: openmm
+#   engine_version: 8.6.0
+#   forcefield: &id002
+#     protein: null
+#     water: amber14/tip3p.xml
+#     ligand: openff-2.2.1
+#     ligand_charge_method: am1bcc
+#   protonation:
+#     histidine_proximity_angstrom: 5.0
+#     method: openmm
+#     near_ph_window: 1.0
+#     overrides: []
+#     ph: 7.0
+#   schema_version: 1
+#   solute:
+#     kind: ligand
+#     ligand_charge_method: am1bcc
+#     ligand_forcefield: sage-2.2.1
+#     peptide: false
+#   solvent:
+#     box_shape: cube
+#     cutoff_nm: 0.9
+#     ionic_strength_molar: 0.0
+#     model: TIP3P
+#     negative_ion: Cl-
+#     padding_nm: 1.35
+#     positive_ion: Na+
+#   solvation: explicit
+# warnings: []
+# stated_keys:
+#   solute:
+#   - kind
+#   - residue_name
+#   - parameters
+#   solvent:
+#   - model
+#   - padding_nm
+#   - box_shape
+#   - ionic_strength_molar
+#   - cutoff_nm
+#   constraints:
+#   - type
+#   - rigid_water
+# interpretation:
+#   route: ligand
+#   smiles: null
+#   residue_name: ETA
+#   input_format: sdf
+# forcefield_record:
+#   format: md-tools-forcefield/v1
+#   route: ligand
+#   solvation: explicit
+#   source: builder report (resources actually loaded), with requested values labelled
+#   protein:
+#     forcefield: null
+#     openmm_resource: null
+#     tleap_resource: null
+#     note: the ligand-only route loads no protein force field
+#   ligand:
+#     forcefield: openff-2.2.1
+#     openff_resource: openff-2.2.1
+#     requested_label: sage-2.2.1
+#     charge_method: am1bcc
+#     charge_scheme: am1bcc
+#     charge_model: null
+#     charge_model_sha256: null
+#     toolkit_registry: null
+#     net_charge_e: -1.3877787807814457e-17
+#     formal_charge: 0
+#     n_atoms: 8
+#     prepared_artifact: null
+#     prepared_artifact_sha256: null
+#     family: smirnoff
+#     typing: null
+#     installed_versions: null
+#     antechamber: null
+#     sqm: null
+#     ambertools: null
+#     nonbonded_compatibility:
+#       packages:
+#       - reference: LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4
+#         coulomb14scale: 0.8333333333333334
+#         lj14scale: 0.5
+#         applied:
+#           coulomb14scale: 0.8333333333333334
+#           lj14scale: 0.5
+#           tolerance: 1.0e-05
+#           defined_by: the force field's first NonbondedForce definition
+#       force_field_nonbonded:
+#         coulomb14scale: 0.8333333333333334
+#         lj14scale: 0.5
+#   water:
+#     model: TIP3P
+#     openmm_resource: amber14/tip3p.xml
+#     requested_label: TIP3P
+#     rigid: true
+#   explicit_solvent:
+#     box_shape: cube
+#     padding_nm: 1.35
+#     ionic_strength_molar: 0.0
+#     positive_ion: Na+
+#     negative_ion: Cl-
+#     cutoff_nm: 0.9
+#     n_waters: 620
+#     ions: &id001 {}
+#     salt:
+#       requested_salt_molar: 0.0
+#       realized_salt_pair_molar: 0.0
+#       ionic_strength_molar: 0.0
+#       n_salt_pairs: 0
+#       n_neutralizing_ions: 0
+#       neutralizing_charge_e: 0
+#       solute_formal_charge: null
+#       charge_balanced: null
+#       n_positive_ions: 0
+#       n_negative_ions: 0
+#       n_ions_total: 0
+#       ion_counts: {}
+#       positive_ion_requested: Na+
+#       negative_ion_requested: Cl-
+#       n_water_molecules: 620
+#       box_volume_nm3: 19.683
+#       salt_pairs_per_55p5_mol_water: 0.0
+#       note: 'realized_salt_pair_molar counts ADDED salt only: min(n_positive, n_negative)
+#         over the box volume. Excess ions are neutralising counterions and are reported
+#         separately; they are not salt and are not ionic strength.'
+#     box_volume_nm3: 19.683000000000007
+#     box_vectors_nm:
+#     - - 2.7
+#       - 0.0
+#       - 0.0
+#     - - 0.0
+#       - 2.7
+#       - 0.0
+#     - - 0.0
+#       - 0.0
+#       - 2.7
+#     box_geometry:
+#       padding_nm_requested: 1.35
+#       padding_semantics: openmm
+#       box_width_nm: 2.7
+#       box_width_requested_nm: 2.7
+#       grown_for_cutoff: false
+#       solute_bounding_radius_nm: 0.15332
+#       shortest_lattice_translation_nm: 2.7
+#       solute_image_clearance_nm: 2.39336
+#       min_reduced_box_height_nm: 2.7
+#       required_cutoff_height_nm: 1.9
+#       max_legal_cutoff_nm: 1.35
+#       minimum_image_margin_nm: 0.1
+#     water_packing_model: tip3p
+#     water_packing_substituted: false
+#     water_model_reconciled: null
+#   implicit_solvent: null
+#   nonbonded:
+#     method: PME
+#     requested_method: PME
+#     cutoff_nm: 0.9
+#     switching: false
+#     switch_distance_nm: null
+#     dispersion_correction: true
+#     ewald_error_tolerance: 0.0005
+#     minimum_image_margin_nm: 0.1
+#   constraints:
+#     type: HBonds
+#     rigid_water: true
+#     hydrogen_mass_amu: null
+#     hmr_scope: none
+#     n_hydrogens_repartitioned: 0
+#     hmr_performed_by: null
+#     hmr_verified_by: null
+#     hmr_group_conservation: null
+#   builder:
+#     route: openmm.app.ForceField.createSystem
+#     openmm_xml_loaded:
+#     - amber14/tip3p.xml
+#     openmm_xml_includes:
+#       amber14/tip3p.xml: []
+#     tleap_used: false
+#     notes: null
+#   package_versions:
+#     python: 3.12.14
+#     openmm: 8.6.0
+#     openff_toolkit: 0.19.0
+#     openmmforcefields: 0.16.0
+#     parmed: 4.3.1
+#     rdkit: 2026.3.1
+#     numpy: 2.4.6
+#     pyyaml: 6.0.3
+#   artifact_checksums: {}
+# counts:
+#   atoms: 1868
+#   particles: 1868
+#   residues: 621
+#   solute_atoms: 8
+#   waters: 620
+# periodic: true
+# box_vectors_nm:
+# - - 2.7
+#   - 0.0
+#   - 0.0
+# - - 0.0
+#   - 2.7
+#   - 0.0
+# - - 0.0
+#   - 0.0
+#   - 2.7
+# box_geometry:
+#   box_shape: cube
+#   box_width_nm: 2.7
+#   box_width_requested_nm: 2.7
+#   box_volume_nm3: 19.683
+#   grown_for_cutoff: false
+#   solute_bounding_radius_nm: 0.15332
+#   padding_nm_requested: 1.35
+#   padding_semantics: openmm
+#   shortest_lattice_translation_nm: 2.7
+#   solute_image_clearance_nm: 2.39336
+#   min_reduced_box_height_nm: 2.7
+#   nonbonded_cutoff_nm: 0.9
+#   minimum_image_margin_nm: 0.1
+#   required_cutoff_height_nm: 1.9
+#   max_legal_cutoff_nm: 1.35
+#   min_image_distance_nm: 2.7
+#   solute_image_gap_nm: 2.39336
+#   minimum_image_required_nm: 1.9
+#   legacy_field_note: min_image_distance_nm and solute_image_gap_nm are the REDUCED-BOX
+#     HEIGHT and that height minus the solute diameter. They are not the solute-to-periodic-copy
+#     distance; use shortest_lattice_translation_nm and solute_image_clearance_nm.
+#   box_vectors_nm:
+#   - - 2.7
+#     - 0.0
+#     - 0.0
+#   - - 0.0
+#     - 2.7
+#     - 0.0
+#   - - 0.0
+#     - 0.0
+#     - 2.7
+# solvent:
+#   treatment: explicit
+#   model: TIP3P
+#   water_model: tip3p
+#   ions: *id001
+# forcefield: *id002
+# hmr:
+#   enabled: false
+#   applied: false
+#   target_hydrogen_mass_amu: null
+#   configured_hydrogen_mass_amu: 3.024
+#   ignored_because_disabled: enabled is false; the force field's own masses are serialised
+#   distinct_hydrogen_masses_amu:
+#   - 1.0079
+#   total_mass_amu: 11199.5701
+#   recommended_timestep_fs: 2.0
+# platform:
+#   name: null
+#   properties: {}
+# validation:
+#   particle_counts_match: true
+#   periodicity_matches_solvent: true
+# outputs:
+#   system_xml:
+#     path: built.xml
+#     bytes: 352886
+#     sha256: bc3d549077fa0cd3add63fb2379c40b296223be954cf1d6656f52cbc9391880c
+#   topology_pdb:
+#     path: built.pdb
+#     bytes: 151651
+#     sha256: 0c1f3f6873ac832d37e72e46b5b54fad447cffc6bfbc5353313ad9df459710b5
+#   solute_topology_pdb:
+#     path: built.solute.pdb
+#     bytes: 964
+#     sha256: e9861d3a82a19b7de7f6d75531a4aa49324315fbb2e017c8bb22e85cbd441e89
+#   solute_sdf:
+#     path: ETA.sdf
+#     bytes: 726
+#     sha256: dcfd8fe8ebee9828c2574c518f201fe9d091c9b093e55efadfa12bf8d59ee35b
+#     residue_name: ETA
+# ligand_packages:
+#   catalog_searched: []
+#   placed_in: ligands
+#   packages:
+#   - reference: LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4
+#     compound_id: LOCAL-OTMSDBZUPAUEDD
+#     aliases: []
+#     parameter_id: param_cf41a2bd76f4
+#     template_name: MDT_param_cf41a2bd76f4
+#     residue_name: ETA
+#     package_sha256: 072f729020298b7885f60c577c9d54db83361427d6b3ec31e4a3c4e049fac8fe
+#     parameter_digest: ee8e4342b155c39b04f7faa0c02d15752794b105aef3d2e4e3a7b3d7508f01bc
+#     chemical_state_digest: 4c1f3cd9d1569a33be4c2b749f13572c976bd204f17d831664de74f81f0b88d2
+#     forcefield: openff-2.2.1
+#     charge_method: am1bcc
+#     charge_backend_id: ambertools-sqm
+#     charge_backend_recorded: true
+#     net_formal_charge: 0
+#     n_atoms: 8
+#     path: ligands/LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4
+#     how: written
+#   attached:
+#     reference: LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4
+#     compound_id: LOCAL-OTMSDBZUPAUEDD
+#     aliases: []
+#     parameter_id: param_cf41a2bd76f4
+#     template_name: MDT_param_cf41a2bd76f4
+#     residue_name: ETA
+#     package_sha256: 072f729020298b7885f60c577c9d54db83361427d6b3ec31e4a3c4e049fac8fe
+#     parameter_digest: ee8e4342b155c39b04f7faa0c02d15752794b105aef3d2e4e3a7b3d7508f01bc
+#     chemical_state_digest: 4c1f3cd9d1569a33be4c2b749f13572c976bd204f17d831664de74f81f0b88d2
+#     forcefield: openff-2.2.1
+#     charge_method: am1bcc
+#     charge_backend_id: ambertools-sqm
+#     charge_backend_recorded: true
+#     net_formal_charge: 0
+#     n_atoms: 8
+#     how: reused (stated reference)
+#     search: null
+#     matched_on: null
+#     copied_to: ligands/LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4
+#     charges_generated_in_this_build: false
+#     stated_aliases_not_applied: []
+#     prepared_atom_for_package_atom:
+#     - 0
+#     - 1
+#     - 2
+#     - 3
+#     - 4
+#     - 5
+#     - 6
+#     - 7
+#     prepared_files_rewritten_in_package_order: false
+#   instances: null
+# ===== END md-tools machine record =====
