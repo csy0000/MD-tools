@@ -1,7 +1,8 @@
 # The alchemical topology plan (A1, callable layer)
 
 **Under construction, not in any release.** This describes the callable layer on
-`work/0.7.0-topology`. There is no `md-openmm combine-topology` command yet; S0 wires the CLI.
+0.7.0 line. `md-openmm combine-topology` (S0's surface, `md_tools.build.combine`) runs it; this
+page describes the callable layer underneath.
 
 ## What it is
 
@@ -90,18 +91,46 @@ dummy integral is independent of the physical coordinates. `factorization_check`
 at construction by arithmetic: for ethane -> chloroethane the retained dummy energy moves by
 ~1e-13 kJ/mol when the physical atoms move, and the keep-everything set moves by 412 kJ/mol.
 
+## The automatic map
+
+`md_tools.alchemy.topology_mapping.propose_map(package_a, package_b, mode)` returns an `AtomMap`
+and a report, method `rdkit-fmcs-heavy/1`:
+
+1. RDKit FMCS over the heavy atoms: elements equal, bond orders exact, rings match only rings and
+   only complete rings, 10 s timeout (a timeout is a refusal, never a partial map).
+2. Every placement of that substructure in A and in B is enumerated. For each, B's conformer is
+   superposed on A's mapped heavy atoms and the hydrogens of each mapped heavy pair are paired by
+   distance (Hungarian assignment).
+3. Every candidate must pass `validate_map`; the rejected ones and why are in the report.
+4. The largest survivors are compared by canonical atom ranks with ties unbroken. If they are not
+   all related by a symmetry of A or B, the choice changes the transformation, and the map is
+   REFUSED as chemically ambiguous, listing the alternatives. Example: ethanolamine -> propane,
+   where A's N-side carbon can sit on propane's end or middle carbon.
+
+Single topology is explicit-map only. An automatic map is as reviewable as an explicit one: it
+is an ordinary `AtomMap`, stored in the plan's `atom_map` record with both directions.
+
 ## Constraints and masses
 
 The environment's constraint policy is read from its ligand (HBonds, AllBonds or None) and
 applied to endpoint B. A constraint that would appear or vanish along the path, or change length,
 is refused -- a constraint has one length. An environment whose ligand has only X-H bonds cannot
 say whether it was built with HBonds or AllBonds; it is refused when endpoint B has a heavy-atom
-bond (untested: no fixture package has only X-H bonds).
+bond (tested with methane, `tests/data/alchemy/xh-only-v1/`).
 
 Masses are the environment's for every existing particle (endpoint A's for the core) and package
 B's for appended ones; core mass changes are recorded. Masses do not enter the configurational
 free energy. An environment with repartitioned hydrogen masses is refused: appended atoms would
 need the same repartitioning, which is not implemented.
+
+## Pressure coupling
+
+A barostat in the environment is CARRIED THROUGH, not refused: it is a passive force, copied
+identically into both endpoint Systems (`test_a_barostat_environment_is_carried_unchanged_to_both_
+endpoints`). This is a construction statement only. Contract section 6 requires ensemble-correct
+state energies for alchemical NPT -- the reduced potential needs the pressure-volume term -- and
+that is the Hamiltonian's and the executor's to supply. AIS refuses a barostat; that rule is
+AIS's and does not transfer here.
 
 ## Refused
 
@@ -139,52 +168,19 @@ The tests build the reference endpoint from scratch with `ForceField("amber14/ti
 the package's ffxml, and hold every force class to 1e-7 kJ/mol on the Reference platform, after
 asserting the raw difference is large enough that the check cannot pass by accident.
 
-## Proposed `combine-topology` input (PROPOSED -- S0 owns the final schema)
+## The command
 
-A YAML file, unknown keys refused, paths relative to the file:
-
-```yaml
-format: md-tools-combine-topology/1     # proposed
-mode: hybrid                            # single | hybrid | dual; `separated` is refused by name
-endpoints:
-  A:
-    parameters: LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4   # catalog reference, or a package path,
-  B:                                                       # resolved by ligands.catalog.resolve_package
-    parameters: ./chloroethane/parameter
-environment:                            # ONE environment, holding endpoint A; B never has its own
-  system: build/built.xml
-  topology: build/built.pdb
-  ligand: {resname: ETA}                # a LigandSelector naming exactly one residue:
-                                        # {resname} or {chain, resid, insertion_code}
-map:
-  file: ethane-chloroethane.map.yaml    # explicit pairs, or a stored map record (below)
-  # automatic: {...}                    # NOT IMPLEMENTED; reserved for a proposal checked by
-                                        # validate_map and written out for review
-dual:
-  restraint_k_kj_mol_nm2: 1000.0        # dual mode only; refused in the other modes
-b_pose: null                            # optional .sdf with B's pose in B package order; default:
-                                        # superpose B's reference conformer on the mapped A atoms
-output: plan/                           # a NEW directory; an existing one is refused
-```
-
-The map file is either explicit pairs, by package atom name or index,
-
-```yaml
-pairs:
-  - [C1, C1]
-  - [C2, C2]
-  - [H1, H1]
-```
-
-or a map record as `AtomMap.record` writes it (schema `md-tools-alchemical-atom-map/1`, both
-directions and a digest), which `AtomMap.from_record` re-verifies against the two packages.
-
-The command maps onto the callable layer as: resolve both packages, `Environment.from_files`,
-`AtomMap.from_pairs` / `from_record`, `build_topology_plan(..., mode=...)`, `plan.write(output)`.
-Every refusal happens in `build_topology_plan`, before anything is written.
+`md-openmm combine-topology` is S0's surface over this layer: `md_tools.build.combine`, input
+format `md-tools-combine-topology/1`, output directory given as `-odir` on the command line,
+`--check` creating nothing. Its module docstring and schema are the authority for the input; the
+map key takes exactly one of `file` (explicit pairs, or a stored `AtomMap` record) or
+`automatic: true` (`propose_map`, whose proposal is written for review beside the plan as
+`<odir>.map.yaml` and, given back as `map: {file: ...}`, reproduces the same `plan_sha256`).
 
 ## Fixtures
 
 `tests/data/alchemy/v1/` (see its README): ethane, chloroethane and ethanol packages (AM1-BCC,
 openff-2.2.1) and ethane in TIP3P built by `build-top`. `tests/data/alchemy/internal-v1/`:
-n-pentane, whose unmapped propyl group has internal 1-4 and 1-5 pairs. Loaders in `tests/alchemy_fixtures.py`.
+n-pentane, whose unmapped propyl group has internal 1-4 and 1-5 pairs. `xh-only-v1/`: methane.
+`complex-v1/`: capped alanine and ethane in TIP3P (ff14SB, no CMAP; see its README for why).
+`charged-v1/`: acetate and propanoate (both -1) and acetate + Na+ in TIP3P. Loaders in `tests/alchemy_fixtures.py`.

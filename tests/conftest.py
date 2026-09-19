@@ -291,6 +291,37 @@ def ladder_group_file(root: Path, destination: Path, *, run_dir: str = "REST2-ru
     return group
 
 
+#: Tests that MUST see this machine's own `$MD_DATA` rather than an isolated one. Empty on
+#: purpose: nothing in this suite is about this machine's storage, and a test that needs a
+#: populated catalog builds one. Add a name here only with a reason that could not be met by
+#: creating the state the test needs.
+USES_THE_MACHINES_MD_DATA: frozenset[str] = frozenset()
+
+
+@pytest.fixture(autouse=True)
+def _md_data_is_not_this_machines(request, tmp_path_factory, monkeypatch):
+    """Every test gets its OWN empty `$MD_DATA`, so none can read this machine's catalog.
+
+    `build.top.catalog_roots` searches a configuration's own `ligand_catalog.path` AND THEN the
+    machine-wide catalog, so a test that builds its own catalog in `tmp_path` is NOT self-contained:
+    whatever is registered on the machine is consulted after it. Registering a package -- a
+    documented, supported action -- turned two ligand tests red that way, and the failure
+    (`'reused (catalog search)' == 'created'`) named neither the catalog nor the machine.
+
+    SET, never unset. `ligands.catalog.default_catalog_root` reads `$MD_DATA` first and falls back
+    to the USER CONFIGURATION, so deleting the variable isolates nothing -- it finds the same
+    machine root by the other route.
+
+    The isolation lives here rather than in the two tests that noticed, because the next test to
+    consult a catalog would otherwise rediscover it. Subprocess tests that build their own `env`
+    are unaffected: they already pass `MD_DATA` explicitly, and this only makes what they inherit
+    harmless rather than authoritative.
+    """
+    if request.node.name in USES_THE_MACHINES_MD_DATA:
+        return
+    monkeypatch.setenv("MD_DATA", str(tmp_path_factory.mktemp("isolated-MD_DATA")))
+
+
 @pytest.fixture
 def dataset_root(tmp_path):
     """A dataset root for one test. See `make_dataset_root`."""

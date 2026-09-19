@@ -263,6 +263,11 @@ def _ligand_record(*, is_ligand, reported, requested, checksums):
         "antechamber": ligand.get("antechamber"),
         "sqm": ligand.get("sqm"),
         "ambertools": ligand.get("ambertools"),
+        # SAVED PACKAGES: each package's 1-4 scales beside the ones the System APPLIES, which is
+        # the force field's first NonbondedForce definition. They may differ within OpenMM's merge
+        # tolerance (the OPC XMLs write 5/6 as 0.833333); the builder reported this and it was
+        # dropped here, so the record could not show which value a ligand was built under.
+        "nonbonded_compatibility": ligand.get("nonbonded_compatibility"),
     }
 
 
@@ -409,4 +414,5 @@ def _null_ligand() -> dict[str, Optional[str]]:
             "net_charge_e": None, "formal_charge": None, "n_atoms": None,
             "prepared_artifact": None, "prepared_artifact_sha256": None,
             "family": None, "typing": None, "installed_versions": None,
-            "antechamber": None, "sqm": None, "ambertools": None}
+            "antechamber": None, "sqm": None, "ambertools": None,
+            "nonbonded_compatibility": None}

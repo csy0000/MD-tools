@@ -781,3 +781,134 @@ def test_internal_terms_do_not_break_separability(water):
                   if c["check"] == "dummy-factorization")
     propyl = next(g for g in detail["groups"] if g["dummy_at"] == "A")
     assert propyl["retained_terms_max_variation_kj_mol"] < 1e-9
+
+
+def test_the_internal_pair_force_never_sees_a_box(water):
+    """Identical in every leg is what makes it cancel: no periodic images, whatever the box."""
+    a, b, plan = _pentane_plan(water)
+    assert water.system.usesPeriodicBoundaryConditions()
+    name = plan.record["nonbonded"]["unique_group_internal"]["force"]
+    for system in (plan.system_a, plan.system_b):
+        force = next(f for f in system.getForces() if f.getName() == name)
+        assert not force.usesPeriodicBoundaryConditions()
+
+
+def test_an_environment_that_cannot_name_its_constraint_policy_is_refused():
+    """Methane's bonds are all C-H: HBonds and AllBonds constrain the same pairs around it.
+
+    Endpoint B = ethane has a C-C bond whose treatment depends on which policy it was, so the
+    plan is refused; B = methane has none, so the same environment builds.
+    """
+    from openmm import app
+
+    from md_tools.alchemy.topology import TopologyError
+    from md_tools.alchemy.topology_mapping import AtomMap
+    from tests.alchemy_fixtures import METHANE
+
+    methane, ethane = package(METHANE), package(ETHANE)
+    env = vacuum_environment(methane, constraints=app.HBonds)
+    assert env.system.getNumConstraints() == 4
+    with pytest.raises(TopologyError, match="HBonds or AllBonds"):
+        _build(methane, ethane, AtomMap.from_pairs(
+            methane, ethane, {n: n for n in ("C1", "H1", "H2", "H3")}), env, "hybrid")
+    plan = _build(methane, methane, AtomMap.from_pairs(
+        methane, methane, {n: n for n in ("C1", "H1", "H2", "H3")}), env, "hybrid")
+    assert plan.record["constraints"]["policy"] == "HBonds"
+    assert len(plan.b_only) == 1
+
+
+def test_a_barostat_environment_is_carried_unchanged_to_both_endpoints(eta, cle, water):
+    """Alchemical NPT is allowed (REST2's NVT rule is REST2's): the barostat is a passive force,
+    copied identically into both Systems, and recovery closes with it present."""
+    from openmm import MonteCarloBarostat, XmlSerializer
+
+    from md_tools.alchemy.topology import Environment
+
+    system = XmlSerializer.clone(water.system)
+    system.addForce(MonteCarloBarostat(1.0, 300.0, 25))
+    env = Environment(system=system, topology=water.topology, positions_nm=water.positions_nm,
+                      ligand=water.ligand)
+    plan = _build(eta, cle, core_map(eta, cle), env, "hybrid")
+    for endpoint in (plan.system_a, plan.system_b):
+        [barostat] = [f for f in endpoint.getForces() if isinstance(f, MonteCarloBarostat)]
+        assert (barostat.getDefaultPressure()._value, barostat.getDefaultTemperature()._value,
+                barostat.getFrequency()) == (1.0, 300.0, 25)
+    for side, pkg in (("A", eta), ("B", cle)):
+        _assert_closes(_accounting(plan, env, pkg, side), raw_at_least=1e-2)
+
+
+# ------------------------------------------------------------------------------------------------
+# the complex leg: a protein in the environment
+# ------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("side", ["A", "B"])
+def test_the_complex_leg_recovers_both_endpoints_with_the_protein_present(eta, cle, side):
+    from tests.alchemy_fixtures import COMPLEX_FORCEFIELD, complex_environment
+
+    env = complex_environment()
+    assert {r.name for r in env.topology.residues()} >= {"ACE", "ALA", "NME", "ETA", "HOH"}
+    plan = _build(eta, cle, core_map(eta, cle), env, "hybrid")
+    reference, index = independent_reference(plan, env, eta if side == "A" else cle, side,
+                                             forcefield_files=COMPLEX_FORCEFIELD)
+    from md_tools.alchemy.topology_recovery import endpoint_accounting
+
+    accounting = endpoint_accounting(plan, side, reference, index)
+    _assert_closes(accounting, raw_at_least=1e-2)
+    # the protein's own terms are in the reference and in the plan, untouched
+    assert accounting["hybrid"]["PeriodicTorsionForce"] != 0.0
+
+
+def test_the_complex_leg_keeps_protein_numbering_for_masks(eta, cle):
+    """A mask resolved on the complex before combination (":2", the alanine) selects the same
+    atoms after it: every environment residue keeps its one-based index and its atoms."""
+    from tests.alchemy_fixtures import complex_environment
+
+    env = complex_environment()
+    plan = _build(eta, cle, core_map(eta, cle), env, "hybrid")
+    before = {r.index + 1: (r.name, [a.index for a in r.atoms()]) for r in env.topology.residues()}
+    after = {r.index + 1: (r.name, [a.index for a in r.atoms()]) for r in plan.topology.residues()}
+    assert before[2][0] == "ALA" and after[2] == before[2]
+    assert all(after[i] == before[i] for i in before)
+    assert after[len(before) + 1][0] == "CLE"
+
+
+# ------------------------------------------------------------------------------------------------
+# equal nonzero net charge: allowed, and the box stays neutral at both ends
+# ------------------------------------------------------------------------------------------------
+def _charged_plan():
+    from md_tools.alchemy.topology_mapping import AtomMap
+    from tests.alchemy_fixtures import (ACETATE, ACETATE_TO_PROPANOATE, PROPANOATE,
+                                        acetate_environment)
+
+    a, b, env = package(ACETATE), package(PROPANOATE), acetate_environment()
+    plan = _build(a, b, AtomMap.from_pairs(a, b, ACETATE_TO_PROPANOATE), env, "hybrid")
+    return a, b, env, plan
+
+
+def test_an_equal_charge_pair_keeps_the_box_neutral_at_both_endpoints():
+    from openmm import NonbondedForce
+
+    a, b, env, plan = _charged_plan()
+    net = next(c for c in plan.record["checks"] if c["check"] == "net-charge-preserved")
+    assert net["detail"]["net_formal_charge"] == -1
+    for system in (plan.system_a, plan.system_b):
+        nb = next(f for f in system.getForces() if isinstance(f, NonbondedForce))
+        total = sum(nb.getParticleParameters(i)[0]._value for i in range(system.getNumParticles()))
+        assert abs(total) < 1e-9          # the neutralising Na+ and the -1 ligand, at A and at B
+
+
+@pytest.mark.parametrize("side", ["A", "B"])
+def test_an_equal_charge_pair_recovers_both_endpoints(side):
+    a, b, env, plan = _charged_plan()
+    _assert_closes(_accounting(plan, env, a if side == "A" else b, side), raw_at_least=1e-2)
+
+
+def test_a_real_charge_changing_pair_is_refused():
+    """The stand-in refusal test, repeated with registered-form packages: acetate -> ethane."""
+    from md_tools.alchemy.topology import TopologyError
+    from md_tools.alchemy.topology_mapping import AtomMap
+    from tests.alchemy_fixtures import ACETATE, acetate_environment
+
+    a, b = package(ACETATE), package(ETHANE)
+    with pytest.raises(TopologyError, match="net formal charge changes from -1 to 0"):
+        _build(a, b, AtomMap.from_pairs(a, b, {"C1": "C1", "C2": "C2"}),
+               acetate_environment(), "hybrid")

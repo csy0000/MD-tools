@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Optional
@@ -263,6 +264,12 @@ def parameterize_ligand(*, input_path: Path, config_path: Optional[Path], out_pd
             record = attached["record"]
             package = attached["package"]
             log.field("package", f"{record['reference']}   ({record['how']})")
+            from ..ligands.build import aliases_not_applied_notice
+
+            notice = aliases_not_applied_notice(record)
+            if notice is not None:
+                print(f"build-top --parameterize: NOTE: {notice}", file=sys.stderr)
+                log(f"  NOTE: {notice}")
             log.field("charges", f"{package.metadata['charges']['method']} / "
                                  f"{package.metadata['charges'].get('scheme')} by "
                                  f"{package.metadata['charges'].get('backend_id')}")

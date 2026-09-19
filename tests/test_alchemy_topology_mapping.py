@@ -263,3 +263,81 @@ def test_a_stereocentre_the_map_cannot_fix_is_refused():
 def test_dual_mode_only_places_and_restrains(eta, cle):
     report = _validate(eta, cle, {"C1": "C1", "C2": "C2"}, "dual")
     assert [c["check"] for c in report["checks"]][-1] == "dual-map-role"
+
+
+# ------------------------------------------------------------------------------------------------
+# the validated automatic map
+# ------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("pair", ["chloroethane", "ethanol", "pentane", "propanoate"])
+def test_the_automatic_map_is_the_explicit_one_up_to_symmetry(pair):
+    from md_tools.alchemy.topology_mapping import _signature, propose_map, validate_map
+    from tests.alchemy_fixtures import ACETATE, ACETATE_TO_PROPANOATE, PENTANE, PROPANOATE
+
+    a, b, explicit = {
+        "chloroethane": (ETHANE, CHLOROETHANE, None), "ethanol": (ETHANE, ETHANOL, None),
+        "pentane": (ETHANE, PENTANE, None),
+        "propanoate": (ACETATE, PROPANOATE, ACETATE_TO_PROPANOATE)}[pair]
+    a, b = package(a), package(b)
+    expected = _map(a, b, explicit or {n: n for n in CORE})
+    proposed, report = propose_map(a, b, "hybrid")
+    assert _signature(a.mol, b.mol, proposed.pairs) == _signature(a.mol, b.mol, expected.pairs)
+    validate_map(a, b, proposed, "hybrid")
+    assert report["method"] == "rdkit-fmcs-heavy/1"
+    assert report["mapped_atoms"] == len(expected.pairs)
+    again, _ = propose_map(a, b, "hybrid")
+    assert again == proposed                     # deterministic
+
+
+def test_an_ambiguous_automatic_map_is_refused_with_its_alternatives():
+    """Ethanolamine -> propane: the shared C-C can put A's N-side carbon on propane's end or its
+    middle carbon; both keep four hydrogens and validate, and no symmetry relates them."""
+    from md_tools.alchemy.topology_mapping import MapError, propose_map
+
+    a, b = _stand("NCCO", "ETANOLAMINE"), _stand("CCC", "PROPANE")
+    with pytest.raises(MapError, match="chemically ambiguous: 2 maps"):
+        propose_map(a, b, "hybrid")
+
+
+def test_a_symmetric_tie_is_not_ambiguous():
+    """Ethylene glycol -> ethanol: two placements of O-C-C in A, related by A's symmetry."""
+    from md_tools.alchemy.topology_mapping import propose_map
+
+    a, b = _stand("OCCO", "GLYCOL"), _stand("CCO", "ETHANOL")
+    amap, report = propose_map(a, b, "hybrid")
+    assert report["symmetry_equivalent_best"] >= 2 and len(amap.pairs) >= 3
+
+
+def test_single_topology_needs_an_explicit_map(eta, cle):
+    from md_tools.alchemy.topology_mapping import MapError, propose_map
+
+    with pytest.raises(MapError, match="not offered for single topology"):
+        propose_map(eta, cle, "single")
+
+
+def test_an_automatic_map_builds_a_plan_that_recovers():
+    from md_tools.alchemy.topology import build_topology_plan
+    from md_tools.alchemy.topology_mapping import propose_map
+    from tests.alchemy_fixtures import water_environment
+
+    a, b = package(ETHANE), package(CHLOROETHANE)
+    amap, _ = propose_map(a, b, "hybrid")
+    plan = build_topology_plan(a, b, amap, water_environment(), mode="hybrid")
+    assert len(plan.common) == 7 and len(plan.a_only) == 1 and len(plan.b_only) == 1
+
+
+def test_a_proposed_map_written_for_review_reproduces_the_plan():
+    """The review file the CLI would write: the proposal's map record, as YAML, read back through
+    AtomMap.from_record, builds the identical plan."""
+    import yaml
+
+    from md_tools.alchemy.topology import build_topology_plan
+    from md_tools.alchemy.topology_mapping import AtomMap, propose_map
+    from tests.alchemy_fixtures import water_environment
+
+    a, b = package(ETHANE), package(CHLOROETHANE)
+    proposed, _ = propose_map(a, b, "hybrid")
+    reread = AtomMap.from_record(yaml.safe_load(yaml.safe_dump(proposed.record(a, b))), a, b)
+    assert reread == proposed
+    env = water_environment()
+    assert build_topology_plan(a, b, proposed, env, mode="hybrid").sha256 == \
+        build_topology_plan(a, b, reread, env, mode="hybrid").sha256

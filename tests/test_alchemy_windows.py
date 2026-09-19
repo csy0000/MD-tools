@@ -450,3 +450,31 @@ def test_npt_windows_carry_pv_resume_and_recover_the_exact_free_energy(tmp_path)
         e = result["estimates"][name]
         gate = est.agreement_gate(e["delta_g_kcal_mol"], e["sigma_kcal_mol"], exact)
         assert gate["verdict"] == "PASS", (name, gate)
+
+
+def test_the_self_check_still_catches_a_half_kj_disagreement(model, monkeypatch):
+    """The precision-aware tolerance must not blunt the check: an evaluation Context 0.5 kJ/mol
+    away from the sampling Context is refused at the first report."""
+    from md_tools.alchemy import windows as w
+    real = w.CrossStateEvaluator.evaluate
+
+    def off(self, positions, box, origin):
+        e, d = real(self, positions, box, origin)
+        e = e.copy()
+        e[self.states.index(origin)] += 0.5
+        return e, d
+
+    monkeypatch.setattr(w.CrossStateEvaluator, "evaluate", off)
+    with pytest.raises(WindowError, match="not the same Hamiltonian"):
+        _run(model, "w000", SHORT, out=model["tmp"] / "off")
+
+
+def test_self_check_tolerance_follows_precision():
+    from md_tools.alchemy.windows import self_check_relative
+    assert self_check_relative("Reference", {}) == 1e-6
+    assert self_check_relative("CUDA", {"Precision": "double"}) == 1e-6
+    assert self_check_relative("CUDA", {"Precision": "mixed"}) == 2e-5
+    assert self_check_relative("CPU", {}) == 2e-5
+    for bad in ({"Precision": "mxed"}, {}):
+        with pytest.raises(WindowError, match="Precision"):
+            self_check_relative("CUDA", bad)

@@ -72,10 +72,37 @@ WINDOW_SCHEMA = "md-tools-alchemical-window/1"
 COMPLETION_SCHEMA = "md-tools-alchemical-window-completion/1"
 #: The force group of the Boresch restraint. S3's Hamiltonian uses groups 0-9.
 RESTRAINT_FORCE_GROUP = 16
-#: kJ/mol. The evaluation Context's own-state energy must equal the sampling Context's to this
-#: (plus a relative 1e-6 for mixed precision); anything more means they are not one Hamiltonian.
+#: The evaluation Context's own-state energy must equal the sampling Context's to
+#: SELF_CHECK_ABS_KJ_MOL + rel * |E|, with `rel` by the precision the Contexts compute in.
+#:
+#: CALIBRATED ON MEASUREMENT, AND CHANGED AFTER A FAILURE -- stated so nobody mistakes it for a
+#: tolerance loosened to pass. The first value, 1e-6 relative for every precision, was set before
+#: any comparison but not against any measurement. On CUDA mixed precision (card 4, 2026-09-19,
+#: 1038-atom TIP3P/PME) two Contexts over the same System and positions differ by median 1.5e-3,
+#: max 2.0e-2 kJ/mol (max 1.8e-6 relative) over 200 frames, and ONE Context re-evaluated at the
+#: same positions moves by 1.1e-3 -- summation order after atom reordering, not a Hamiltonian
+#: difference. 1.5 % of reports exceeded the old bound and the G1 NPT lane failed on one. In double
+#: precision the same comparisons agree to 1e-10, so double keeps 1e-6. What this check exists to
+#: catch -- an evaluation Context left in the wrong state or built from another System -- is
+#: kJ/mol or more; the System identity itself is enforced by serialisation equality, not here.
 SELF_CHECK_ABS_KJ_MOL = 1e-3
-SELF_CHECK_REL = 1e-6
+SELF_CHECK_REL = {"double": 1e-6, "mixed": 2e-5, "single": 2e-5}
+
+
+def self_check_relative(platform_name: str, properties: Mapping[str, str] | None) -> float:
+    """The relative self-check tolerance for the precision a platform computes energies in."""
+    if platform_name == "Reference":
+        return SELF_CHECK_REL["double"]
+    precision = str((properties or {}).get("Precision", "")).lower()
+    if platform_name in ("CUDA", "OpenCL", "HIP"):
+        # An unknown or absent precision is REFUSED, not mapped to the loosest bound: a typo would
+        # otherwise widen the check quietly. platform_policy always sets Precision on a GPU.
+        if precision not in SELF_CHECK_REL:
+            raise WindowError(f"{platform_name} Precision {precision or '(absent)'!r} is not one of "
+                              f"{sorted(SELF_CHECK_REL)}; the self-check bound depends on it")
+        return SELF_CHECK_REL[precision]
+    # the CPU platform computes forces and energies in single precision
+    return SELF_CHECK_REL["single"]
 
 
 class WindowError(ValueError):
@@ -233,6 +260,7 @@ class CrossStateEvaluator:
         system = openmm.XmlSerializer.deserialize(
             openmm.XmlSerializer.serialize(hamiltonian.system))
         self.periodic = system.usesPeriodicBoundaryConditions()
+        self.self_check_rel = self_check_relative(platform.getName(), properties)
         self.context = openmm.Context(system, openmm.VerletIntegrator(0.001), platform,
                                       dict(properties or {}))
 
@@ -307,12 +335,14 @@ class SampleStreamReporter:
         energies, ders = self.evaluator.evaluate(positions, box, self.origin)
         own = self.evaluator.states.index(self.origin)
         sampled = state.getPotentialEnergy()._value
-        if abs(energies[own] - sampled) > SELF_CHECK_ABS_KJ_MOL + SELF_CHECK_REL * abs(sampled):
+        rel = self.evaluator.self_check_rel
+        if abs(energies[own] - sampled) > SELF_CHECK_ABS_KJ_MOL + rel * abs(sampled):
             raise WindowError(
                 f"the evaluation Context gives {energies[own]:.6f} kJ/mol at the sampled state "
                 f"and the sampling Context {sampled:.6f}: they are not the same Hamiltonian, and "
                 f"every cross-state energy would describe another system")
-        self.checked_self_energy = float(energies[own] - sampled)
+        self.checked_self_energy = max(abs(float(energies[own] - sampled)),
+                                       self.checked_self_energy or 0.0)
         row = [f"{self.origin.state_id}:{step:012d}", self.origin.state_id, step,
                repr(step * self.timestep_ps)]
         if self.npt:
@@ -645,7 +675,11 @@ def run_window(*, topology, system, hamiltonian, path: AlchemicalPath,
                   "steps": simulation.currentStep,
                   "samples_sha256": hashlib.sha256(paths["samples"].read_bytes()).hexdigest(),
                   "restart_sha256": hashlib.sha256(paths["restart"].read_bytes()).hexdigest(),
-                  "evaluation_self_check_kJ_mol": reporter.checked_self_energy}
+                  "evaluation_self_check_kJ_mol": reporter.checked_self_energy,
+                  "evaluation_self_check_tolerance": {
+                      "abs_kJ_mol": SELF_CHECK_ABS_KJ_MOL, "rel": evaluator.self_check_rel,
+                      "platform": platform.getName(),
+                      "precision": properties.get("Precision")}}
     _write_atomically(paths["completion"], json.dumps(completion, indent=1, sort_keys=True) + "\n")
     return {"window_id": window_id, "disposition": "resumed" if committed else "fresh",
             "rows": reporter.rows, "step": simulation.currentStep}

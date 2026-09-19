@@ -7,6 +7,10 @@ Four public work commands, and no state carried between them: each reads files a
     md-openmm md-run           an Amber-like .in    -> a stage, a ladder, or AIS paths
     md-openmm data-register    a finished directory -> a verified dataset under $MD_DATA
 
+On the 0.7.0 development line, one more, explicitly authorized and still under construction:
+
+    md-openmm combine-topology two ligand packages + one environment -> an alchemical topology plan
+
 `md-run` is a SUBCOMMAND, not a second executable. It is the Amber-like way to execute what
 `build-md` resolved -- `-i`, `-p`, `-c`, `-o`, `-x`, `-r`, and `-ng` under `mpirun` -- and it
 delegates to the same installed runtime a generated script calls.
@@ -285,9 +289,19 @@ def _ligand_catalog_command(args) -> int:
                       f"({'already present' if destination.exists() else 'new'}; $MD_DATA from "
                       f"{origin})")
             return 0
+        offered = package.summary()["aliases"]
         package, placed, written = register_package(Path(args.ligand_package), catalog)
         print(f"{'registered' if written else 'already registered, kept'} {package.reference} "
               f"at {placed}")
+        # Write-once compares identity, and aliases are not identity: an aliased copy of a
+        # registered package is kept out, correctly -- and its names with it, which is said.
+        kept = package.summary()["aliases"]
+        dropped = [a for a in offered if a not in kept]
+        if not written and dropped:
+            print(f"data-register: NOTE: aliases {dropped} in {args.ligand_package} were NOT "
+                  f"added; the catalog entry is write-once and keeps its own "
+                  f"({kept or 'none'}). Remove the entry and register again to change its names.",
+                  file=sys.stderr)
         return 0
     except (PackageError, RegistrationError) as exc:
         print(f"data-register: {exc}", file=sys.stderr)
@@ -490,6 +504,25 @@ def build_parser() -> argparse.ArgumentParser:
                           "name.")
     ref.set_defaults(func=cmd_export_reference)
 
+    # -- combine-topology ---------------------------------------------------------------------
+    combine = sub.add_parser(
+        "combine-topology",
+        help="combine two ligand packages into an alchemical topology plan (0.7.0, in progress)",
+        description="Build an alchemical topology plan -- single, hybrid or dual topology -- from "
+                    "two ligand parameter packages, one environment holding the first, and an "
+                    "atom map. The packages' parameters are used exactly as recorded. The plan "
+                    "is written into a NEW directory; a map proposed with `map: {automatic: "
+                    "true}` is written beside it, as <odir>.map.yaml, for review. Under "
+                    "construction for 0.7.0: nothing downstream consumes a plan yet.")
+    combine.add_argument("--config", required=True, metavar="PATH",
+                         help="the combine-topology configuration (format: "
+                              "md-tools-combine-topology/1)")
+    combine.add_argument("-odir", "--out-dir", dest="odir", required=True, metavar="DIR",
+                         help="where the plan is written; must not exist")
+    combine.add_argument("--check", action="store_true",
+                         help="build and check the plan, and write nothing -- not even DIR")
+    combine.set_defaults(func=cmd_combine_topology)
+
 
 
     return parser
@@ -539,6 +572,28 @@ def cmd_export_reference(args) -> int:
     print(f"  {settings['name']}: {nanoseconds:g} ns {settings['ensemble']}, "
           f"tau = {settings['tau']:g}, seed {settings['seed']}")
     print("  needs OpenMM only -- run it with ./run.sh")
+    return 0
+
+
+def cmd_combine_topology(args) -> int:
+    """Two ligand packages and one environment -> an alchemical topology plan (0.7.0, in progress).
+
+    The command surface only: resolution, construction and every check are the callable layer's
+    (`md_tools.build.combine`, over `md_tools.alchemy.topology`), and nothing is written until the
+    plan has been built and checked. `--check` builds it and writes nothing at all.
+    """
+    from ..build.combine import combine_topology
+    from ..build.strict import ConfigError
+
+    try:
+        combine_topology(config_path=Path(args.config), out_dir=Path(args.odir),
+                         check=bool(args.check))
+    except ConfigError as refusal:
+        print(f"combine-topology: {refusal}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+        print(f"combine-topology: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

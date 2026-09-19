@@ -1,0 +1,15 @@
+COMPND    PRP
+HETATM    1 C1   PRP     1      -0.969  -0.167   0.654  1.00  0.00           C  
+HETATM    2 C2   PRP     1      -0.006   0.466  -0.332  1.00  0.00           C  
+HETATM    3 C3   PRP     1       1.318  -0.279  -0.525  1.00  0.00           C  
+HETATM    4 O1   PRP     1       1.477  -1.334   0.147  1.00  0.00           O  
+HETATM    5 O2   PRP     1       2.103   0.270  -1.352  1.00  0.00           O1-
+HETATM    6 H1   PRP     1      -1.884   0.429   0.728  1.00  0.00           H  
+HETATM    7 H2   PRP     1      -0.524  -0.234   1.652  1.00  0.00           H  
+HETATM    8 H3   PRP     1      -1.247  -1.179   0.339  1.00  0.00           H  
+HETATM    9 H4   PRP     1      -0.495   0.543  -1.310  1.00  0.00           H  
+HETATM   10 H5   PRP     1       0.226   1.485  -0.001  1.00  0.00           H  
+CONECT    1    2    6    7    8
+CONECT    2    3    9   10
+CONECT    3    4    4    5
+END
