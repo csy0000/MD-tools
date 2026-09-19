@@ -130,6 +130,13 @@ box, constraints as configured, the usual record), so it goes through `Environme
 exactly as a solvated leg does; `tests/data/alchemy/vacuum-v1/` is the ethane one, and it is the
 matched vacuum leg of the ethane TIP3P cycle.
 
+`record.environment.solvation` ("explicit", "implicit" or "vacuum") comes from the build
+record's `solvent.treatment`, or is stated for an in-memory environment; it is never inferred
+from periodicity, and a stated value that contradicts the System's periodicity is refused. It is
+part of `plan_sha256` (a vacuum leg and a solvent leg are different plans) and not of
+`ligand_hamiltonian_sha256` (they are legs of one cycle). The window runner derives
+`vacuum_leg` from it.
+
 Hydration cycles with OPC water are refused until the vacuum leg can apply the solvent leg's
 scale: an OPC leg applies 0.833333 to the ligand's 1-4 pairs and a vacuum leg the package's 5/6,
 which makes the ligand's intramolecular Hamiltonian a different function in the two legs.

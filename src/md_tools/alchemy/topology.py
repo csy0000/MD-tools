@@ -114,6 +114,9 @@ MASS_TOL_AMU = 1e-6
 
 DEFAULT_DUAL_RESTRAINT_K = 1000.0   # kJ/mol/nm^2
 
+#: What an environment may be. The build record's `solvent.treatment` spells it.
+SOLVATIONS = ("explicit", "implicit", "vacuum")
+
 #: OpenMM's 1/(4 pi eps0) in kJ mol^-1 nm e^-2, as NonbondedForce evaluates an exception (measured
 #: on the Reference platform: a unit-charge exception at 0.5 nm gives exactly half of it).
 COULOMB_CONSTANT = 138.93545764438198
@@ -174,6 +177,11 @@ class Environment:
     #: whoever built an in-memory System; never inferred. None refuses the plan.
     nonbonded_compatibility: Optional[dict] = None
     compatibility_source: Optional[str] = None
+    #: "explicit", "implicit" or "vacuum": what the environment IS, from the build record's
+    #: `solvent.treatment`, or stated by whoever built an in-memory System. Never inferred from
+    #: periodicity. A vacuum leg and a solvated leg are different plans, so it is in plan_sha256;
+    #: the window runner derives `vacuum_leg` from it.
+    solvation: Optional[str] = None
 
     @classmethod
     def from_files(cls, system_xml: Path, pdb: Path, ligand: LigandSelector, *,
@@ -205,6 +213,10 @@ class Environment:
                 raise TopologyError(
                     f"{record} records {key} sha256 {recorded}, but the file given hashes to "
                     f"{digest}: the record describes another build")
+        solvation = (document.get("solvent") or {}).get("treatment")
+        if solvation not in SOLVATIONS:
+            raise TopologyError(f"{record} records solvent.treatment {solvation!r}, not one of "
+                                f"{SOLVATIONS}")
         compatibility = ((document.get("forcefield_record") or {}).get("ligand") or {}).get(
             "nonbonded_compatibility")
         if not compatibility:
@@ -225,7 +237,7 @@ class Environment:
                            "record_file": record.name,
                            "record_file_sha256": hashlib.sha256(record.read_bytes()).hexdigest()},
                    nonbonded_compatibility=compatibility,
-                   compatibility_source=f"build record {record.name}")
+                   compatibility_source=f"build record {record.name}", solvation=solvation)
 
     def identity(self) -> dict[str, Any]:
         from openmm import XmlSerializer
@@ -400,8 +412,21 @@ def _check_environment(environment: Environment, package_a: LigandPackage,
             "compared_against": "package A's table with its 1-4 exceptions at the applied "
                                 "scales"})
 
+    if environment.solvation not in SOLVATIONS:
+        raise TopologyError(
+            f"the environment does not state its solvation ({environment.solvation!r}); it is "
+            f"read from the build record, or stated as one of {SOLVATIONS} for an in-memory "
+            f"System. It is never inferred from periodicity: a vacuum leg and an implicit-solvent "
+            f"System are both non-periodic.")
+    if environment.solvation == "explicit" and not system.usesPeriodicBoundaryConditions():
+        raise TopologyError("the environment says explicit solvent but its System is not periodic")
+    if environment.solvation != "explicit" and system.usesPeriodicBoundaryConditions():
+        raise TopologyError(f"the environment says {environment.solvation} but its System is "
+                            f"periodic")
+
     method = nb.getNonbondedMethod()
     return {
+        "solvation": environment.solvation,
         "constraint_policy": policy,
         "nonbonded_applied": applied,
         "forces": sorted(forces),

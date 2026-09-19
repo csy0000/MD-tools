@@ -90,7 +90,8 @@ def vacuum_environment(pkg, *, constraints=None):
                        ligand=LigandSelector(resname=pkg.residue_name),
                        nonbonded_compatibility={"packages": [
                            {"reference": pkg.reference, **own, "applied": own}]},
-                       compatibility_source="stated: System built from the package ffxml alone")
+                       compatibility_source="stated: System built from the package ffxml alone",
+                       solvation="vacuum")
 
 
 def core_map(a, b, extra=None):
