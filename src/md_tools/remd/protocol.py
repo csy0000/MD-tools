@@ -355,7 +355,8 @@ def apply_ladder_restraints(system, restraints):
 
 
 def build_rung_systems(base_system, solute_indices, taus, *, excluded_bonds=(),
-                       pressure_bar=None, restraints=(), unscaled_impropers=True):
+                       pressure_bar=None, restraints=(), unscaled_impropers=True,
+                       torsion_central_bonds=None, cmap_terms=None):
     """One scaled System per tau rung, plus the complete force audit. THE one implementation.
 
     Called from two places, deliberately: `Protocol.build_systems` (the driver's route) and the
@@ -372,9 +373,13 @@ def build_rung_systems(base_system, solute_indices, taus, *, excluded_bonds=(),
             "Exchanging complete configurations under NPT would also have to exchange volumes "
             "and carry the pV work; that is deliberately not implemented rather than "
             "approximated.")
+    # `torsion_central_bonds` and `cmap_terms` are a SELECTIVE region's (0.6.1); None is the
+    # whole-solute rule, unchanged.
     systems = [build_scaled_system(base_system, solute_indices, tau,
                                    excluded_bonds=excluded_bonds,
-                                   unscaled_impropers=unscaled_impropers)
+                                   unscaled_impropers=unscaled_impropers,
+                                   torsion_central_bonds=torsion_central_bonds,
+                                   cmap_terms=cmap_terms)
                for tau in taus]
     if restraints:
         # The same bias on every rung, added after scaling; see `apply_ladder_restraints`.
@@ -390,6 +395,6 @@ def build_rung_systems(base_system, solute_indices, taus, *, excluded_bonds=(),
     # against the SAME System the ladder was built from. A stored pair of atom indices needs
     # a force field to mean anything; this says which torsion terms it left alone.
     audit["unscaled_torsions"] = torsion_exclusion_report(
-        base_system, solute_indices, excluded_bonds, unscaled_impropers)
+        base_system, solute_indices, excluded_bonds, unscaled_impropers, torsion_central_bonds)
     audit["rest2_implementation"] = dict(REST2_IMPLEMENTATION)
     return systems, audit

@@ -33,7 +33,17 @@ import re
 #: Bumped when the canonicalisation changes, because a fingerprint is only comparable to one
 #: produced the same way. v2: the selection records unscaled central bonds of every class and
 #: whether impropers are unscaled (REST2 convention v3), where v1 recorded omega bonds only.
-FINGERPRINT_FORMAT = "md-tools-hamiltonian-identity/v2"
+#: v3 (0.6.1): `selection_sha256` hashes the FULL md-tools-solute-selection/2.0 document --
+#: mode, masks, owned torsion bonds, CMAP decisions, ligand instances -- because under selective
+#: REST2 two selections with one nonbonded atom set can still be two Hamiltonians.
+FINGERPRINT_FORMAT = "md-tools-hamiltonian-identity/v3"
+#: What 0.6.0 wrote. Read, and accepted ONLY through `_legacy_v2_agrees` (shared contract §3).
+LEGACY_FINGERPRINT_FORMAT = "md-tools-hamiltonian-identity/v2"
+LEGACY_SELECTION_MODE = "legacy-full-solute"
+
+#: The fields a v2 identity carried, all of which must match for the compatibility branch.
+V2_FIELDS = ("system_sha256", "selection_sha256", "tau", "temperature_k", "ensemble",
+             "n_solute_atoms", "n_unscaled_central_bonds", "unscaled_impropers")
 
 #: Attributes stripped before hashing: they describe the file, not the physics.
 _VOLATILE = (
@@ -112,23 +122,62 @@ def force_summary(system):
     return summary
 
 
+def _v2_selection_sha256(solute_indices, excluded_bonds, unscaled_impropers):
+    """`selection_sha256` computed exactly as v2 did. Kept for the compatibility branch."""
+    return hashlib.sha256(
+        repr(({"solute": [int(i) for i in solute_indices],
+               "unscaled_central_bonds": sorted([int(a), int(b)] for a, b in excluded_bonds),
+               "unscaled_impropers": bool(unscaled_impropers)}
+              )).encode("utf-8")).hexdigest()
+
+
+def _legacy_selection_document(solute_indices, excluded_bonds, unscaled_impropers):
+    """The md-tools-solute-selection/2.0 content of a legacy full-solute selection, for hashing
+    when the caller holds only the three lists. Topology-free: the System digest already binds
+    the atoms, and a caller that has the full document passes it instead."""
+    bonds = sorted([int(a), int(b)] for a, b in excluded_bonds)
+    return {"format": "md-tools-solute-selection/2.0", "selection_mode": LEGACY_SELECTION_MODE,
+            "selected_nonbonded_atoms": [int(i) for i in solute_indices],
+            "selected_torsion_central_bonds": None, "scaled_cmap_terms": None,
+            "excluded_central_bonds": bonds,
+            "improper_policy": {"unscaled_impropers": bool(unscaled_impropers)}}
+
+
+def _canonical_sha256(document):
+    import json
+
+    return hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":"),
+                                     default=str).encode("utf-8")).hexdigest()
+
+
 def identity_record(system, *, tau, temperature_k, ensemble, solute_indices=(),
-                    excluded_bonds=(), unscaled_impropers=True, extra=None):
+                    excluded_bonds=(), unscaled_impropers=True, selection=None, extra=None):
     """Everything a consumer needs to decide "is this the same Hamiltonian I am about to run".
 
     `solute_indices` and `excluded_bonds` are included because they determine the SCALED system:
     two runs from one base System with different enhanced regions are different Hamiltonians at
     every tau above zero, and the base digest alone would not see it.
+
+    `selection` is the md-tools-solute-selection/2.0 DOCUMENT (a `scaler.yaml`'s `selection`, or
+    `ScalingSelection.to_document()`). Without it the selection is the legacy full solute given
+    by the three lists. An explicit selection MUST be passed: from the three lists alone an
+    explicit region is indistinguishable from the whole solute.
     """
-    selection = hashlib.sha256(
-        repr(({"solute": [int(i) for i in solute_indices],
-               "unscaled_central_bonds": sorted([int(a), int(b)] for a, b in excluded_bonds),
-               "unscaled_impropers": bool(unscaled_impropers)}
-              )).encode("utf-8")).hexdigest()
+    # A LEGACY document is ignored in favour of the three lists: a legacy Hamiltonian's identity
+    # must not depend on whether its `scaler.yaml` was written before or after 0.6.1 recorded one.
+    if selection is None or selection.get("selection_mode", LEGACY_SELECTION_MODE) == \
+            LEGACY_SELECTION_MODE:
+        selection = _legacy_selection_document(solute_indices, excluded_bonds,
+                                               unscaled_impropers)
+    mode = selection.get("selection_mode", LEGACY_SELECTION_MODE)
     record = {
         "format": FINGERPRINT_FORMAT,
         "system_sha256": system_fingerprint(system),
-        "selection_sha256": selection,
+        "selection_mode": mode,
+        "selection_sha256": _canonical_sha256(selection),
+        # The v2 way, so a 0.6.0 record of a legacy selection can be checked field for field.
+        "v2_selection_sha256": _v2_selection_sha256(solute_indices, excluded_bonds,
+                                                    unscaled_impropers),
         "n_solute_atoms": len(list(solute_indices)),
         "n_unscaled_central_bonds": len(list(excluded_bonds)),
         "unscaled_impropers": bool(unscaled_impropers),
@@ -161,19 +210,60 @@ def require_same_hamiltonian(recorded, current, *, what="reservoir"):
         raise HamiltonianMismatch(
             f"the {what} records no Hamiltonian identity, so it cannot be shown to sample the "
             f"same distribution as the state it would refresh. Refusing rather than assuming.")
+    if recorded.get("format") == LEGACY_FINGERPRINT_FORMAT:
+        return _legacy_v2_agrees(recorded, current, what=what)
     if recorded.get("format") != FINGERPRINT_FORMAT:
         raise HamiltonianMismatch(
             f"the {what}'s identity is {recorded.get('format')!r}, not {FINGERPRINT_FORMAT!r}; "
             f"fingerprints are only comparable to ones produced the same way.")
 
     differences = []
-    for key in ("system_sha256", "selection_sha256", "tau", "temperature_k", "ensemble",
-                "n_solute_atoms", "n_unscaled_central_bonds", "unscaled_impropers"):
+    for key in ("system_sha256", "selection_mode", "selection_sha256", "tau", "temperature_k",
+                "ensemble", "n_solute_atoms", "n_unscaled_central_bonds", "unscaled_impropers"):
         if recorded.get(key) != current.get(key):
             differences.append((key, recorded.get(key), current.get(key)))
     if not differences:
         return True
+    _raise_differences(recorded, current, differences, what=what)
 
+
+def hamiltonian_identities_agree(recorded, current):
+    """True when `require_same_hamiltonian` would accept; False otherwise. For a caller that
+    compares a whole identity document key by key (the ladder's `compare_identity`) and must
+    treat its `hamiltonian` entry through the ONE rule, compatibility branch included."""
+    try:
+        return bool(require_same_hamiltonian(recorded, current))
+    except HamiltonianMismatch:
+        return False
+
+
+def _legacy_v2_agrees(recorded, current, *, what):
+    """THE COMPATIBILITY BRANCH (shared contract §3, decided 2026-09-19): a 0.6.0 (v2) identity.
+
+    Accepted if and only if the current selection is `legacy-full-solute` AND every v2 field
+    matches, `selection_sha256` recomputed the v2 way. A legacy run's Hamiltonian is byte-identical
+    under 0.6.1, so refusing it would strand every in-flight 0.6.0 ladder for nothing. An explicit
+    selection never matches a v2 record: v2 could not describe one.
+    """
+    mode = current.get("selection_mode")
+    if mode != LEGACY_SELECTION_MODE:
+        raise HamiltonianMismatch(
+            f"the {what} carries a {LEGACY_FINGERPRINT_FORMAT} identity (written before 0.6.1), "
+            f"and the state it would continue uses a SELECTIVE REST2 region (selection_mode "
+            f"{mode!r}). A v2 identity describes only the whole-solute selection, so it cannot "
+            f"be the same Hamiltonian. Start a new run for the selective region.")
+    differences = []
+    for key in V2_FIELDS:
+        now = current.get("v2_selection_sha256") if key == "selection_sha256" \
+            else current.get(key)
+        if recorded.get(key) != now:
+            differences.append((key, recorded.get(key), now))
+    if not differences:
+        return True
+    _raise_differences(recorded, current, differences, what=what)
+
+
+def _raise_differences(recorded, current, differences, *, what):
     lines = []
     for key, was, now in differences:
         if key == "system_sha256":

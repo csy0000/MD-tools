@@ -150,13 +150,16 @@ class ReplicaRun:
     def __init__(self, *, protocol, files, base_system, topology, solute_indices,
                  excluded_bonds=(), platform=None, precision=None, rule_path=None,
                  identity_extra=None, explicit_cpu=False,
-                 prepared=None):
+                 prepared=None, selection=None):
         self.protocol = protocol
         self.files = files
         self.base_system = base_system
         self.topology = topology
         self.solute_indices = [int(i) for i in solute_indices]
         self.excluded_bonds = list(excluded_bonds)
+        #: The saved states' selection document (0.6.1), for the Hamiltonian identity; None is
+        #: the legacy full solute.
+        self.selection = selection
         self.platform_request = platform
         self.precision = precision
         # `--cpu` is the ONLY way a ladder runs on the CPU. Carried here rather than inferred from
@@ -212,7 +215,8 @@ class ReplicaRun:
                 self.base_system, tau=None,
                 temperature_k=self.protocol.temperature_k,
                 ensemble="NVT" if self.protocol.pressure_bar is None else "NPT",
-                solute_indices=self.solute_indices, excluded_bonds=self.excluded_bonds),
+                solute_indices=self.solute_indices, excluded_bonds=self.excluded_bonds,
+                selection=self.selection),
             "exchange_rule": rule_identity,
         })
         payload.update(self.identity_extra)
@@ -221,7 +225,18 @@ class ReplicaRun:
     @staticmethod
     def compare_identity(before, now):
         keys = (set(before) | set(now)) - {"format"}
-        return [key for key in sorted(keys) if before.get(key) != now.get(key)]
+        return [key for key in sorted(keys)
+                if not ReplicaRun._identity_entry_agrees(key, before.get(key), now.get(key))]
+
+    @staticmethod
+    def _identity_entry_agrees(key, was, now):
+        """Equality, except a 0.6.0 (v2) `hamiltonian` entry, which goes through the ONE named
+        compatibility branch (`rest2.identity`, shared contract §3): accepted only for a legacy
+        selection with every v2 field matching. Every v3 entry is still compared whole."""
+        if (key == "hamiltonian" and isinstance(was, dict) and isinstance(now, dict)
+                and was.get("format") == hamiltonian_identity.LEGACY_FINGERPRINT_FORMAT):
+            return hamiltonian_identity.hamiltonian_identities_agree(was, now)
+        return was == now
 
     # -- the run -------------------------------------------------------------------------------------
 
