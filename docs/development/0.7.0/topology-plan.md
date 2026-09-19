@@ -11,7 +11,8 @@ from md_tools.alchemy.topology import Environment, build_topology_plan, load_pla
 from md_tools.alchemy.topology_mapping import AtomMap
 
 plan = build_topology_plan(package_a, package_b, AtomMap.from_pairs(package_a, package_b, pairs),
-                           Environment.from_files("built.xml", "built.pdb", selector),
+                           Environment.from_files("built.xml", "built.pdb", selector,
+                                                  record="built.log"),
                            mode="hybrid")          # or "single", "dual"
 plan.write("plan/")                                # plan.json, system_{a,b}.xml, combined.pdb,
                                                    # positions.npy -- a new directory, never over
@@ -21,6 +22,10 @@ plan = load_plan("plan/", package_roots=[catalog]) # every digest re-verified
 `plan.system_a` and `plan.system_b` are the two endpoint Systems; `plan.common`, `plan.a_only`
 and `plan.b_only` are the particle sets (frozensets of plan indices); `plan.record` is the JSON
 record, schema `md-tools-topology-plan/1`, and `plan.sha256` its digest.
+
+The environment's build record is required: the 1-4 scales a System applies to its ligand are
+read from its `nonbonded_compatibility` (an OPC build applies 0.833333, not 5/6), never inferred,
+and both endpoints' 1-4 exceptions are given that applied scale (`scaled_table`).
 
 Inputs are two ligand parameter packages (`md_tools.ligands.LigandPackage`, loaded and verified),
 an explicit atom map in package-local indices or names, and ONE environment -- a built System and
@@ -182,5 +187,6 @@ map key takes exactly one of `file` (explicit pairs, or a stored `AtomMap` recor
 `tests/data/alchemy/v1/` (see its README): ethane, chloroethane and ethanol packages (AM1-BCC,
 openff-2.2.1) and ethane in TIP3P built by `build-top`. `tests/data/alchemy/internal-v1/`:
 n-pentane, whose unmapped propyl group has internal 1-4 and 1-5 pairs. `xh-only-v1/`: methane.
-`complex-v1/`: capped alanine and ethane in TIP3P (ff14SB, no CMAP; see its README for why).
+`complex-v1/`: capped alanine and ethane in TIP3P (ff14SB). `complex-cmap-v1/`: the same with
+ff19SB + OPC (CMAP; OPC's 0.833333 applied to every 1-4 pair).
 `charged-v1/`: acetate and propanoate (both -1) and acetate + Na+ in TIP3P. Loaders in `tests/alchemy_fixtures.py`.
