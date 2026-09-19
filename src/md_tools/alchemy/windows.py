@@ -461,12 +461,16 @@ def run_window(*, topology, system, hamiltonian, path: AlchemicalPath,
                states: Sequence[ThermodynamicState], window_id: str, out_dir,
                settings: WindowSettings, coordinates=None, cpu: bool = False, device=None,
                machine_config=None, overwrite: bool = False, restraint=None,
-               stop_after_steps: int | None = None) -> dict[str, Any]:
+               stop_after_steps: int | None = None, prepared=None,
+               check: bool = False) -> dict[str, Any]:
     """Run (or continue, or verify) one fixed-lambda window. Returns a summary.
 
     `system` is the serialised `hamiltonian.system` on disk; its sha256 must be the Hamiltonian's,
     so the file the preflight read and the System that is integrated are one System.
     `stop_after_steps` interrupts after that many production steps (tests of resume).
+    `prepared` is a `StagePreflight` the caller has already obtained for exactly these paths; it is
+    consumed rather than re-planned, as `stage_main` does. `check` validates everything,
+    continuation included, prints the preflight report and creates nothing.
     """
     import openmm
     from openmm import unit
@@ -485,7 +489,7 @@ def run_window(*, topology, system, hamiltonian, path: AlchemicalPath,
     npt = origin.pressure_bar is not None
 
     # ---- the shared preflight: everything before anything is written ----------------------
-    checked = preflight_stage(
+    checked = prepared if prepared is not None else preflight_stage(
         topology=topology, system=system, coordinates=coordinates, output=paths["out"],
         log=paths["record"], restart=paths["restart"], checkpoint=paths["checkpoint"], cpu=cpu,
         device=device, machine_config=machine_config, protocol=f"alchemical window {window_id}",
@@ -538,6 +542,13 @@ def run_window(*, topology, system, hamiltonian, path: AlchemicalPath,
             inv = OutputInventory(roles={**checked.inventory.roles, **extra},
                                   resumable=checked.inventory.resumable)
             check_existing_outputs(inv, where=f"alchemical window {window_id}")
+
+    if check:
+        from md_tools.run.preflight import report_check
+        report_check(checked, what=f"alchemical window {window_id}",
+                     extra=[("states", len(states)), ("steps", total_steps),
+                            ("continuation", "committed checkpoint" if committed else "none")])
+        return {"window_id": window_id, "disposition": "checked"}
 
     # ---- from here on the run may write ------------------------------------------------------
     out_dir.mkdir(parents=True, exist_ok=True)

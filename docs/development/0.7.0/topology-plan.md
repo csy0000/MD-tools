@@ -50,8 +50,17 @@ parameter values differ. System A is the environment System unchanged, plus appe
 and terms. In System B the core carries package B's charges and Lennard-Jones, the A-only atoms
 are dummies.
 
-- **Dummies** have charge 0 and epsilon 0 (sigma kept) and every exception touching them is zero:
-  no nonbonded interaction with anything, themselves included.
+- **Dummies** have charge 0 and epsilon 0 (sigma kept) and every exception touching them is zero,
+  EXCEPT inside their own unique group: no nonbonded interaction with the physical system.
+- **A unique group's internal nonbonded interactions stay physical at its dummy end** (S0 ruling,
+  2026-09-19, the Amber convention: interactions among the disappearing atoms are not changed).
+  Its own exceptions keep their physical values in the NonbondedForce; its non-excluded internal
+  pairs are carried by one `CustomBondForce` named `UniqueGroupInternalNonbonded` (vacuum
+  Coulomb, constant 138.93545764438198, plus Lennard-Jones, Lorentz-Berthelot), present in both
+  Systems and zero at the physical end, where the NonbondedForce computes them. Per connected
+  group, never across two groups: two groups on different anchors are separated by physical
+  coordinates, and a pair between them would not separate. In dual topology each whole ligand is
+  one group. `record.nonbonded.unique_group_internal` lists the groups and pairs.
 - **A-only x B-only** pairs are explicit zero exceptions in both Systems (`record.nonbonded.
   exclusions`): they never interact at any lambda. In dual mode that is every A-B pair.
 - **Bonded terms** are laid out once: A's terms in their environment slots, B's extras appended.
@@ -120,7 +129,8 @@ sites; a constraint changing across the path.
   E_endpoint(x) = E_reference(x_phys) + E_dummy(x) + dE_dispersion + E_restraint
   ```
 
-  with E_dummy and E_restraint computed in numpy from the record and dE_dispersion the change in
+  with E_dummy (retained bonded terms, plus each unique group's internal exceptions and pairs)
+  and E_restraint computed in numpy from the record and dE_dispersion the change in
   OpenMM's dispersion correction. **That correction averages over every particle, zero-epsilon
   dummies included**, so a dummy shifts it (-1.2e-4 kJ/mol for one dummy in the fixture box). It
   is a real term, not noise, and a Hamiltonian that moves LJ out of `NonbondedForce` changes it.
@@ -176,4 +186,5 @@ Every refusal happens in `build_topology_plan`, before anything is written.
 ## Fixtures
 
 `tests/data/alchemy/v1/` (see its README): ethane, chloroethane and ethanol packages (AM1-BCC,
-openff-2.2.1) and ethane in TIP3P built by `build-top`. Loaders in `tests/alchemy_fixtures.py`.
+openff-2.2.1) and ethane in TIP3P built by `build-top`. `tests/data/alchemy/internal-v1/`:
+n-pentane, whose unmapped propyl group has internal 1-4 and 1-5 pairs. Loaders in `tests/alchemy_fixtures.py`.

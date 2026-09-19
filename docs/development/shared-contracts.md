@@ -245,6 +245,34 @@ particles, masses and constraints — `_structural_differences` refuses anything
 implicit identity atom map. Reuse its constraints and its honesty about limitations; do not reuse
 it as a softcore engine.
 
+### Endpoint conventions (decided 2026-09-19)
+
+- **A unique group keeps its internal nonbonded interactions at every lambda.** Pairs and
+  exceptions wholly inside an A-only or B-only group stay at full physical strength, dummy end
+  included — the Amber convention, and the one that keeps a decoupled group a physical fragment.
+  Like the retained bonded terms, the internal term is separable and cancels between legs; the
+  plan's `endpoint_accounting` names it (`internal_nonbonded`), and `factorization_check`
+  demonstrates that it factorizes. There is ONE definition of an endpoint System: the plan's,
+  including those terms. The Hamiltonian's U(0) and U(1) equal it to <1e-8 kJ/mol.
+  "Internal" is defined per **connected** unique group — the atoms of one side's unique set that
+  are bonded to each other and hang off one anchor — not over a side's whole unique set. Pairs
+  between two groups on different anchors depend on the core's conformation, so they cannot
+  factor out; they are zero at the dummy end like every other dummy interaction. At the dummy end
+  a group's internal non-excluded pairs are carried by a `CustomBondForce`
+  (`UniqueGroupInternalNonbonded`: vacuum Coulomb plus LJ, no cutoff, no PME), identical in every
+  leg of a cycle, which is what lets them cancel; its internal exceptions stay in the
+  `NonbondedForce`. S2's plan is the definition, and S3's Hamiltonian reproduces it.
+- **Exceptions across the softcore/core boundary: `sc_boundary_14: scaled` is the default,
+  confirmed by the user.** It is pmemd 20+ `gti_add_sc=1` behaviour and is consistent with the
+  plan's dummy factorization. `unscaled` — the literal Amber18 manual 21.1.5 rule
+  (`gti_add_sc=0`) — stays implemented, tested and selectable. The softcore functional form
+  (Amber18 equations 21.5–21.7) and the boundary rule are two separately recorded facts; no
+  record calls the combination simply "amber18".
+- **Long-range dispersion** is each end state's own OpenMM correction, mixed linearly in
+  `lambda_sterics`, with its derivative among the TI components. OpenMM's correction is not
+  additive over particle subsets — grouped `CustomNonbondedForce` corrections come out as
+  N/(N+1) of the pair tail — so a per-group correction is not a substitute.
+
 ## 5. Hamiltonian state coordinates
 
 State is a set of **named** coordinates:

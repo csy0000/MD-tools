@@ -18,8 +18,8 @@ in [`handoffs/`](handoffs/) and never edit it.
 |---|---|---|---|---|
 | A0 | interfaces, schemas, fixtures, adapter choice | S0 with S2–S4 | IN PROGRESS | [shared contracts](../shared-contracts.md) |
 | A1 | `combine-topology` construction | S2 | IMPLEMENTED (callable layer; CLI not wired) | integrated at `6df0df6`; [handoffs/S2.md](handoffs/S2.md); 114 passed on Reference, `MD_DATA` at an empty temp root |
-| A2 | Amber18 softcore, energies and derivatives | S3 | IN PROGRESS — nothing handed off yet | — |
-| A3 | windows, FEP/BAR/MBAR and TI, hydration | S4 | IN PROGRESS — estimators and windows integrated; W7 **FAIL (partial)** against the exact 8.633 kcal/mol: MBAR, BAR, EXP-forward PASS, EXP-reverse FAIL (flagged poor overlap, ESS 24), TI INCONCLUSIVE (σ_int 0.62); W8 (17 windows, gate fixed before running) running on CPU | [handoffs/S4.md](handoffs/S4.md), [S4 acceptance matrix](handoffs/S4-acceptance-matrix.md) |
+| A2 | Amber18 softcore, energies and derivatives | S3 | IN PROGRESS — 73 Reference tests (independent numpy Ewald reference, FD convergence, 8 mutation checks). Gate 4 vs CPU pmemd (Amber 26) at λ 0, .25, .5, .75, 1: PASS on CPU, ≤4.4e-4 kJ/mol (scaled boundary). CUDA lane on GPU 0 granted by the user 2026-09-19. Not yet integrated | [handoffs/S3.md](handoffs/S3.md) on `work/0.7.0-hamiltonian` |
+| A3 | windows, FEP/BAR/MBAR and TI, hydration | S4 | IN PROGRESS — estimators and windows integrated. Analytic harmonic model (exact 8.633 kcal/mol), CPU: W7 (5 windows) FAIL (partial), gate not moved; **W8 (17 windows, same gate) PASS for all five** — MBAR 8.579±0.068, BAR 8.595±0.063, EXP-fwd 8.591±0.097, EXP-rev 8.546±0.097, TI 8.646±0.081. N1 (NPT, 1038-atom TIP3P/PME, barostat, one window interrupted and resumed) PASS on MBAR and BAR against exact 2.435. No molecular hydration leg yet: needs A2 | [handoffs/S4.md](handoffs/S4.md), [S4 acceptance matrix](handoffs/S4-acceptance-matrix.md) |
 | A4 | relative binding cycle | S4 | IN PROGRESS — cycle arithmetic only; needs A1 plus A2 for a real leg | [handoffs/S4.md](handoffs/S4.md) |
 | A5 | absolute binding cycle with restraints | S4 | IN PROGRESS — Boresch restraints (minimum image), standard-state release term and cycle arithmetic integrated; no molecular binding run | [handoffs/S4.md](handoffs/S4.md) |
 | A6 | CUDA/CI, exports, registration, wheel validation | S0 | NOT STARTED | — |
@@ -50,6 +50,8 @@ A2 — individual development does not.
 | `84a77b0` | `alchemy` extra: `pymbar>=4,<5`, `scipy` | — |
 | `6df0df6` | merge S2 at `ea43898`: recovery Contexts pinned to Reference by constant, six sites classified non-CUDA | 114 passed (S2's files plus all ligand tests, slow included, CUDA hidden); both inventory guards PASS run directly; `MD_DATA` temp root empty afterwards |
 | `3748945` | merge S4 at `9b7d605`: samples, estimators, restraints, cycles, windows, 12 windows.py matrix entries (10 CUDA sites, lane NONE YET — BLOCKED) | 130 passed, 3 slow deselected (S4's own CPU campaigns); both inventory guards PASS run directly; `MD_DATA` temp root empty afterwards |
+| `192820a` | merge S4 at `60c923b`: W8, N1, `run_window(prepared=, check=)` | 132 passed (non-slow alchemy), both inventory guards PASS run directly, `MD_DATA` temp root empty. Reviewed the disclosed N1 assertion change (`7d925fe`): it still detects a missing pV (0.28 kT against a ~7e-9 kT tolerance) |
+| `6695b2b` | merge S2 at `346e6bf`: unique-group internal nonbonded kept at the dummy end (per connected group), n-pentane fixture `internal-v1` | 180 passed (alchemy + ligand, non-slow, CUDA hidden), both inventory guards PASS, `MD_DATA` temp root empty; the annihilation guard test passes on the real plan |
 
 ## Blockers
 
