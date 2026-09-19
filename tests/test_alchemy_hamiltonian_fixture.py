@@ -464,3 +464,31 @@ def test_openmm_long_range_corrections_are_not_additive_over_subsets():
     group_tail = sum(tail(i, j) for i in group[0] for j in group[1])
     assert correction(custom([group])) == pytest.approx(n / (n + 1) * group_tail, rel=1e-6)
     assert abs(n / (n + 1) * with_self - distinct) > 1e-5 * abs(distinct)
+
+
+def _exclusion_sets(system):
+    """Per nonbonded force, the set of excluded pairs as the CUDA platform compares them."""
+    out = []
+    for f in system.getForces():
+        if isinstance(f, openmm.NonbondedForce):
+            out.append((type(f).__name__, f.getForceGroup(), frozenset(
+                tuple(sorted(f.getExceptionParameters(k)[:2])) for k in range(f.getNumExceptions()))))
+        elif isinstance(f, openmm.CustomNonbondedForce):
+            out.append((type(f).__name__, f.getForceGroup(), frozenset(
+                tuple(sorted(f.getExclusionParticles(k))) for k in range(f.getNumExclusions()))))
+    return out
+
+
+@pytest.mark.parametrize("tail", [False, True], ids=["one-atom", "tail"])
+@pytest.mark.parametrize("periodic", [False, True], ids=["vacuum", "pme"])
+def test_every_nonbonded_force_carries_one_exclusion_set(periodic, tail):
+    """The CUDA platform refuses a Context whose nonbonded forces differ in their exclusions ("All
+    Forces must have identical exceptions"); Reference and CPU do not check. The first CUDA lane
+    (2026-09-19) failed on exactly this for a unique group with internal pairs, which every
+    Reference test had passed. This holds the invariant where CPU can see it."""
+    sa, sb, a, b, x = fx.build(periodic, tail=tail, dispersion=periodic)
+    h = build_hamiltonian(sa, sb, a, b)
+    sets = _exclusion_sets(h.system)
+    assert len(sets) >= 3
+    distinct = {s for _, _, s in sets}
+    assert len(distinct) == 1, [(name, group, len(s)) for name, group, s in sets]

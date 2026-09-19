@@ -363,6 +363,12 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
     record["particles"]["common_lj_changing"] = sorted(changing_lj)
 
     internal_pairs = {"A": _internal_pairs(a_set, A.exceptions), "B": _internal_pairs(b_set, B.exceptions)}
+    # ONE exclusion set for every nonbonded force in the System. The CUDA platform refuses a
+    # Context otherwise ("All Forces must have identical exceptions"); Reference and CPU do not
+    # check, so a CPU-only suite passed with forces that differed (found by the first CUDA lane,
+    # 2026-09-19). Every exception of either end state, and both regions' internal pairs.
+    internal_all = sorted(set(internal_pairs["A"]) | set(internal_pairs["B"]))
+    exclusions = set(A.exceptions) | set(B.exceptions) | set(internal_all)
 
     # --- bonded and every other non-nonbonded force ------------------------------------------
     mixed_bonded = _add_other_forces(system, system_a, system_b, a_set, b_set)
@@ -370,11 +376,10 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
     # --- end-state electrostatics (+ static LJ in A) ------------------------------------------
     for label, state, region in (("A", A, a_set), ("B", B, b_set)):
         system.addForce(_end_state_nonbonded(
-            label, state, region, a_set | b_set, static_lj, internal_pairs[label], settings_a, pme,
+            label, state, region, a_set | b_set, static_lj, internal_all, settings_a, pme,
             boundary_scaled))
 
     # --- common-core LJ that changes ------------------------------------------------------------
-    exclusions = set(A.exceptions) | set(B.exceptions)
     if changing_lj:
         system.addForce(_changing_lj_force(A, B, changing_lj, static_lj, exclusions, settings_a))
 
@@ -397,7 +402,8 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
             "switched correction's integral is not reproduced here yet, and an approximate one "
             "would make neither end state recover its own energy")
     if periodic and settings_a["use_dispersion_correction"]:
-        force, coefficients = _dispersion_force(system_a, A, B, static_lj, settings_a, pme)
+        force, coefficients = _dispersion_force(system_a, A, B, static_lj, settings_a, pme,
+                                                exclusions)
         if force is not None:
             system.addForce(force)
         record["nonbonded"]["dispersion_coefficients_kj_nm3_mol"] = coefficients
@@ -663,7 +669,7 @@ def _dispersion_coefficient(sigma, epsilon, cutoff: float) -> float:
                                   - s6 / interactions / (3 * cutoff ** 3))
 
 
-def _dispersion_force(system_a, A, B, static_lj, nb_settings, pme):
+def _dispersion_force(system_a, A, B, static_lj, nb_settings, pme, exclusions):
     """The part of (1-lam_s) D_A + lam_s D_B that NonbondedForce A's static correction lacks."""
     mm = _mm()
     n = len(A.charge)
@@ -676,6 +682,13 @@ def _dispersion_force(system_a, A, B, static_lj, nb_settings, pme):
     k_a, k_b = c_a - c_static, c_b - c_static
     if n < 2 or (k_a == 0.0 and k_b == 0.0):
         return None, coefficients
+    # The carrier's one pair must not be excluded: it carries the System's exclusion set like every
+    # other nonbonded force, and an excluded pair would not be an interaction at all.
+    pair = next(((i, j) for i in range(n) for j in range(i + 1, n) if (i, j) not in exclusions),
+                None)
+    if pair is None:
+        raise AlchemicalHamiltonianError("every particle pair is excluded; there is no pair to "
+                                         "carry the dispersion correction")
 
     def force(ka: float, kb: float):
         # With ka == kb the term does not depend on lambda, and it must not SAY it does: OpenMM
@@ -687,7 +700,9 @@ def _dispersion_force(system_a, A, B, static_lj, nb_settings, pme):
         f = mm.CustomNonbondedForce(f"{weight}*step(r-{cutoff!r})*({cutoff!r}/r)^6")
         for _ in range(n):
             f.addParticle([])
-        f.addInteractionGroup([0], [1])
+        f.addInteractionGroup([pair[0]], [pair[1]])
+        for i, j in sorted(exclusions):
+            f.addExclusion(i, j)
         f.setNonbondedMethod(mm.CustomNonbondedForce.CutoffPeriodic)
         f.setCutoffDistance(cutoff)
         f.setUseSwitchingFunction(False)
@@ -706,7 +721,7 @@ def _dispersion_force(system_a, A, B, static_lj, nb_settings, pme):
     probe.setDefaultPeriodicBoxVectors(*box)
     probe.addForce(force(1.0, 2.0))        # at lambda_sterics = 0 the weight is exactly 1.0
     context = mm.Context(probe, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName(BUILD_PROBE_PLATFORM))
-    context.setPositions([[0.01 * i, 0.0, 0.0] for i in range(n)])    # the one pair: 0.01 nm
+    context.setPositions([[0.01 * i, 0.0, 0.0] for i in range(n)])    # the pair is inside the cutoff
     volume = box[0][0]._value * box[1][1]._value * box[2][2]._value
     unit = context.getState(getEnergy=True).getPotentialEnergy()._value * volume
     del context
