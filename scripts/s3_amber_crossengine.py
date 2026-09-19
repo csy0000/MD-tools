@@ -46,17 +46,17 @@ ELEMENTS = {"C": "carbon", "H": "hydrogen", "F": "fluorine", "Cl": "chlorine", "
 PME_GRID = 100
 
 
-def fixture(tail=False):
+def fixture(tail=False, box=2.4, n_water=30, grid=PME_GRID):
     import openmm
     from tests import alchemy_s3_fixture as fx
-    sa, sb, a, b, x = fx.build(True, dispersion=False, tail=tail)
+    sa, sb, a, b, x = fx.build(True, dispersion=False, tail=tail, box=box, n_water=n_water)
     probe = openmm.Context(sa, openmm.VerletIntegrator(0.001),
                            openmm.Platform.getPlatformByName("Reference"))
     nb = next(f for f in probe.getSystem().getForces() if isinstance(f, openmm.NonbondedForce))
     alpha = nb.getPMEParametersInContext(probe)[0]
     for s in (sa, sb):
         next(f for f in s.getForces() if isinstance(f, openmm.NonbondedForce)).setPMEParameters(
-            alpha, PME_GRID, PME_GRID, PME_GRID)
+            alpha, grid, grid, grid)
     return sa, sb, a, b, x
 
 
@@ -308,6 +308,12 @@ def main():
     ap.add_argument("--order", type=int, default=5,
                     help="PME spline order given to pmemd; OpenMM's is 5. pmemd.cuda may accept "
                          "only 4, and then the difference is part of what the calibration measures")
+    ap.add_argument("--box", type=float, default=2.4,
+                    help="cubic box edge, nm. pmemd.cuda refuses a box with <= 2 hash cells of "
+                         "(cutoff + skin) per dimension: use 3.6 for the GPU row")
+    ap.add_argument("--waters", type=int, default=30)
+    ap.add_argument("--grid", type=int, default=PME_GRID,
+                    help="PME grid for both engines; prime factors 2, 3, 5 only (150 for 3.6 nm)")
     ap.add_argument("--tail", action="store_true",
                     help="the five-atom appearing chain: softcore-internal pairs and 1-4s")
     args = ap.parse_args()
@@ -315,9 +321,10 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     pmemd = Path(args.amberhome) / "bin" / args.pmemd
 
-    sa, sb, a_only, b_only, x = fixture(args.tail)
+    sa, sb, a_only, b_only, x = fixture(args.tail, args.box, args.waters, args.grid)
     scmask2 = "FB" + ("".join(",T%d" % k for k in range(1, 5)) if args.tail else "")
-    report = {"fixture": f"tests/alchemy_s3_fixture.py build(True, dispersion=False, tail={args.tail})",
+    report = {"fixture": f"tests/alchemy_s3_fixture.py build(True, dispersion=False, tail={args.tail}, "
+                         f"box={args.box}, n_water={args.waters}); PME grid {args.grid}",
               "boundary_14": args.boundary, "units": "kJ/mol (pmemd kcal/mol x 4.184)"}
 
     # 1. the writer, proved on single copies
