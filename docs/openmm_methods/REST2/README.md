@@ -125,6 +125,10 @@ ligand_scaling_dict:
     torsion_exclusions: auto           # or an md-tools-torsion-exclusions/1 file
 ```
 
+A complete, commented example for ACE-ALA-NME is
+[`selective-scaler.config`](selective-scaler.config) beside this page. It is resolved, and states
+are built from it, by a test.
+
 **If any selector is present, the selection is explicit.** Only the named categories and instances
 are hot. An omitted category means *none*, not *all*. An explicit region that heats nothing is
 refused. Selective scaling is **explicit solvent only**: any selector on an implicit (GB) System is
