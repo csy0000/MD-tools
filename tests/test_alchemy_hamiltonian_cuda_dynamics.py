@@ -31,31 +31,46 @@ def _cuda_context(system, x, integrator, precision="double"):
     return c
 
 
-@pytest.mark.parametrize("lam", [0.0, 0.5, 1.0])
-def test_nve_conserves_the_softcore_hamiltonian_on_cuda(lam):
-    """Velocity Verlet in double precision: total energy drift over 2000 x 0.2 fs steps stays
-    within 0.05% of the kinetic energy scale. Forces that were not the gradient of the reported
-    energy -- a missing derivative term in a custom expression, a delta not cancelling its
-    NonbondedForce term -- show up as drift."""
-    sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
-    h = build_hamiltonian(sa, sb, a, b)
-    c = _cuda_context(h.system, x, openmm.VerletIntegrator(0.0002))
-    state = dict(zip(NAMES, (lam, lam, lam)))
-    h.set_state(c, state)
+def _nve_excursion(system, x, set_state):
+    """Max |E_total - E_total(0)| over 2000 x 0.2 fs of velocity Verlet, double precision, after
+    the same minimisation and the same seeded velocities."""
+    c = _cuda_context(system, x, openmm.VerletIntegrator(0.0002))
+    set_state(c)
     openmm.LocalEnergyMinimizer.minimize(c, 10.0, 200)
     c.setVelocitiesToTemperature(300.0, 20260919)
 
     def total():
         st = c.getState(getEnergy=True)
-        return st.getPotentialEnergy()._value + st.getKineticEnergy()._value, st.getKineticEnergy()._value
-    e0, k0 = total()
+        return st.getPotentialEnergy()._value + st.getKineticEnergy()._value
+    e0 = total()
     energies = []
     for _ in range(20):
         c.getIntegrator().step(100)
-        energies.append(total()[0])
-    drift = max(abs(e - e0) for e in energies)
+        energies.append(total())
     assert np.all(np.isfinite(energies))
-    assert drift < 5e-4 * k0 + 0.05, (lam, drift, k0)
+    return max(abs(e - e0) for e in energies)
+
+
+@pytest.mark.parametrize("lam", [0.0, 0.5, 1.0])
+def test_nve_conserves_the_softcore_hamiltonian_on_cuda(lam):
+    """Velocity Verlet in double precision: the Hamiltonian's total-energy excursion is held to
+    that of the plain end-state System A integrated the same way on the same device.
+
+    CALIBRATED, and why it changed (disclosed in handoffs/S3.md). The first form used an absolute
+    bound, 5e-4 x KE + 0.05 kJ/mol, never calibrated. The second CUDA run failed it at ~0.5 kJ/mol
+    for every lambda, and a CPU diagnostic then showed the plain System A -- no alchemical force at
+    all -- excursing by 0.495 kJ/mol under the same protocol (0.22 at 0.1 fs): the stiff flexible
+    O-H bonds at 0.2 fs, not the softcore forces. Forces that were not the gradient of the reported
+    energy would show up as an excursion beyond System A's; the bound is 2 x System A's + 0.05
+    kJ/mol, written down before the next run.
+    """
+    sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
+    h = build_hamiltonian(sa, sb, a, b)
+    plain = _nve_excursion(sa, x, lambda c: None)
+    state = dict(zip(NAMES, (lam, lam, lam)))
+    softcore = _nve_excursion(h.system, x, lambda c: h.set_state(c, state))
+    print(f"\nNVE lambda={lam}: Hamiltonian {softcore:.3f}, plain System A {plain:.3f} kJ/mol")
+    assert softcore <= 2 * plain + 0.05, (lam, softcore, plain)
 
 
 def test_set_state_reaches_a_live_cuda_context():
