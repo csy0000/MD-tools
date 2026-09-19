@@ -90,6 +90,25 @@ dummy integral is independent of the physical coordinates. `factorization_check`
 at construction by arithmetic: for ethane -> chloroethane the retained dummy energy moves by
 ~1e-13 kJ/mol when the physical atoms move, and the keep-everything set moves by 412 kJ/mol.
 
+## The automatic map
+
+`md_tools.alchemy.topology_mapping.propose_map(package_a, package_b, mode)` returns an `AtomMap`
+and a report, method `rdkit-fmcs-heavy/1`:
+
+1. RDKit FMCS over the heavy atoms: elements equal, bond orders exact, rings match only rings and
+   only complete rings, 10 s timeout (a timeout is a refusal, never a partial map).
+2. Every placement of that substructure in A and in B is enumerated. For each, B's conformer is
+   superposed on A's mapped heavy atoms and the hydrogens of each mapped heavy pair are paired by
+   distance (Hungarian assignment).
+3. Every candidate must pass `validate_map`; the rejected ones and why are in the report.
+4. The largest survivors are compared by canonical atom ranks with ties unbroken. If they are not
+   all related by a symmetry of A or B, the choice changes the transformation, and the map is
+   REFUSED as chemically ambiguous, listing the alternatives. Example: ethanolamine -> propane,
+   where A's N-side carbon can sit on propane's end or middle carbon.
+
+Single topology is explicit-map only. An automatic map is as reviewable as an explicit one: it
+is an ordinary `AtomMap`, stored in the plan's `atom_map` record with both directions.
+
 ## Constraints and masses
 
 The environment's constraint policy is read from its ligand (HBonds, AllBonds or None) and
@@ -167,8 +186,8 @@ environment:                            # ONE environment, holding endpoint A; B
                                         # {resname} or {chain, resid, insertion_code}
 map:
   file: ethane-chloroethane.map.yaml    # explicit pairs, or a stored map record (below)
-  # automatic: {...}                    # NOT IMPLEMENTED; reserved for a proposal checked by
-                                        # validate_map and written out for review
+  # automatic: true                     # instead of `file`: topology_mapping.propose_map, which
+                                        # the command should write out as a map record for review
 dual:
   restraint_k_kj_mol_nm2: 1000.0        # dual mode only; refused in the other modes
 b_pose: null                            # optional .sdf with B's pose in B package order; default:

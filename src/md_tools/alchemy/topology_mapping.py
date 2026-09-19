@@ -32,6 +32,7 @@ __all__ = [
     "MODES",
     "AtomMap",
     "MapError",
+    "propose_map",
     "unique_components",
     "validate_map",
 ]
@@ -402,3 +403,150 @@ def validate_map(package_a: LigandPackage, package_b: LigandPackage, amap: AtomM
         "unique_components": {"A": components_a, "B": components_b},
         "notes": notes,
     }
+
+
+# ------------------------------------------------------------------------------------------------
+# a validated automatic map
+# ------------------------------------------------------------------------------------------------
+AUTOMATIC_METHOD = "rdkit-fmcs-heavy/1"
+FMCS_TIMEOUT_S = 10
+
+
+def _heavy(mol):
+    from rdkit import Chem
+
+    heavy = [a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() != 1]
+    stripped = Chem.RemoveHs(mol, sanitize=False)
+    Chem.GetSymmSSSR(stripped)          # ring information, which an unsanitised copy lacks
+    if [a.GetSymbol() for a in stripped.GetAtoms()] != \
+            [mol.GetAtomWithIdx(i).GetSymbol() for i in heavy]:
+        raise AssertionError("removing hydrogens reordered the heavy atoms")
+    return stripped, heavy
+
+
+def _hungarian(cost: np.ndarray) -> list[tuple[int, int]]:
+    from scipy.optimize import linear_sum_assignment
+
+    rows, cols = linear_sum_assignment(cost)
+    return list(zip(rows.tolist(), cols.tolist()))
+
+
+def _signature(mol_a, mol_b, pairs) -> tuple:
+    """The map up to the symmetries of both molecules: canonical ranks with ties unbroken."""
+    from rdkit import Chem
+
+    ra = list(Chem.CanonicalRankAtoms(mol_a, breakTies=False))
+    rb = list(Chem.CanonicalRankAtoms(mol_b, breakTies=False))
+    return tuple(sorted((ra[a], rb[b]) for a, b in pairs))
+
+
+def propose_map(package_a: LigandPackage, package_b: LigandPackage, mode: str) -> tuple[
+        "AtomMap", dict[str, Any]]:
+    """A maximum-common-substructure map, checked by `validate_map`, or a refusal.
+
+    Heavy atoms by RDKit FMCS (elements equal, bond orders exact, rings match only rings and only
+    complete rings); every placement of that substructure in A and in B is enumerated; hydrogens
+    of each mapped heavy pair are paired by distance after superposing B's conformer on A's on
+    the mapped heavy atoms. Each candidate must pass `validate_map`; the largest survive. When
+    the survivors are not all related by a symmetry of A or of B -- compared by canonical ranks
+    with ties unbroken -- the choice changes the transformation and nothing here can make it:
+    that is REFUSED as chemically ambiguous, with the alternatives, and an explicit map is
+    required. Single topology is explicit-map only.
+    """
+    from rdkit.Chem import rdFMCS
+
+    if mode == "single":
+        raise MapError("an automatic map is not offered for single topology, where a mapped atom "
+                       "may change element; state the map explicitly")
+    if mode not in MODES:
+        validate_map(package_a, package_b, AtomMap(package_a.reference, package_b.reference,
+                                                   ((0, 0),)), mode)   # raises by name
+    mol_a, mol_b = package_a.mol, package_b.mol
+    heavy_a, ia = _heavy(mol_a)
+    heavy_b, ib = _heavy(mol_b)
+    params = rdFMCS.MCSParameters()
+    params.AtomTyper = rdFMCS.AtomCompare.CompareElements
+    params.BondTyper = rdFMCS.BondCompare.CompareOrderExact
+    params.BondCompareParameters.RingMatchesRingOnly = True
+    params.BondCompareParameters.CompleteRingsOnly = True
+    params.Timeout = FMCS_TIMEOUT_S
+    result = rdFMCS.FindMCS([heavy_a, heavy_b], params)
+    if result.canceled:
+        raise MapError(f"the maximum common substructure search did not finish in "
+                       f"{FMCS_TIMEOUT_S} s; state the map explicitly")
+    if not result.numAtoms:
+        raise MapError("the two molecules share no heavy-atom substructure")
+    from rdkit import Chem
+
+    query = Chem.MolFromSmarts(result.smartsString)
+    matches_a = heavy_a.GetSubstructMatches(query, uniquify=False, maxMatches=10000)
+    matches_b = heavy_b.GetSubstructMatches(query, uniquify=False, maxMatches=10000)
+    xa, xb = _positions(package_a), _positions(package_b)
+    nbr_a, nbr_b = _neighbours(mol_a), _neighbours(mol_b)
+    hydrogen_a = {i for i, a in enumerate(mol_a.GetAtoms()) if a.GetAtomicNum() == 1}
+    hydrogen_b = {i for i, a in enumerate(mol_b.GetAtoms()) if a.GetAtomicNum() == 1}
+    candidates, rejected, seen = [], [], set()
+    for ma in matches_a:
+        for mb in matches_b:
+            heavy_pairs = sorted((ia[p], ib[q]) for p, q in zip(ma, mb))
+            key = tuple(heavy_pairs)
+            if key in seen:
+                continue
+            seen.add(key)
+            a_idx = [a for a, _ in heavy_pairs]
+            b_idx = [b for _, b in heavy_pairs]
+            if len(heavy_pairs) >= 3:
+                cs, ct = xb[b_idx].mean(axis=0), xa[a_idx].mean(axis=0)
+                h = (xb[b_idx] - cs).T @ (xa[a_idx] - ct)
+                u, _, vt = np.linalg.svd(h)
+                d = np.sign(np.linalg.det(vt.T @ u.T))
+                rot = vt.T @ np.diag([1.0, 1.0, d]) @ u.T
+                placed_b = (xb - cs) @ rot.T + ct
+            else:
+                placed_b = xb - xb[b_idx].mean(axis=0) + xa[a_idx].mean(axis=0)
+            pairs = list(heavy_pairs)
+            for a, b in heavy_pairs:
+                ha = [n for n in nbr_a[a] if n in hydrogen_a]
+                hb = [n for n in nbr_b[b] if n in hydrogen_b]
+                if ha and hb:
+                    cost = np.linalg.norm(xa[ha][:, None, :] - placed_b[hb][None, :, :], axis=-1)
+                    pairs += [(ha[r], hb[c]) for r, c in _hungarian(cost)]
+            amap = AtomMap.from_pairs(package_a, package_b, pairs)
+            try:
+                validate_map(package_a, package_b, amap, mode)
+            except MapError as exc:
+                rejected.append({"pairs": len(pairs), "reason": str(exc)[:200]})
+                continue
+            candidates.append(amap)
+    if not candidates:
+        raise MapError(f"no placement of the common substructure {result.smartsString} gives a "
+                       f"map that validates; first refusals: {[r['reason'] for r in rejected[:3]]}")
+    best = max(len(c.pairs) for c in candidates)
+    top = [c for c in candidates if len(c.pairs) == best]
+    signatures = {}
+    for c in top:
+        signatures.setdefault(_signature(mol_a, mol_b, c.pairs), c)
+    if len(signatures) > 1:
+        options = [[[package_a.atom_names[a], package_b.atom_names[b]] for a, b in c.pairs]
+                   for c in signatures.values()]
+        raise MapError(
+            f"the automatic map is chemically ambiguous: {len(signatures)} maps of {best} atoms "
+            f"validate and are not related by a symmetry of either molecule, so the choice "
+            f"changes the transformation. State one explicitly. Alternatives: {options}")
+    chosen = min(top, key=lambda c: c.pairs)
+    report = {
+        "method": AUTOMATIC_METHOD,
+        "mcs_smarts": result.smartsString,
+        "mcs_heavy_atoms": result.numAtoms,
+        "fmcs": {"atoms": "CompareElements", "bonds": "CompareOrderExact",
+                 "ring_matches_ring_only": True, "complete_rings_only": True,
+                 "timeout_s": FMCS_TIMEOUT_S},
+        "hydrogens": "paired per mapped heavy atom by distance after superposing B's conformer "
+                     "on A's mapped heavy atoms",
+        "placements_considered": len(seen),
+        "valid_candidates": len(candidates),
+        "rejected": rejected,
+        "symmetry_equivalent_best": len(top),
+        "mapped_atoms": best,
+    }
+    return chosen, report
