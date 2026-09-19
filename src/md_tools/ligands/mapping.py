@@ -861,22 +861,32 @@ def check_forcefield_compatibility(forcefield, packages: Iterable[LigandPackage]
     # alternative -- over a difference OpenMM itself treats as none. What is RECORDED is the
     # value actually applied, beside each package's own.
     tolerance = NonbondedGenerator.SCALETOL
+    packages = list(packages)
+    # WHAT THE SYSTEM WILL APPLY. With a force field already carrying a NonbondedForce definition,
+    # that one. With none -- a vacuum build loads no protein and no water XML -- the first
+    # package loaded defines it, and every later one merges into it within the tolerance, so its
+    # own scales are the applied ones. Recorded either way, so a reader never has to infer it.
+    if generators:
+        applied_scales = (generators[0].coulomb14scale, generators[0].lj14scale)
+    elif packages:
+        first = packages[0].conventions
+        applied_scales = (first["coulomb14scale"], first["lj14scale"])
     for package in packages:
         conventions = package.conventions
         entry = {"reference": package.reference, **{k: conventions[k] for k in
                                                    ("coulomb14scale", "lj14scale")}}
-        if generators:
-            entry["applied"] = {"coulomb14scale": generators[0].coulomb14scale,
-                                "lj14scale": generators[0].lj14scale, "tolerance": tolerance}
+        entry["applied"] = {"coulomb14scale": applied_scales[0],
+                            "lj14scale": applied_scales[1], "tolerance": tolerance,
+                            "defined_by": ("the force field's first NonbondedForce definition"
+                                           if generators else "the first package loaded")}
         report["packages"].append(entry)
-        if generators and (
-                abs(conventions["coulomb14scale"] - generators[0].coulomb14scale) > tolerance
-                or abs(conventions["lj14scale"] - generators[0].lj14scale) > tolerance):
+        if (abs(conventions["coulomb14scale"] - applied_scales[0]) > tolerance
+                or abs(conventions["lj14scale"] - applied_scales[1]) > tolerance):
             raise MappingError(
                 f"package {package.reference} uses 1-4 scales coulomb "
                 f"{conventions['coulomb14scale']!r} / LJ {conventions['lj14scale']!r}, the force "
-                f"field it is combined with uses {generators[0].coulomb14scale!r} / "
-                f"{generators[0].lj14scale!r} (compared within OpenMM's own {tolerance:g}). "
+                f"field it is combined with uses {applied_scales[0]!r} / "
+                f"{applied_scales[1]!r} (compared within OpenMM's own {tolerance:g}). "
                 f"One System has one convention; a package "
                 f"parameterised for another one needs a package made for this force field.")
     return report
