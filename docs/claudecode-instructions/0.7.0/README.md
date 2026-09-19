@@ -36,7 +36,7 @@ go through S0, with a version bump, and every result citing the old version is r
 Every session works inside its own worktree and nothing else:
 
 - **Push only your own branch.** A worker pushes its `work/...` branch; the coordinator pushes the
-  four integration branches. Nobody pushes `main`, `dev`, `dev-0.6.0` or another session's branch.
+  four integration branches. Nobody pushes `main`, `dev` or another session's branch.
 - **No `$MD_DATA`.** Do not register, retrieve, search or read anything under the machine's
   `$MD_DATA` — no `data-register`, no catalog lookup against it, no registered dataset as a
   fixture. A test that needs a catalog or a dataset root builds one in a temporary directory and

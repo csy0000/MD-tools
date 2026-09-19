@@ -3,7 +3,7 @@
 **Planning only.** This branch carries aims and references. No implementation is authorized on it
 during the 0.6.1 / 0.7.0 wave, and nothing here is available in any release.
 
-Baseline: `dev-0.6.0` at `e524e0e`. Prerequisite: the relevant 0.7.1 foundation, because the
+Baseline: `e524e0e` on the 0.6.0 development line (released as `v0.6.0` at `3927105`; the `dev-0.6.0` branch has since been deleted). Prerequisite: the relevant 0.7.1 foundation, because the
 combined-method validation is where this feature earns its place — water sampling that is correct
 on its own but wrong inside an alchemical cycle is worse than not having it.
 

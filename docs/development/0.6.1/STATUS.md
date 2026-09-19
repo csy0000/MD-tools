@@ -6,7 +6,7 @@ in [`handoffs/`](handoffs/) and never edit it.
 | | |
 |---|---|
 | branch | `0.6.1` |
-| baseline | `e524e0e` on `dev-0.6.0` (the commit carrying the 20260918 instruction) |
+| baseline | `e524e0e` on the 0.6.0 development line (released as `v0.6.0` at `3927105`; the `dev-0.6.0` branch has since been deleted) (the commit carrying the 20260918 instruction) |
 | contract commit | `a531ce7` on this branch — [shared contracts](../shared-contracts.md) |
 | aims | [AIMS.md](AIMS.md) |
 | worker branch | `work/0.6.1-selection` (session S1) |

@@ -4,7 +4,7 @@
 or under construction, on branches that have not been released. What the package does today is in
 the [documentation index](../README.md).
 
-Four branches were opened on 2026-09-18 from `dev-0.6.0` at `e524e0e`, following the
+Four branches were opened on 2026-09-18 from `e524e0e` on the 0.6.0 development line (released as `v0.6.0` at `3927105`; the `dev-0.6.0` branch has since been deleted), following the
 [20260918 parallel development instruction](../claudecode-instructions/20260918_parallel-0.6.1-0.7.x-development.md).
 That instruction is the shared roadmap; the aims pages below specialize it per branch.
 
