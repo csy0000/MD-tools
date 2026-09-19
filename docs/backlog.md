@@ -761,6 +761,7 @@ criteria of its own. They left this list because something owns them, not becaus
 | bidirectional switching and alchemical transformations | same, §9 | [0.7.0 aims](development/0.7.0/AIMS.md), with AIS's own contract unchanged |
 | OpenMMTools-compatible AIS Langevin splitting | same, §9 | still deferred; no branch owns it |
 | more advanced protonation and tautomer preparation | same, §9 | still deferred; no branch owns it |
+| a vacuum alchemical leg that applies the solvent leg's STATED 1-4 scale (so OPC-solvated hydration cycles can pair with vacuum) | S2 finding, 2026-09-19: OPC applies 0.833333 to a ligand's 1-4 pairs, a vacuum build 5/6 | deferred by S0; until then `matched_legs` refuses the pairing by name and TIP3P is the working water model for hydration cycles |
 
 The two "still deferred" rows are listed so that archiving their instruction does not lose them.
 Nothing above is implemented, and an aims page is not an implementation.
