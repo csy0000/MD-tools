@@ -1059,3 +1059,44 @@ def test_legs_that_differ_are_refused_by_name(eta, cle, eoh, water, difference):
         match = "endpoints"
     with pytest.raises(TopologyError, match=match):
         matched_legs(solvent, other)
+
+
+# ------------------------------------------------------------------------------------------------
+# the environment's solvation, from its record (S0 ruling: option (a))
+# ------------------------------------------------------------------------------------------------
+def test_the_plan_records_the_solvation_its_build_record_states(eta, cle, water):
+    from md_tools.alchemy.topology import Environment
+    from md_tools.ligands.mapping import LigandSelector
+    from tests.alchemy_fixtures import FIXTURE_ROOT
+
+    vacuum_root = FIXTURE_ROOT.parent / "vacuum-v1"
+    vacuum = Environment.from_files(vacuum_root / "built.xml", vacuum_root / "built.pdb",
+                                    LigandSelector(resname="ETA"),
+                                    record=vacuum_root / "built.log")
+    solvent_plan = _build(eta, cle, core_map(eta, cle), water, "hybrid")
+    vacuum_plan = _build(eta, cle, core_map(eta, cle), vacuum, "hybrid")
+    assert solvent_plan.record["environment"]["solvation"] == "explicit"
+    assert vacuum_plan.record["environment"]["solvation"] == "vacuum"
+    # different plans, one ligand Hamiltonian
+    assert solvent_plan.sha256 != vacuum_plan.sha256
+    assert solvent_plan.record["ligand_hamiltonian_sha256"] == \
+        vacuum_plan.record["ligand_hamiltonian_sha256"]
+
+
+@pytest.mark.parametrize("stated,match", [(None, "does not state its solvation"),
+                                          ("explicit", "says explicit solvent but"),
+                                          ("gas", "does not state its solvation")])
+def test_an_in_memory_environment_must_state_its_solvation_truthfully(eta, cle, stated, match):
+    from md_tools.alchemy.topology import TopologyError
+
+    env = dataclasses.replace(vacuum_environment(eta), solvation=stated)
+    with pytest.raises(TopologyError, match=match):
+        _build(eta, cle, core_map(eta, cle), env, "hybrid")
+
+
+def test_a_periodic_environment_cannot_claim_to_be_vacuum(eta, cle, water):
+    from md_tools.alchemy.topology import TopologyError
+
+    with pytest.raises(TopologyError, match="says vacuum but its System is periodic"):
+        _build(eta, cle, core_map(eta, cle), dataclasses.replace(water, solvation="vacuum"),
+               "hybrid")
