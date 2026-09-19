@@ -37,6 +37,7 @@ def _config(tmp_path, **overrides):
         "endpoints": {"A": {"parameters": ETHANE}, "B": {"parameters": CHLOROETHANE}},
         "environment": {"system": str(FIXTURE_ROOT / "ethane-tip3p" / "built.xml"),
                         "topology": str(FIXTURE_ROOT / "ethane-tip3p" / "built.pdb"),
+                        "record": str(FIXTURE_ROOT / "ethane-tip3p" / "built.log"),
                         "ligand": {"resname": "ETA"}},
         "map": {"file": "core.map.yaml"},
         "ligand_catalog": {"path": str(PACKAGES)},

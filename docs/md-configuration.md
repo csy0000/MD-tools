@@ -163,13 +163,13 @@ Protein force field. ff19SB is intended to be paired with OPC water; the pairing
 
 ### `solvent`
 
-Solvent treatment. Under GBn2 every key here except `model` is inapplicable.
+Solvent treatment. Under GBn2 or vacuum every key here except `model` is inapplicable.
 
 #### `solvent.model`
 
-type: string · default: `TIP3P` · one of `TIP3P`, `OPC`, `GBn2`
+type: string · default: `TIP3P` · one of `TIP3P`, `OPC`, `GBn2`, `vacuum`
 
-TIP3P or OPC give an explicit, periodic, solvated system. GBn2 is IMPLICIT solvent: no water, no box, no ions, no barostat and no NPT stage anywhere downstream. Choosing GBn2 changes what the rest of this file may say.
+TIP3P or OPC give an explicit, periodic, solvated system. GBn2 is IMPLICIT solvent: no water, no box, no ions, no barostat and no NPT stage anywhere downstream. Choosing GBn2 changes what the rest of this file may say. vacuum is NO solvent: the molecule alone, NoCutoff, no box, no ions, constraints as configured. It exists for the vacuum leg of an alchemical cycle and nothing else: only `solute.kind: ligand` is accepted, any stated box, cutoff or ion key (or a non-zero ionic strength) is refused, and `build-md` refuses a vacuum System -- ordinary MD in vacuum is not supported.
 
 #### `solvent.padding_nm`
 

@@ -20,7 +20,7 @@ from typing import Any
 import yaml
 
 from ..build.strict import ConfigError
-from .system_defaults import canonical_solvent, is_implicit
+from .system_defaults import canonical_solvent, is_implicit, is_vacuum
 
 __all__ = ["resolve_sys_config", "openff_resource", "pairing_warnings", "ConfigError"]
 
@@ -43,8 +43,16 @@ def resolve_sys_config(document: dict[str, Any]) -> dict[str, Any]:
     else:
         raise ConfigError("neither solvent.model nor implicit_solvent.model is set")
 
-    resolved["solvation"] = "implicit" if is_implicit(chosen) else "explicit"
-    if resolved["solvation"] == "implicit":
+    resolved["solvation"] = ("implicit" if is_implicit(chosen)
+                             else "vacuum" if is_vacuum(chosen) else "explicit")
+    if resolved["solvation"] == "vacuum":
+        # No water parameterises anything and no box exists; the solvent block keeps its model.
+        resolved.pop("implicit_solvent", None)
+        resolved["solvent"] = {"model": "vacuum"}
+        resolved["forcefield"] = dict(resolved.get("forcefield") or {})
+        resolved["forcefield"]["water"] = None
+        resolved.setdefault("constraints", {})["rigid_water"] = False
+    elif resolved["solvation"] == "implicit":
         resolved.pop("solvent", None)
         resolved["forcefield"] = dict(resolved.get("forcefield") or {})
         # No water model participates in an implicit build, and recording one would name a force

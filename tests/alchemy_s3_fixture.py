@@ -75,6 +75,12 @@ _ENV = [  # (charge, sigma, epsilon)
     (0.0, 0.35, 0.6),      # neutral probe
 ]
 _WATER = ((-0.834, 0.315, 0.636), (0.417, 0.1, 0.0), (0.417, 0.1, 0.0))
+#: The `vsite` variant's 4-site water (TIP4P-Ew-like): O, H, H, and a massless M site built by a
+#: ThreeParticleAverageSite, which carries the negative charge -- an environment virtual site, as
+#: OPC's are in S2's complex fixture.
+_WATER4 = ((0.0, 0.316435, 0.680946), (0.52422, 0.1, 0.0), (0.52422, 0.1, 0.0))
+_M_SITE = (-1.04844, 0.1, 0.0)
+_M_WEIGHTS = (0.786646558, 0.106676721, 0.106676721)
 
 
 def molecule_positions() -> np.ndarray:
@@ -124,7 +130,7 @@ def _tail_positions(mol):
 
 def build(periodic: bool, *, charges: bool = True, lj: bool = True, bonded: bool = True,
           dispersion: bool = False, n_water: int = 30, box: float = 2.4, cutoff: float = 0.9,
-          ewald_tolerance: float = 1e-6, tail: bool = False):
+          ewald_tolerance: float = 1e-6, tail: bool = False, vsite: bool = False):
     """(system_a, system_b, a_only, b_only, positions). Component switches zero a term family."""
     import openmm
     rng = np.random.default_rng(20260919)
@@ -162,6 +168,12 @@ def build(periodic: bool, *, charges: bool = True, lj: bool = True, bonded: bool
             positions += [o, o + np.array([0.09572, 0.0, 0.0]),
                           o + 0.09572 * np.array([math.cos(1.824), math.sin(1.824), 0.0])]
             masses += [16.0, 1.0, 1.0]
+    m_sites = []
+    if vsite:
+        for w in waters:
+            m_sites.append((len(positions), w))
+            positions.append(sum(wt * positions[w + k] for k, wt in enumerate(_M_WEIGHTS)))
+            masses.append(0.0)
     positions = np.array(positions)
     n = len(positions)
 
@@ -171,6 +183,8 @@ def build(periodic: bool, *, charges: bool = True, lj: bool = True, bonded: bool
     for w in waters:
         for h in (w + 1, w + 2):
             graph[w].add(h); graph[h].add(w)
+    for m, w in m_sites:
+        graph[w].add(m); graph[m].add(w)
     pairs = {}
     for i in range(n):
         for j in graph[i]:
@@ -195,7 +209,8 @@ def build(periodic: bool, *, charges: bool = True, lj: bool = True, bonded: bool
         for idx in range(len(params), len(params) + (4 if tail else 0)):
             params.append((tail_q[idx], *_TAIL_LJ) if end == 1 else (0.0, _TAIL_LJ[0], 0.0))
         for _ in waters:
-            params += list(_WATER)
+            params += list(_WATER4 if vsite else _WATER)
+        params += [_M_SITE] * len(m_sites)
         return params
 
     physical = {0: particle_params(0), 1: particle_params(1)}   # region A is physical at end 0
@@ -272,6 +287,8 @@ def build(periodic: bool, *, charges: bool = True, lj: bool = True, bonded: bool
         for f in (hb, ha, ht):
             f.setUsesPeriodicBoundaryConditions(periodic)
             s.addForce(f)
+        for m, w in m_sites:
+            s.setVirtualSite(m, openmm.ThreeParticleAverageSite(w, w + 1, w + 2, *_M_WEIGHTS))
         return s
 
     return system(0), system(1), set(A_ONLY), set(b_only), positions

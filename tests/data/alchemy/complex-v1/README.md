@@ -37,3 +37,12 @@ ff19SB.xml", "amber19/opc.xml")` gives 0.8333333333333334, `ForceField("amber19-
 "amber19/opc.xml")` gives 0.833333). The 0.6.0 ligand check compares that exactly with a
 package's 5/6. The fix belongs to 0.6.0's ligand module and is not worked around here; until it
 lands the complex leg is exercised with ff14SB, which has no CMAP.
+
+## Build record (added 2026-09-19)
+
+`built.log` is that build's record, reproduced on released 0.6.0 (`ab69961`) with
+`MD_DATA` an empty temporary root: the rebuild gave byte-identical `built.xml` and `built.pdb`
+; `ligand_mapping.json` was replaced by the rebuild's, which 0.6.0 writes with an empty `aliases` field per package (nothing here reads it). Three machine-specific values are replaced by `<redacted>` -- `environment.hostname`,
+`environment.user`, and the absolute path of the invoked `md_openmm.py` in `command` -- and
+nothing else differs. `Environment.from_files` reads the applied 1-4 scales from it and checks its
+`outputs` sha256 against the two files.

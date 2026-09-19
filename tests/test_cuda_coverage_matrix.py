@@ -373,6 +373,11 @@ NON_CUDA_CONTEXT_SITES = {
         "inspects the forces of a System on the host -- global parameter names, requested derivatives, NonbondedForce offsets -- to prove its derivatives are complete. No Context exists.",
     "alchemy/windows.py::ComposedHamiltonian.__init__":
         "copies the inner System by an XmlSerializer round trip and adds the Boresch restraint force in group 16. No Context exists; the device work is in set_state and derivatives, classified as CUDA sites.",
+    "build/md.py::_refuse_vacuum_system":
+        "deserialises built.xml and walks `System.getForces()` -- the host-side list of Force "
+        "OBJECTS, not `State.getForces` -- only to see whether the System is periodic and carries "
+        "a GB force, so build-md can refuse a vacuum build before writing anything. No Context "
+        "exists and nothing is evaluated.",
     "build/md.py::_generated_cv_text":
         "reads the bond graph for `collective_variables.generate` off the SERIALISED built System "
         "-- `HarmonicBondForce.getBondParameters` and `System.getConstraintParameters` are System "

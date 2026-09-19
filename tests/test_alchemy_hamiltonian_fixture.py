@@ -74,17 +74,21 @@ def test_reference_calibration(periodic):
 
 @pytest.mark.parametrize("boundary_14", ["scaled", "unscaled"])
 @pytest.mark.parametrize("periodic", [False, True], ids=["vacuum", "pme"])
-@pytest.mark.parametrize("variant", ["full", "charges_only", "lj_only", "bonded_only", "tail"])
+@pytest.mark.parametrize("variant", ["full", "charges_only", "lj_only", "bonded_only", "tail",
+                                     "vsite"])
 def test_energy_against_the_reference(periodic, variant, boundary_14):
     """Per component, by construction: each variant zeroes the other term families.
 
+    `vsite` makes the waters 4-site, with a charged M virtual site: an environment virtual site,
+    which the Hamiltonian carries unchanged (S2's OPC complex fixture has 180 of them).
     `tail` grows the appearing group into a five-atom chain, so the region-internal rules --
     non-excluded internal pairs and internal 1-4s unscaled, and removed from the weighted Ewald
     sum -- have something to act on.
     """
     components = {"full": {}, "charges_only": {"lj": False, "bonded": False},
                   "lj_only": {"charges": False, "bonded": False},
-                  "bonded_only": {"charges": False, "lj": False}, "tail": {"tail": True}}[variant]
+                  "bonded_only": {"charges": False, "lj": False}, "tail": {"tail": True},
+                  "vsite": {"vsite": True}}[variant]
     sa, sb, a, b, x, h, c, kw = _setup(periodic, boundary_14, **components)
     worst = 0.0
     for t in DIAGONAL + OFF_DIAGONAL:
@@ -518,3 +522,21 @@ def test_the_force_energy_check_has_power(kind, size):
     worst = max(r["richardson_error"] for r in rows)
     print(f"\n{kind}: worst Richardson error {worst:.2e} kJ/mol/nm")
     assert not _fd_ok(rows), kind
+
+
+def test_environment_virtual_sites_are_carried_and_softcore_ones_refused():
+    """Environment virtual sites (4-site water) are copied exactly and the end states are still
+    the Systems; a virtual site built from a softcore particle is refused by name."""
+    sa, sb, a, b, x = fx.build(True, vsite=True)
+    h = build_hamiltonian(sa, sb, a, b)
+    sites = [i for i in range(sa.getNumParticles()) if sa.isVirtualSite(i)]
+    assert sites and all(h.system.isVirtualSite(i) for i in sites)
+    c = _context(h.system, x)
+    e_a = _context(sa, x).getState(getEnergy=True).getPotentialEnergy()._value
+    e_b = _context(sb, x).getState(getEnergy=True).getPotentialEnergy()._value
+    assert h.energy(c, _state((0, 0, 0))) == pytest.approx(e_a, abs=TOL[True])
+    assert h.energy(c, _state((1, 1, 1))) == pytest.approx(e_b, abs=TOL[True])
+    for s in (sa, sb):                       # an M site built on the A-only particle
+        s.setVirtualSite(sites[0], openmm.TwoParticleAverageSite(7, 0, 0.5, 0.5))
+    with pytest.raises(AlchemicalHamiltonianError, match="softcore particle"):
+        build_hamiltonian(sa, sb, a, b)

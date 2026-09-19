@@ -84,10 +84,14 @@ from .topology_mapping import AtomMap, MapError, _bonds, _neighbours, _positions
 __all__ = [
     "PLAN_SCHEMA",
     "Environment",
+    "applied_scales",
+    "scaled_table",
     "TopologyError",
     "TopologyPlan",
     "build_topology_plan",
+    "ligand_hamiltonian",
     "load_plan",
+    "matched_legs",
 ]
 
 PLAN_SCHEMA = "md-tools-topology-plan/1"
@@ -164,14 +168,50 @@ class Environment:
     positions_nm: np.ndarray
     ligand: LigandSelector
     source: dict = field(default_factory=dict)
+    #: The build's `nonbonded_compatibility` block: each package's own 1-4 scales beside the ones
+    #: the System APPLIES (OpenMM applies its first NonbondedForce definition to every 1-4 pair,
+    #: and the OPC water XMLs write 5/6 as 0.833333). Read from the build record, or stated by
+    #: whoever built an in-memory System; never inferred. None refuses the plan.
+    nonbonded_compatibility: Optional[dict] = None
+    compatibility_source: Optional[str] = None
 
     @classmethod
-    def from_files(cls, system_xml: Path, pdb: Path, ligand: LigandSelector) -> "Environment":
-        """A `build-top` pair: `built.xml` and `built.pdb`, particle order matching exactly."""
+    def from_files(cls, system_xml: Path, pdb: Path, ligand: LigandSelector, *,
+                   record: Path) -> "Environment":
+        """A `build-top` pair, `built.xml` and `built.pdb`, and the build record that made them.
+
+        The record (`built.log`) must describe THESE files -- its `outputs` sha256 of both are
+        checked -- and must carry `forcefield_record.ligand.nonbonded_compatibility`.
+        """
         from openmm import XmlSerializer, unit
         from openmm.app import PDBFile
 
-        system_xml, pdb = Path(system_xml), Path(pdb)
+        from ..build.record import RecordError, read_record
+
+        system_xml, pdb, record = Path(system_xml), Path(pdb), Path(record)
+        digests = {"system_xml": hashlib.sha256(system_xml.read_bytes()).hexdigest(),
+                   "topology_pdb": hashlib.sha256(pdb.read_bytes()).hexdigest()}
+        try:
+            document = read_record(record)
+        except RecordError as exc:
+            raise TopologyError(f"environment build record: {exc}") from exc
+        if document.get("record_type") != "build-top" or document.get("status") != "completed":
+            raise TopologyError(f"{record}: not a completed build-top record "
+                                f"({document.get('record_type')}, {document.get('status')})")
+        outputs = document.get("outputs") or {}
+        for key, digest in digests.items():
+            recorded = (outputs.get(key) or {}).get("sha256")
+            if recorded != digest:
+                raise TopologyError(
+                    f"{record} records {key} sha256 {recorded}, but the file given hashes to "
+                    f"{digest}: the record describes another build")
+        compatibility = ((document.get("forcefield_record") or {}).get("ligand") or {}).get(
+            "nonbonded_compatibility")
+        if not compatibility:
+            raise TopologyError(
+                f"{record} carries no forcefield_record.ligand.nonbonded_compatibility, so it does "
+                f"not say which 1-4 scales the System applies to the ligand. Rebuild the "
+                f"environment with a build-top that records it (0.6.0 or later).")
         text = system_xml.read_text(encoding="utf-8")
         structure = PDBFile(str(pdb))
         positions = np.array(structure.getPositions(asNumpy=True).value_in_unit(unit.nanometer),
@@ -179,10 +219,13 @@ class Environment:
         return cls(system=XmlSerializer.deserialize(text), topology=structure.topology,
                    positions_nm=positions, ligand=ligand,
                    source={"system_file": system_xml.name,
-                           "system_file_sha256":
-                               hashlib.sha256(system_xml.read_bytes()).hexdigest(),
+                           "system_file_sha256": digests["system_xml"],
                            "pdb_file": pdb.name,
-                           "pdb_file_sha256": hashlib.sha256(pdb.read_bytes()).hexdigest()})
+                           "pdb_file_sha256": digests["topology_pdb"],
+                           "record_file": record.name,
+                           "record_file_sha256": hashlib.sha256(record.read_bytes()).hexdigest()},
+                   nonbonded_compatibility=compatibility,
+                   compatibility_source=f"build record {record.name}")
 
     def identity(self) -> dict[str, Any]:
         from openmm import XmlSerializer
@@ -223,6 +266,49 @@ def _forces_by_name(system) -> dict[str, list[int]]:
     return out
 
 
+def applied_scales(environment: Environment, package: LigandPackage) -> dict[str, Any]:
+    """The 1-4 scales the environment's System applies to *package*, from its record; or refuse."""
+    compatibility = environment.nonbonded_compatibility
+    if not compatibility:
+        raise TopologyError(
+            "the environment does not say which 1-4 scales its System applies to the ligand "
+            "(no nonbonded_compatibility). Give Environment.from_files the build record, or state "
+            "it for an in-memory System; it is never inferred.")
+    entries = [e for e in compatibility.get("packages", []) if e.get("reference") ==
+               package.reference]
+    if len(entries) != 1 or "applied" not in entries[0]:
+        raise TopologyError(f"the environment's nonbonded_compatibility has no applied scales for "
+                            f"package {package.reference}")
+    applied = entries[0]["applied"]
+    return {"coulomb14scale": float(applied["coulomb14scale"]),
+            "lj14scale": float(applied["lj14scale"]),
+            "source": environment.compatibility_source}
+
+
+def scaled_table(package: LigandPackage, applied: dict[str, Any]) -> dict[str, Any]:
+    """*package*'s parameter table with its 1-4 exceptions at the scales the System APPLIES.
+
+    A package states its exceptions at its own convention (5/6 and 1/2 exactly). A System whose
+    first NonbondedForce definition is OPC's applies 0.833333 to every 1-4 pair, the ligand's
+    included, so the ligand in that System differs from the package table by ~4e-7 relative in
+    each 1-4 chargeProd -- a fact about the environment, not a different parameter set. Every
+    exception row is multiplied by applied/package: excluded pairs are zero and stay zero, and 1-4
+    pairs are exactly the rows the convention scales. With equal scales the table is unchanged.
+    """
+    from ..ligands.parameters import copy_table
+
+    table = copy_table(package.table)
+    own = package.conventions
+    fq = applied["coulomb14scale"] / own["coulomb14scale"]
+    fl = applied["lj14scale"] / own["lj14scale"]
+    if fq != 1.0 or fl != 1.0:
+        table["exceptions"] = [[i, j, qq * fq, sigma, eps * fl]
+                               for i, j, qq, sigma, eps in table["exceptions"]]
+    table["conventions"] = {**own, "coulomb14scale": applied["coulomb14scale"],
+                            "lj14scale": applied["lj14scale"]}
+    return table
+
+
 def _check_environment(environment: Environment, package_a: LigandPackage,
                        ligand_indices: list[int], checks: list) -> dict[str, Any]:
     """Endpoint A in the environment IS package A: parameters, masses, constraints, forces."""
@@ -253,14 +339,16 @@ def _check_environment(environment: Environment, package_a: LigandPackage,
     if any(system.isVirtualSite(i) for i in ligand_indices):
         raise TopologyError("a ligand atom is a virtual site; refused")
 
-    c14, lj14 = package_a.conventions["coulomb14scale"], package_a.conventions["lj14scale"]
+    applied = applied_scales(environment, package_a)
+    expected_table = scaled_table(package_a, applied)
+    c14, lj14 = applied["coulomb14scale"], applied["lj14scale"]
     try:
         table, constrained = subsystem_parameter_table(system, package_a.mol, ligand_indices,
                                                        c14, lj14)
     except ValueError as exc:
         raise TopologyError(f"the environment ligand cannot be read as package "
                             f"{package_a.reference}: {exc}") from exc
-    problems = compare_parameter_tables(package_a.table, table, where="environment ligand",
+    problems = compare_parameter_tables(expected_table, table, where="environment ligand",
                                skip_masses=True, missing_bonds_ok=table["_constraint_lengths"],
                                rel=PARAMETER_RTOL)
     if problems:
@@ -305,11 +393,17 @@ def _check_environment(environment: Environment, package_a: LigandPackage,
                             f"AllBonds or None; the policy cannot be applied to endpoint B")
     _check(checks, "environment-carries-package-a",
            {"reference": package_a.reference, "parameter_rtol": PARAMETER_RTOL,
-            "masses": "package masses (no repartitioning)", "constraint_policy": policy})
+            "masses": "package masses (no repartitioning)", "constraint_policy": policy,
+            "applied_1_4_scales": applied,
+            "package_1_4_scales": {k: package_a.conventions[k]
+                                   for k in ("coulomb14scale", "lj14scale")},
+            "compared_against": "package A's table with its 1-4 exceptions at the applied "
+                                "scales"})
 
     method = nb.getNonbondedMethod()
     return {
         "constraint_policy": policy,
+        "nonbonded_applied": applied,
         "forces": sorted(forces),
         "periodic": system.usesPeriodicBoundaryConditions(),
         "nonbonded": {
@@ -732,9 +826,12 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
         nb_b.setParticleParameters(hyb_b[b], q, s, e)
 
     # exceptions
+    # Both endpoints' 1-4 exceptions at the scales THIS environment applies: endpoint B built
+    # into the same box by build-top would get them, so System B must too.
     def exc_rows(package, to_hyb):
+        table = scaled_table(package, env_info["nonbonded_applied"])
         return {tuple(sorted((to_hyb[r[0]], to_hyb[r[1]]))): tuple(r[2:5])
-                for r in package.table["exceptions"]}
+                for r in table["exceptions"]}
 
     exc_a, exc_b = exc_rows(package_a, hyb_a), exc_rows(package_b, hyb_b)
     env_slots = {}
@@ -1144,6 +1241,100 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
     # The record is what a reader gets back from plan.json: tuples become lists here, not on
     # the first round trip, so an in-memory plan and a loaded one compare equal.
     record = json.loads(_canonical(record))
+    record["ligand_hamiltonian_sha256"] = _sha256_text(_canonical(ligand_hamiltonian(record)))
     record["plan_sha256"] = _record_digest(record)
     return TopologyPlan(record=record, system_a=system_a, system_b=system_b, topology=topology,
                         positions_nm=positions, pdb_text=pdb_text)
+
+
+# ------------------------------------------------------------------------------------------------
+# legs of one cycle
+# ------------------------------------------------------------------------------------------------
+LIGAND_HAMILTONIAN_SCHEME = "md-tools-ligand-hamiltonian/1"
+
+
+def ligand_hamiltonian(record: dict) -> dict[str, Any]:
+    """Everything a plan says about the LIGANDS' Hamiltonian, independent of the environment.
+
+    Plan indices differ between legs -- a vacuum leg and a solvated one number the ligand
+    differently -- so every atom is named by its package-local identity: ("A", i) for an atom of
+    endpoint A (the core included), ("B", j) for an atom only B has. Two legs of one cycle must
+    agree on all of it: the same packages, map, mode, applied 1-4 scales and constraint policy,
+    and the same dummy treatment term by term, or the dummy contributions and the ligand's own
+    intramolecular energy do not cancel between them.
+    """
+    hyb_a = record["endpoints"]["A"]["hybrid_index_of_local_atom"]
+    hyb_b = record["endpoints"]["B"]["hybrid_index_of_local_atom"]
+    name = {h: ("A", i) for i, h in enumerate(hyb_a)}
+    for j, h in enumerate(hyb_b):
+        name.setdefault(h, ("B", j))
+
+    def atoms(indices):
+        return [list(name[h]) for h in indices]
+
+    terms = {family: sorted(
+        [atoms(s["atoms"]), s["kind"], s.get("periodicity"), s["role"], s["a"], s["b"],
+         s["at_dummy_end"]] for s in slots) for family, slots in record["terms"].items()}
+    exceptions = sorted([atoms(s["atoms"]), s["role"], s["a"], s["b"],
+                         s.get("unique_group_internal", False)]
+                        for s in record["nonbonded"]["exceptions"])
+    internal = record["nonbonded"]["unique_group_internal"]
+    groups = sorted([g["dummy_at"], g["local_atoms"],
+                     {k: (None if v is None else name[v]) for k, v in g["frame"].items()}]
+                    for g in record["dummy_groups"])
+    restraint = record.get("restraint")
+    body = {
+        "scheme": LIGAND_HAMILTONIAN_SCHEME,
+        "mode": record["mode"],
+        "endpoints": {side: {k: record["endpoints"][side][k] for k in
+                             ("reference", "package_sha256", "parameter_digest")}
+                      for side in ("A", "B")},
+        "atom_map_sha256": record["atom_map"]["sha256"],
+        "applied_1_4_scales": {k: record["environment"]["nonbonded_applied"][k]
+                               for k in ("coulomb14scale", "lj14scale")},
+        "constraint_policy": record["constraints"]["policy"],
+        "dummy_groups": groups,
+        "terms": terms,
+        "exceptions": exceptions,
+        "exclusions": sorted(atoms(s["atoms"]) for s in record["nonbonded"]["exclusions"]),
+        "internal_pairs": sorted([atoms(p["atoms"]), p["dummy_at"], p["physical"]]
+                                 for p in internal["pairs"]),
+        "restraint": None if not restraint else {
+            "k_kj_mol_nm2": restraint["k_kj_mol_nm2"], "group_a": atoms(restraint["group_a"]),
+            "group_b": atoms(restraint["group_b"])},
+    }
+    return json.loads(_canonical(body))
+
+
+def matched_legs(first: "TopologyPlan", second: "TopologyPlan") -> dict[str, Any]:
+    """Refuse two plans that cannot be the two legs of one thermodynamic cycle.
+
+    Compares `ligand_hamiltonian` of both, component by component, and names every component that
+    differs. Passing means the dummy groups' bonded and internal terms, the restraint and the
+    ligands' own intramolecular Hamiltonian are identical in both legs, which is what makes them
+    cancel -- the environment is all that differs.
+    """
+    one, two = ligand_hamiltonian(first.record), ligand_hamiltonian(second.record)
+    differing = sorted(k for k in set(one) | set(two) if one.get(k) != two.get(k))
+    if "applied_1_4_scales" in differing:
+        raise TopologyError(
+            f"these plans apply different 1-4 scales to the ligand -- "
+            f"{one['applied_1_4_scales']} and {two['applied_1_4_scales']} -- so the ligand's own "
+            f"intramolecular Hamiltonian is a different function in the two legs, and a cycle "
+            f"between them would fold that difference into the free energy, however small. An "
+            f"OPC-solvated leg applies OPC's rounded 0.833333; a vacuum leg applies the package's "
+            f"5/6. Pair a vacuum leg with a TIP3P-solvated one. (A vacuum build that applies the "
+            f"solvent leg's stated scale is a deferred backlog item.)")
+    if differing:
+        named = {k: (one.get(k), two.get(k)) for k in differing
+                 if k in ("mode", "constraint_policy", "atom_map_sha256")}
+        raise TopologyError(
+            f"these plans are not two legs of one cycle: {differing} differ"
+            f"{' ' + str(named) if named else ''}. Build both legs from the same packages, map "
+            f"and mode, in environments that apply the same 1-4 scales and constraint policy to "
+            f"the ligand.")
+    digest = _sha256_text(_canonical(one))
+    return {"scheme": LIGAND_HAMILTONIAN_SCHEME, "ligand_hamiltonian_sha256": digest,
+            "plans": [first.sha256, second.sha256],
+            "environments": [first.record["environment"]["system_sha256"],
+                             second.record["environment"]["system_sha256"]]}

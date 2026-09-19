@@ -321,8 +321,8 @@ def audit_plan(plan, package_a, package_b, env_system) -> dict[str, Any]:
     """Structural endpoint recovery; raises `TopologyError` on the first discrepancy."""
     from openmm import NonbondedForce
 
+    from .topology import TopologyError, scaled_table
     from .topology_mapping import _bonds
-    from .topology import TopologyError
 
     record = plan.record
     constrained = set()
@@ -350,7 +350,7 @@ def audit_plan(plan, package_a, package_b, env_system) -> dict[str, Any]:
         to_local = {h: i for i, h in enumerate(to_hyb)}
         bonds_local = _bonds(package.mol)
         got = _nonzero_terms(system, to_local, bonds_local)
-        want = _table_nonzero(package.table)
+        want = _table_nonzero(scaled_table(package, record["environment"]["nonbonded_applied"]))
         # a constrained bond has no term; the package table has one. Its length is checked in
         # constraints-consistent; here it is removed from the expectation.
         want["bonds"] = [r for r in want["bonds"]

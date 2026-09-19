@@ -317,14 +317,11 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
         pme = _pme_parameters(system_a, nb_a)
         kappa = float(pme[0])
 
-    # --- the new System: particles, masses, constraints, box --------------------------------
-    system = mm.System()
-    for i in range(n):
-        system.addParticle(system_a.getParticleMass(i))
-    for k in range(system_a.getNumConstraints()):
-        i, j, d = system_a.getConstraintParameters(k)
-        system.addConstraint(i, j, d)
-    system.setDefaultPeriodicBoxVectors(*system_a.getDefaultPeriodicBoxVectors())
+    # --- the new System: particles, masses, constraints, virtual sites, box -----------------
+    # A copy of end state A with every force removed, so virtual-site definitions (an OPC or TIP4P
+    # environment's M sites) are carried exactly; `_structural_problems` has already required the
+    # two end states to agree on all of it.
+    system = _without_forces(system_a)
 
     record: dict[str, Any] = {
         "schema": HAMILTONIAN_SCHEMA,
@@ -422,6 +419,15 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
     return AlchemicalHamiltonian(system=system, record=record)
 
 
+def _without_forces(system):
+    """A copy of `system` with no forces: particles, masses, constraints, virtual sites, box."""
+    mm = _mm()
+    copy = mm.XmlSerializer.deserialize(_xml(system))
+    while copy.getNumForces():
+        copy.removeForce(copy.getNumForces() - 1)
+    return copy
+
+
 def _structural_problems(sa, sb, a_set, b_set) -> list[str]:
     out: list[str] = []
     n = sa.getNumParticles()
@@ -435,9 +441,16 @@ def _structural_problems(sa, sb, a_set, b_set) -> list[str]:
     masses = [i for i in range(n) if sa.getParticleMass(i)._value != sb.getParticleMass(i)._value]
     if masses:
         out.append(f"particle masses differ at {masses[:10]}")
-    vs = [i for i in range(n) if sa.isVirtualSite(i) or sb.isVirtualSite(i)]
-    if vs:
-        out.append(f"virtual sites are not supported yet (particles {vs[:10]})")
+    if _xml(_without_forces(sa)) != _xml(_without_forces(sb)):
+        out.append("the end states differ in particles, masses, constraints, virtual sites or box")
+    unique = a_set | b_set
+    for i in range(n):
+        if sa.isVirtualSite(i):
+            site = sa.getVirtualSite(i)
+            parents = {site.getParticle(k) for k in range(site.getNumParticles())}
+            if i in unique or parents & unique:
+                out.append(f"virtual site {i} is, or is built from, a softcore particle "
+                           f"({sorted(parents)}); only environment virtual sites are supported")
 
     def constraints(s):
         return sorted((*_pair(*s.getConstraintParameters(k)[:2]), s.getConstraintParameters(k)[2]._value)

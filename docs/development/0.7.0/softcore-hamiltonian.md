@@ -175,13 +175,35 @@ softcore regions. It has not been measured on a device yet.
 
 ## Cross-engine: pmemd
 
-At fixed coordinates, against Amber 26 pmemd (the CPU build) running TI with `icfe=1, ifsc=1`, at
-lambda 0, 0.25, 0.5, 0.75 and 1: dU/dlambda and the MBAR cross-state energies agree to 2.5e-3
-kJ/mol or better. That covers both boundary rules (`gti_add_sc` 1 and 0) and a five-atom appearing
-chain. Each run passes a rule set from the engines' own discrepancy on the ordinary end states.
-The evidence, the rule, the matched settings and the intentional differences are in
-[S3-evidence/amber](handoffs/S3-evidence/amber/README.md). pmemd.cuda, the R4 GPU path, is BLOCKED
-on a card.
+At fixed coordinates, against Amber 26 pmemd running TI (`icfe=1, ifsc=1`) at lambda 0, 0.25,
+0.5, 0.75 and 1, both dU/dlambda and the MBAR cross-state energies were compared.
+
+- **CPU pmemd:** all four rows pass. They cover both boundary rules and a five-atom appearing
+  chain, and agree to 2.5e-3 kJ/mol or better.
+- **pmemd.cuda_DPFP** (the R4 GPU path; 3.6 nm box): `scaled`, `scaled_tail` and `unscaled_tail`
+  pass. `unscaled` (one atom) FAILS by 1.1e-3 kJ/mol, and the cause is the Coulomb constant (below).
+
+Every row on the default path passes on both engines. Each run is judged by a rule set from the
+engines' own discrepancy on the ordinary end states. The evidence, the rule, the matched settings
+and the intentional differences are in [S3-evidence/amber](handoffs/S3-evidence/amber/README.md)
+and [S3-evidence/amber-gpu](handoffs/S3-evidence/amber-gpu/).
+
+### Differences from Amber, with their size
+
+Any statement of "Amber18 equivalence" has to carry these.
+
+| difference | size | consequence |
+|---|---|---|
+| **Coulomb constant.** Amber uses 18.2223^2 = 332.0522 kcal A mol^-1 e^-2 (138.930648 kJ nm); OpenMM uses 138.935456 | -3.46e-5 relative on every electrostatic energy | 3.5e-3 kJ/mol per 100 kJ/mol of electrostatics. Negligible for free energies, but it is what made the non-default `unscaled` pmemd.cuda row fail: -1.09e-3 predicted on 31.5 kJ/mol of boundary 1-4 electrostatics that no calibration System contains, against -1.00e-3 observed |
+| PME: OpenMM's spline order is 5 (fixed); pmemd.cuda accepts 4. The grid must suit both (pmemd: factors 2, 3, 5 on CPU; a multiple of 4, factors 2, 3, 5, 7 on GPU) | ~1e-2 kJ/mol constant offset on the fixture | absorbed by the end-state calibration |
+| erfc: pmemd uses a spline table under PME (exact erfc refused) | within calibration | absorbed |
+| Dispersion correction: OpenMM's formula (N^2 over N(N+1)/2 pairs) differs from pmemd's per-region type-count sum | O(1/N) of the tail | compared with it off (`vdwmeth = 0`); each engine is self-consistent |
+| pmemd reports unscaled softcore-atom terms ("Softcore part", SC_EPtot) outside EPtot and its MBAR energies | a lambda-independent constant (164 kJ/mol on the fixture) | added back for absolute comparisons |
+
+**For future cross-engine rows (declared 2026-09-19, before any new run; this does not re-grade the
+existing row):** Amber's electrostatic energy terms (EELEC, 1-4 EEL, and their DV/DL share) are to
+be rescaled by 138.935456 / 138.930648 before comparison. Failing that, the calibration Systems
+must contain the same boundary 1-4 set as the TI end states. A row states which of the two it used.
 
 ## Interface
 
@@ -200,7 +222,9 @@ h.context_parameters(state); h.record     # the provenance record, plain data
 
 ## Refused
 
-Particles that differ in count, mass or constraints between the end states; virtual sites; a
+Particles that differ in count, mass, constraints or virtual sites between the end states; a
+virtual site that is, or is built from, a softcore particle (environment virtual sites, such as an
+OPC or TIP4P M site, are carried unchanged); a
 dummy that carries charge or epsilon, or a nonzero exception; A-only x B-only pairs not excluded; a
 net charge change; a common particle with LJ at one end only; any nonbonded force other than one
 plain NonbondedForce (GB, custom nonbonded, AMOEBA, Drude, ATM, an already-alchemical System);
