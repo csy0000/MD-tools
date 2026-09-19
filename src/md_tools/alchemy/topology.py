@@ -67,6 +67,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -76,7 +77,8 @@ from typing import Any, Iterable, Optional, Sequence
 import numpy as np
 
 from ..ligands.mapping import LigandSelector
-from ..ligands.package import LigandPackage, compare_parameter_tables, subsystem_parameter_table, load_package
+from ..ligands.package import (LigandPackage, compare_parameter_tables, load_package,
+                               subsystem_parameter_table)
 from .topology_mapping import AtomMap, MapError, _bonds, _neighbours, _positions, validate_map
 
 __all__ = [
@@ -107,6 +109,12 @@ CONSTRAINT_TOL_NM = 1e-10
 MASS_TOL_AMU = 1e-6
 
 DEFAULT_DUAL_RESTRAINT_K = 1000.0   # kJ/mol/nm^2
+
+#: OpenMM's 1/(4 pi eps0) in kJ mol^-1 nm e^-2, as NonbondedForce evaluates an exception (measured
+#: on the Reference platform: a unit-charge exception at 0.5 nm gives exactly half of it).
+COULOMB_CONSTANT = 138.93545764438198
+#: The force carrying a unique group's non-excluded internal pairs at its dummy end.
+INTERNAL_FORCE_NAME = "UniqueGroupInternalNonbonded"
 
 
 class TopologyError(ValueError):
@@ -247,7 +255,8 @@ def _check_environment(environment: Environment, package_a: LigandPackage,
 
     c14, lj14 = package_a.conventions["coulomb14scale"], package_a.conventions["lj14scale"]
     try:
-        table, constrained = subsystem_parameter_table(system, package_a.mol, ligand_indices, c14, lj14)
+        table, constrained = subsystem_parameter_table(system, package_a.mol, ligand_indices,
+                                                       c14, lj14)
     except ValueError as exc:
         raise TopologyError(f"the environment ligand cannot be read as package "
                             f"{package_a.reference}: {exc}") from exc
@@ -543,7 +552,7 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
     None, package B's reference conformer is superposed on the mapped A atoms, which is what a
     reference conformer is for, and the core RMSD of that fit is recorded.
     """
-    from openmm import CustomCentroidBondForce, version
+    from openmm import CustomBondForce, CustomCentroidBondForce, version
     from openmm.app import Element, Topology
 
     try:
@@ -736,6 +745,24 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
     if set(env_slots) != set(exc_a):
         raise TopologyError("the environment's ligand exceptions are not package A's")
     exception_slots = []
+    local_a = {h: a for a, h in enumerate(hyb_a)}
+    local_b = {h: b for b, h in enumerate(hyb_b)}
+
+    # A unique group's INTERNAL nonbonded interactions -- its own exceptions and non-excluded pairs
+    # -- stay at full physical strength at its dummy end (S0's ruling, the Amber convention): the
+    # group is a decoupled but physical fragment, and a term over its internal coordinates alone
+    # separates exactly as its retained bonded terms do. Per connected GROUP, never across two
+    # groups: two dummy groups on different anchors are separated by physical coordinates, and a
+    # pair between them would not separate. In dual topology each whole ligand is one group.
+    if dual:
+        unique_groups = [{"dummy_at": "B", "atoms": sorted(hyb_a)},
+                         {"dummy_at": "A", "atoms": sorted(b_only)}]
+    else:
+        unique_groups = [{"dummy_at": g["dummy_at"], "atoms": g["atoms"]} for g in groups]
+    group_of = {h: n for n, g in enumerate(unique_groups) for h in g["atoms"]}
+
+    def internal(key) -> bool:
+        return key[0] in group_of and group_of.get(key[1], -1) == group_of[key[0]]
 
     def zero(params):
         return (0.0, params[1], 0.0)
@@ -747,12 +774,12 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
             if r != "b-only":
                 raise TopologyError(f"core pair {key} is an exception at B only; the core's "
                                     f"exclusion pattern changed")
-            pa = zero(pb)
+            pa = pb if internal(key) else zero(pb)
         if pb is None:
             if r != "a-only":
                 raise TopologyError(f"core pair {key} is an exception at A only; the core's "
                                     f"exclusion pattern changed")
-            pb = zero(pa)
+            pb = pa if internal(key) else zero(pa)
         if key in env_slots:
             slot = env_slots[key]
             nb_b.setExceptionParameters(slot, key[0], key[1], *pb)
@@ -761,7 +788,44 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
             if nb_b.addException(key[0], key[1], *pb) != slot:
                 raise AssertionError("exception layouts diverged")
         exception_slots.append({"slot": slot, "atoms": list(key), "role": r,
-                                "a": list(pa), "b": list(pb)})
+                                "a": list(pa), "b": list(pb),
+                                "unique_group_internal": internal(key)})
+
+    # the non-excluded internal pairs: at the physical end the NonbondedForce computes them; at the
+    # dummy end the particles carry no charge or epsilon, so they are carried by one
+    # CustomBondForce, present in both Systems, zero at the physical end.
+    internal_pairs = []
+    for n, g in enumerate(unique_groups):
+        source = package_b if g["dummy_at"] == "A" else package_a
+        local = local_b if g["dummy_at"] == "A" else local_a
+        excepted = exc_b if g["dummy_at"] == "A" else exc_a
+        members = sorted(g["atoms"])
+        for x, i in enumerate(members):
+            for j in members[x + 1:]:
+                if (i, j) in excepted:
+                    continue
+                qi, si, ei = source.table["atoms"][local[i]][2:5]
+                qj, sj, ej = source.table["atoms"][local[j]][2:5]
+                internal_pairs.append({"atoms": [i, j], "group": n, "dummy_at": g["dummy_at"],
+                                       "physical": [qi * qj, 0.5 * (si + sj),
+                                                    math.sqrt(ei * ej)]})
+    internal_force = None
+    if internal_pairs:
+        for system in (system_a, system_b):
+            force = CustomBondForce(
+                f"{COULOMB_CONSTANT!r}*chargeprod/r + 4*epsilon*((sigma/r)^12 - (sigma/r)^6)")
+            for name in ("chargeprod", "sigma", "epsilon"):
+                force.addPerBondParameter(name)
+            force.setName(INTERNAL_FORCE_NAME)
+            force.setUsesPeriodicBoundaryConditions(bool(env_info["periodic"]))
+            endpoint = "A" if system is system_a else "B"
+            for k, pair in enumerate(internal_pairs):
+                params = pair["physical"] if pair["dummy_at"] == endpoint else \
+                    [0.0, pair["physical"][1], 0.0]
+                if force.addBond(*pair["atoms"], params) != k:
+                    raise AssertionError("internal pair layouts diverged")
+            system.addForce(force)
+        internal_force = INTERNAL_FORCE_NAME
     exclusions = []
     a_ligand = sorted(hyb_a) if dual else a_only
     for i in a_ligand:
@@ -774,14 +838,16 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
             exclusions.append({"slot": slot, "atoms": list(key), "reason": "a-only-x-b-only"})
     _check(checks, "exceptions-accounted",
            {"ligand_exception_slots": len(exception_slots), "a_only_x_b_only": len(exclusions),
+            "internal_exceptions_kept": sum(e["unique_group_internal"]
+                                            for e in exception_slots),
+            "internal_pairs": len(internal_pairs),
             "dummy_particles": "charge 0, epsilon 0, sigma kept; every exception touching a "
-                               "dummy is zero at its dummy endpoint"})
+                               "dummy is zero at its dummy endpoint except those inside its own "
+                               "unique group"})
 
     # bonded terms
     bonds_a_graph = {tuple(sorted((hyb_a[i], hyb_a[j]))) for i, j in _bonds(package_a.mol)}
     bonds_b_graph = {tuple(sorted((hyb_b[i], hyb_b[j]))) for i, j in _bonds(package_b.mol)}
-    local_a = {h: a for a, h in enumerate(hyb_a)}
-    local_b = {h: b for b, h in enumerate(hyb_b)}
 
     def dummy_decision(atoms_hyb: Sequence[int], kind: str, source: str) -> bool:
         """Whether a term touching *source*'s unique atoms is kept where they are dummies."""
@@ -1043,7 +1109,19 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
         "dummy_groups": groups,
         "dummy_nonbonded": "annihilated: charge 0 and epsilon 0 on the particle, zero on every "
                            "exception touching it; bonded terms per the junction rule",
-        "nonbonded": {"exceptions": exception_slots, "exclusions": exclusions},
+        "nonbonded": {
+            "exceptions": exception_slots, "exclusions": exclusions,
+            "unique_group_internal": {
+                "convention": "a unique group's own exceptions and non-excluded pairs keep "
+                              "their physical values at its dummy end (Amber: interactions "
+                              "among the disappearing atoms are not changed); vacuum Coulomb "
+                              "and Lennard-Jones, per connected group, never across groups",
+                "coulomb_constant_kj_mol_nm_e2": COULOMB_CONSTANT,
+                "force": internal_force,
+                "groups": unique_groups,
+                "pairs": internal_pairs,
+            },
+        },
         "terms": term_slots,
         "constraints": constraint_record,
         "restraint": restraint,

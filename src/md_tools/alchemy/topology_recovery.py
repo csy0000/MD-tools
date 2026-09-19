@@ -26,9 +26,10 @@ instead:
 
         E_endpoint(x) = E_reference(x_phys) + E_dummy(x) + dE_dispersion + E_restraint
 
-    per force class, with E_dummy and E_restraint evaluated here in numpy from the plan's own
-    record, and dE_dispersion the change in OpenMM's long-range dispersion correction caused by
-    the zero-epsilon dummy particles (it averages over every particle). Nothing is left in a
+    per force class, with E_dummy (retained bonded terms plus each unique group's internal
+    nonbonded energy) and E_restraint evaluated here in numpy from the plan's own record, and
+    dE_dispersion the change in OpenMM's long-range dispersion correction caused by the
+    zero-epsilon dummy particles (it averages over every particle). Nothing is left in a
     residual that the accounting does not name.
 """
 
@@ -46,6 +47,7 @@ __all__ = [
     "dummy_energy",
     "endpoint_accounting",
     "factorization_check",
+    "internal_nonbonded_energy",
     "restraint_energy",
 ]
 
@@ -116,6 +118,7 @@ def dummy_energy(record: dict, endpoint: str, positions_nm: np.ndarray, *,
         dummies &= set(atoms)
     side = endpoint.lower()
     out = {"bonds": 0.0, "angles": 0.0, "torsions": 0.0}
+    out.update(internal_nonbonded_energy(record, endpoint, positions_nm, atoms=dummies))
     for family, slots in record["terms"].items():
         for slot in slots:
             if not dummies & set(slot["atoms"]):
@@ -125,6 +128,42 @@ def dummy_energy(record: dict, endpoint: str, positions_nm: np.ndarray, *,
             elif include_removed and slot["at_dummy_end"] == "dummy-removed":
                 physical = slot["b" if endpoint == "A" else "a"]
                 out[family] += _term_energy(family, slot, physical, positions_nm)
+    return out
+
+
+def _vacuum_pair(r: float, qq: float, sigma: float, epsilon: float) -> float:
+    from .topology import COULOMB_CONSTANT
+
+    return COULOMB_CONSTANT * qq / r + 4.0 * epsilon * ((sigma / r) ** 12 - (sigma / r) ** 6)
+
+
+def internal_nonbonded_energy(record: dict, endpoint: str, positions_nm: np.ndarray, *,
+                              atoms: Optional[set] = None) -> dict[str, float]:
+    """The unique groups' INTERNAL nonbonded energy at the endpoint where they are dummies.
+
+    `internal_exceptions` is carried by the NonbondedForce (the group's own 1-4 exceptions, kept
+    physical), `internal_pairs` by the `UniqueGroupInternalNonbonded` CustomBondForce (its
+    non-excluded pairs). Vacuum Coulomb and Lennard-Jones, over the group's internal distances
+    only, so it separates from the physical system exactly as the retained bonded terms do.
+    Molecules are taken as contiguous in the coordinates (no minimum image).
+    """
+    endpoint = endpoint.upper()
+    dummies = set(record["particles"]["b_only" if endpoint == "A" else "a_only"])
+    if atoms is not None:
+        dummies &= set(atoms)
+    side = endpoint.lower()
+    x = positions_nm
+    out = {"internal_exceptions": 0.0, "internal_pairs": 0.0}
+    for slot in record["nonbonded"]["exceptions"]:
+        i, j = slot["atoms"]
+        if slot.get("unique_group_internal") and i in dummies and j in dummies:
+            out["internal_exceptions"] += _vacuum_pair(float(np.linalg.norm(x[j] - x[i])),
+                                                       *slot[side])
+    for pair in record["nonbonded"]["unique_group_internal"]["pairs"]:
+        i, j = pair["atoms"]
+        if pair["dummy_at"] == endpoint and i in dummies and j in dummies:
+            out["internal_pairs"] += _vacuum_pair(float(np.linalg.norm(x[j] - x[i])),
+                                                  *pair["physical"])
     return out
 
 
@@ -337,11 +376,14 @@ def audit_plan(plan, package_a, package_b, env_system) -> dict[str, Any]:
             q, _, e = nb.getParticleParameters(d)
             if _q(q) != 0.0 or _q(e) != 0.0:
                 raise TopologyError(f"endpoint {side}: dummy {d} has charge or epsilon")
+        group_of = {h: n for n, g in enumerate(
+            record["nonbonded"]["unique_group_internal"]["groups"]) for h in g["atoms"]}
         for k in range(nb.getNumExceptions()):
             i, j, qq, _, e = nb.getExceptionParameters(k)
-            if (i in dummies or j in dummies) and (_q(qq) != 0.0 or _q(e) != 0.0):
-                raise TopologyError(f"endpoint {side}: exception {i}-{j} touches a dummy and "
-                                    f"is not zero")
+            inside = i in group_of and group_of.get(j, -1) == group_of[i]
+            if (i in dummies or j in dummies) and not inside and (_q(qq) != 0.0 or _q(e) != 0.0):
+                raise TopologyError(f"endpoint {side}: exception {i}-{j} touches a dummy, is not "
+                                    f"inside its unique group, and is not zero")
 
     # the environment is untouched outside the ligand
     ligand = set(record["particles"]["common"]) | set(record["particles"]["a_only"])
@@ -461,7 +503,9 @@ def endpoint_accounting(plan, endpoint: str, reference_system, reference_to_hybr
         "HarmonicBondForce": reference.get("HarmonicBondForce", 0.0) + dummy["bonds"],
         "HarmonicAngleForce": reference.get("HarmonicAngleForce", 0.0) + dummy["angles"],
         "PeriodicTorsionForce": reference.get("PeriodicTorsionForce", 0.0) + dummy["torsions"],
-        "NonbondedForce": reference.get("NonbondedForce", 0.0) + dispersion,
+        "NonbondedForce": (reference.get("NonbondedForce", 0.0) + dispersion
+                           + dummy["internal_exceptions"]),
+        "CustomBondForce": dummy["internal_pairs"],
         "CustomCentroidBondForce": restraint,
     }
     for name, value in reference.items():
@@ -473,7 +517,7 @@ def endpoint_accounting(plan, endpoint: str, reference_system, reference_to_hybr
         "platform": RECOVERY_PLATFORM,
         "hybrid": hybrid,
         "reference": reference,
-        "dummy_bonded": dummy,
+        "dummy": dummy,
         "dispersion_correction_shift": dispersion,
         "restraint": restraint,
         "raw_total_difference": sum(hybrid.values()) - sum(reference.values()),
