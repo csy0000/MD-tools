@@ -54,6 +54,7 @@ A2 — individual development does not.
 | `f0fbe17` | merge S3 at `1feabee`: the Amber18 softcore Hamiltonian | fast lane on the combined tree (CUDA hidden, `MD_DATA` temp root, empty afterwards): 2329 passed, 3 skipped, 2 failed — both environmental, below; both inventory guards PASS |
 | `d4ce201` | merge S2 at `53410f6`: applied 1-4 scale from the build record, CMAP complex leg; `integration:` `9727676` makes `environment.record` required in `combine-topology` | 318 passed (alchemy, CLI, ligand incl. aliases; CUDA hidden), both inventory guards PASS, `MD_DATA` temp root empty; committed fixture build logs carry no machine path (hostname and user redacted) |
 | `131547f` | merge S3 at `a3d7285`: environment virtual sites; the Hamiltonian over the CMAP complex plan | 328 passed (alchemy, CLI, ligand; CUDA hidden), both inventory guards PASS, `MD_DATA` temp root empty |
+| `5b16b54` | merge S2 at `a4d020b`: `build-top solvent.model: vacuum` (ligand only; refusals by name), `matched_legs` and a ligand-Hamiltonian digest in every plan (OPC-vs-vacuum refused), the applied 1-4 scale always recorded; `build-md` refuses a vacuum System | fast lane (CUDA hidden, `MD_DATA` temp root, empty afterwards): 2366 passed, 3 skipped, 2 failed — the two environmental ones; slow build-top/ligand/protonation files: 39 passed; both inventory guards PASS. **Open:** `md-run` given a vacuum `built.xml` directly treats it as implicit (`preflight.py` `implicit = not periodic`) |
 
 ## Blockers
 
