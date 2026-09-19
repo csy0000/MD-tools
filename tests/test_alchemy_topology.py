@@ -168,10 +168,10 @@ def test_dummies_interact_with_nothing(hybrid, side):
         x[dummies] = x[8 + 3 * trial] + rng.normal(scale=0.05, size=(len(dummies), 3))
         moved = _energies_by_class(hybrid.system(side), x)
         moved_dummy = sum(dummy_energy(hybrid.record, side, x).values())
-        assert abs(moved["NonbondedForce"] - base["NonbondedForce"]) < ENERGY_TOL_KJ
-        bonded = sum(moved[k] - base[k] for k in ("HarmonicBondForce", "HarmonicAngleForce",
-                                                  "PeriodicTorsionForce"))
-        assert abs(bonded - (moved_dummy - base_dummy)) < ENERGY_TOL_KJ
+        # everything that changed is the dummies' own energy: retained bonded terms and, for a
+        # group with internal pairs, its internal nonbonded energy -- nothing with the solvent
+        changed = sum(moved[k] - base[k] for k in moved)
+        assert abs(changed - (moved_dummy - base_dummy)) < ENERGY_TOL_KJ
 
 
 # ------------------------------------------------------------------------------------------------
@@ -376,7 +376,7 @@ def test_dual_topology_shares_no_particle_and_restrains_the_centroids(eta, cle, 
         worst = max(abs(v) for v in accounting["residual"].values())
         assert worst < ENERGY_TOL_KJ, accounting
         # the dummy ligand keeps every bonded term of its own
-        assert sum(accounting["dummy_bonded"].values()) != 0.0
+        assert sum(accounting["dummy"].values()) != 0.0
 
 
 def test_dual_restraint_accounting_is_not_vacuous(eta, cle, water):
@@ -666,3 +666,118 @@ def test_openfe_dummy_group_limitation_is_addressed_as_a_free_energy(hybrid):
     assert abs(kept[1] - kept[0]) < 1e-9
     # the OpenFE-style set: a conformation-dependent dummy free energy, well above sampling noise
     assert abs(everything[1] - everything[0]) > 0.1, everything
+
+
+# ------------------------------------------------------------------------------------------------
+# a unique group's internal nonbonded interactions (S0 ruling: kept physical at the dummy end)
+# ------------------------------------------------------------------------------------------------
+def _pentane_plan(env):
+    from tests.alchemy_fixtures import PENTANE
+
+    a, b = package(ETHANE), package(PENTANE)
+    return a, b, _build(a, b, core_map(a, b), env, "hybrid")
+
+
+def _internal_by_hand(pkg, hyb, group_hyb, x):
+    """The group's internal nonbonded energy straight from the PACKAGE table, not the plan.
+
+    Every exception with both atoms in the group, and every other pair inside it with
+    Lorentz-Berthelot parameters, as vacuum Coulomb + Lennard-Jones.
+    """
+    import itertools
+    import math
+
+    from md_tools.alchemy.topology import COULOMB_CONSTANT
+
+    local = {h: i for i, h in enumerate(hyb)}
+    members = sorted(local[h] for h in group_hyb)
+    exceptions = {(r[0], r[1]): r[2:5] for r in pkg.table["exceptions"]}
+
+    def pair(i, j, qq, sigma, epsilon):
+        r = float(np.linalg.norm(x[hyb[i]] - x[hyb[j]]))
+        return COULOMB_CONSTANT * qq / r + 4 * epsilon * ((sigma / r) ** 12 - (sigma / r) ** 6)
+
+    total, n_exc, n_pairs = 0.0, 0, 0
+    for i, j in itertools.combinations(members, 2):
+        if (i, j) in exceptions:
+            total += pair(i, j, *exceptions[(i, j)])
+            n_exc += exceptions[(i, j)][0] != 0.0 or exceptions[(i, j)][2] != 0.0
+        else:
+            qi, si, ei = pkg.table["atoms"][i][2:5]
+            qj, sj, ej = pkg.table["atoms"][j][2:5]
+            total += pair(i, j, qi * qj, 0.5 * (si + sj), math.sqrt(ei * ej))
+            n_pairs += 1
+    return total, n_exc, n_pairs
+
+
+def test_the_pentane_fixture_can_see_internal_nonbonded_terms(water):
+    a, b, plan = _pentane_plan(water)
+    group = next(g for g in plan.record["dummy_groups"] if g["dummy_at"] == "A")
+    assert sorted(group["local_names"]) == sorted(
+        ["C3", "C4", "C5", "H6", "H7", "H8", "H9", "H10", "H11", "H12"])
+    hyb = plan.record["endpoints"]["B"]["hybrid_index_of_local_atom"]
+    energy, n_exc, n_pairs = _internal_by_hand(b, hyb, group["atoms"], plan.positions_nm)
+    assert n_exc > 0 and n_pairs > 0 and abs(energy) > 100 * ENERGY_TOL_KJ
+
+
+def test_internal_terms_are_accounted_at_the_dummy_end_and_match_the_package(water):
+    a, b, plan = _pentane_plan(water)
+    accounting = _accounting(plan, water, a, "A")
+    _assert_closes(accounting, raw_at_least=1e-2)
+    group = next(g for g in plan.record["dummy_groups"] if g["dummy_at"] == "A")
+    hyb = plan.record["endpoints"]["B"]["hybrid_index_of_local_atom"]
+    by_hand, _, _ = _internal_by_hand(b, hyb, group["atoms"], plan.positions_nm)
+    named = accounting["dummy"]["internal_exceptions"] + accounting["dummy"]["internal_pairs"]
+    assert abs(named - by_hand) < ENERGY_TOL_KJ
+    assert accounting["dummy"]["internal_pairs"] != 0.0
+
+
+def test_annihilating_the_internal_terms_fails_the_endpoint_test(water):
+    """The guard can fail: the S0-ruled endpoint is NOT reproduced by a fully annihilated dummy."""
+    from openmm import NonbondedForce, XmlSerializer
+
+    from md_tools.alchemy.topology_recovery import (_dispersion, _energies_by_class,
+                                                    dummy_energy)
+
+    a, b, plan = _pentane_plan(water)
+    annihilated = XmlSerializer.clone(plan.system_a)
+    internal = plan.record["nonbonded"]["unique_group_internal"]
+    for force in annihilated.getForces():
+        if isinstance(force, NonbondedForce):
+            for slot in plan.record["nonbonded"]["exceptions"]:
+                if slot["unique_group_internal"] and slot["role"] == "b-only":
+                    i, j = slot["atoms"]
+                    force.setExceptionParameters(slot["slot"], i, j, 0.0, slot["a"][1], 0.0)
+        if force.getName() == internal["force"]:
+            for k in range(force.getNumBonds()):
+                i, j, params = force.getBondParameters(k)
+                force.setBondParameters(k, i, j, [0.0, params[1], 0.0])
+    reference, index = independent_reference(plan, water, a, "A")
+    x = plan.positions_nm
+    expected = (sum(_energies_by_class(reference, x[index]).values())
+                + sum(dummy_energy(plan.record, "A", x).values())
+                + _dispersion(plan.system_a, x) - _dispersion(reference, x[index]))
+    kept = sum(_energies_by_class(plan.system_a, x).values())
+    gone = sum(_energies_by_class(annihilated, x).values())
+    assert abs(kept - expected) < ENERGY_TOL_KJ
+    assert abs(gone - expected) > 100 * ENERGY_TOL_KJ
+
+
+@pytest.mark.parametrize("side", ["A", "B"])
+def test_pentane_recovers_both_endpoints_in_vacuum(side):
+    from tests.alchemy_fixtures import PENTANE
+
+    a, b = package(ETHANE), package(PENTANE)
+    env = vacuum_environment(a)
+    plan = _build(a, b, core_map(a, b), env, "hybrid")
+    accounting = _accounting(plan, env, a if side == "A" else b, side)
+    worst = max(abs(v) for v in accounting["residual"].values())
+    assert worst < ENERGY_TOL_KJ, accounting
+
+
+def test_internal_terms_do_not_break_separability(water):
+    a, b, plan = _pentane_plan(water)
+    detail = next(c["detail"] for c in plan.record["checks"]
+                  if c["check"] == "dummy-factorization")
+    propyl = next(g for g in detail["groups"] if g["dummy_at"] == "A")
+    assert propyl["retained_terms_max_variation_kj_mol"] < 1e-9

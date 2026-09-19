@@ -28,6 +28,12 @@ ETHANE = "LOCAL-OTMSDBZUPAUEDD/param_cf41a2bd76f4"
 CHLOROETHANE = "LOCAL-HRYZWHHZPQKTII/param_5930c10b0577"
 ETHANOL = "LOCAL-LFQSCWFLJHTTHZ/param_d66453ef683a"
 
+#: A separate versioned fixture (`tests/data/alchemy/internal-v1/`), added without touching v1:
+#: n-pentane, whose propyl group left unmapped by the ethyl CORE has internal 1-4 exceptions and
+#: non-excluded 1-5 pairs -- the unique-group internal nonbonded terms v1 cannot see.
+INTERNAL_PACKAGES = FIXTURE_ROOT.parent / "internal-v1" / "packages"
+PENTANE = "LOCAL-OFBQJSOFQDEBGM/param_2ef743cf164f"
+
 #: The ethyl fragment every fixture shares, by package atom name.
 CORE = ("C1", "C2", "H1", "H2", "H3", "H4", "H5")
 
@@ -41,7 +47,8 @@ ENERGY_TOL_KJ = 1e-7
 def package(reference: str):
     from md_tools.ligands import load_package
 
-    return load_package(PACKAGES / reference)
+    root = INTERNAL_PACKAGES if reference == PENTANE else PACKAGES
+    return load_package(root / reference)
 
 
 def water_environment():
