@@ -241,6 +241,29 @@ central_bonds:
 - Its resolved contents and sha256 are copied into the selection record; the path alone is not
   provenance.
 
+### The ladder's direct Python API: caller-supplied rungs are declared, recorded, never re-derived
+
+**Decided by the user, 2026-09-19.** `md-run` and the generated scripts already read every rung from
+a saved state named in the group file and verify it against `scaler.yaml`. The direct Python path
+did not: `ReplicaRun._rung_systems` accepted a hand-built `LadderPreflight.rung_systems` after
+checking only their count, and with no rungs at all it re-derived scaled rungs at run time. Both
+contradict "a scaled Hamiltonian is built once, as a file, never re-derived".
+
+- **Run-time re-derivation is refused outright**, on every path. No plan, no ladder.
+- **Caller-supplied rungs require an explicit declaration**: `rung_source="caller-supplied"` and a
+  non-empty `rung_source_reason`. Without it, supplied `rung_systems` are refused. The saved-state
+  preflight sets `rung_source="saved-states"`; a caller cannot set that value.
+- **Every rung's origin is recorded**, in `restart.json` and `solute.yaml`: its canonical System
+  digest and, compared against the `scaler.yaml` states, either `saved-state <i> (verified)` or
+  `caller-modified`, together with the declared reason. A caller-modified rung is allowed — a biased
+  auxiliary rung is a legitimate method — but it is never presented as a saved state.
+- Count, particle number, masses and constraints are checked against the saved states' System.
+- The declaration and each rung's origin are part of the ladder identity, so resuming with a
+  different set of rungs, or a different declaration, is refused.
+
+The first user of this path is hpREST2's OPES-REST2 (six saved-state tau rungs plus one hot rung
+carrying a bias force). It must keep working with the declaration added and nothing else changed.
+
 ## 4. The alchemical topology plan (0.7.0)
 
 A record independent of the MD runner. It is produced by `combine-topology` and consumed by the
