@@ -271,44 +271,59 @@ CUDA_SITES = {
         "of it passes --cpu and is not CUDA evidence"),
     "alchemy/hamiltonian.py::AlchemicalHamiltonian.set_state": (
         "sets every public and derived Context parameter of the softcore Hamiltonian on the Context it is given -- the caller's, whose platform came from platform_policy (S4's sampling or evaluation Context); it reads the Context's parameter names first and refuses a Context missing any",
-        "NONE RUN YET -- BLOCKED: no CUDA card is allocated to S3. The lane is written: "
-        "test_alchemy_hamiltonian_cuda.py::test_cuda_matches_reference_per_force_group (per-group "
-        "energies, forces and derivatives against Reference, mixed and double, asserting the "
-        "platform name is CUDA) and test_alchemy_hamiltonian_cuda_dynamics.py (NVE conservation "
-        "and a live set_state, CUDA only); every current run of this function is Reference "
-        "and is not CUDA evidence"),
+        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
+        "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
+        "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
+        "consistency with injected defects shown to fail) -- and "
+        "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
+        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
+        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
+        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
     "alchemy/hamiltonian.py::AlchemicalHamiltonian.energy": (
         "sets the state and reads the total potential energy off the caller's Context",
-        "NONE RUN YET -- BLOCKED: no CUDA card is allocated to S3. The lane is written: "
-        "test_alchemy_hamiltonian_cuda.py::test_cuda_matches_reference_per_force_group (per-group "
-        "energies, forces and derivatives against Reference, mixed and double, asserting the "
-        "platform name is CUDA) and test_alchemy_hamiltonian_cuda_dynamics.py (NVE conservation "
-        "and a live set_state, CUDA only); every current run of this function is Reference "
-        "and is not CUDA evidence"),
+        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
+        "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
+        "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
+        "consistency with injected defects shown to fail) -- and "
+        "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
+        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
+        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
+        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
     "alchemy/hamiltonian.py::AlchemicalHamiltonian._energy": (
         "reads one force group's potential energy off the caller's Context",
-        "NONE RUN YET -- BLOCKED: no CUDA card is allocated to S3. The lane is written: "
-        "test_alchemy_hamiltonian_cuda.py::test_cuda_matches_reference_per_force_group (per-group "
-        "energies, forces and derivatives against Reference, mixed and double, asserting the "
-        "platform name is CUDA) and test_alchemy_hamiltonian_cuda_dynamics.py (NVE conservation "
-        "and a live set_state, CUDA only); every current run of this function is Reference "
-        "and is not CUDA evidence"),
+        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
+        "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
+        "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
+        "consistency with injected defects shown to fail) -- and "
+        "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
+        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
+        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
+        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
     "alchemy/hamiltonian.py::AlchemicalHamiltonian.derivative_components": (
         "reads OpenMM energy-parameter derivatives per custom force group, then evaluates each end-state NonbondedForce group at weights 1 and 0 (six restricted evaluations, each a PME on CUDA) on the caller's Context, and restores the state",
-        "NONE RUN YET -- BLOCKED: no CUDA card is allocated to S3. The lane is written: "
-        "test_alchemy_hamiltonian_cuda.py::test_cuda_matches_reference_per_force_group (per-group "
-        "energies, forces and derivatives against Reference, mixed and double, asserting the "
-        "platform name is CUDA) and test_alchemy_hamiltonian_cuda_dynamics.py (NVE conservation "
-        "and a live set_state, CUDA only); every current run of this function is Reference "
-        "and is not CUDA evidence"),
+        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
+        "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
+        "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
+        "consistency with injected defects shown to fail) -- and "
+        "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
+        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
+        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
+        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
     "alchemy/hamiltonian.py::AlchemicalHamiltonian.derivative_components.swing": (
         "moves one derived weight parameter to 1, then 0, then back, on the caller's Context, for the exact NonbondedForce derivative algebra",
-        "NONE RUN YET -- BLOCKED: no CUDA card is allocated to S3. The lane is written: "
-        "test_alchemy_hamiltonian_cuda.py::test_cuda_matches_reference_per_force_group (per-group "
-        "energies, forces and derivatives against Reference, mixed and double, asserting the "
-        "platform name is CUDA) and test_alchemy_hamiltonian_cuda_dynamics.py (NVE conservation "
-        "and a live set_state, CUDA only); every current run of this function is Reference "
-        "and is not CUDA evidence"),
+        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
+        "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
+        "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
+        "consistency with injected defects shown to fail) -- and "
+        "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
+        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
+        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
+        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
 }
 
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
