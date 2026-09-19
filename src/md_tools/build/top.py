@@ -30,7 +30,8 @@ from typing import Any
 
 import yaml
 
-from ..openmm.system_defaults import DEFAULT_PADDING_NM, SOLVENTS, canonical_solvent, is_implicit
+from ..openmm.system_defaults import (DEFAULT_PADDING_NM, SOLVENTS, canonical_solvent, is_implicit,
+                                      is_vacuum)
 from .record import LogWriter, file_facts, openmm_platform_facts
 from .strict import ConfigError, Field, Schema, Section, load_yaml_strictly
 
@@ -252,7 +253,13 @@ BUILD_SCHEMA = Schema(
             Field("model", str, default="TIP3P", enum=tuple(SOLVENTS),
                   doc="TIP3P or OPC give an explicit, periodic, solvated system. GBn2 is IMPLICIT "
                       "solvent: no water, no box, no ions, no barostat and no NPT stage anywhere "
-                      "downstream. Choosing GBn2 changes what the rest of this file may say."),
+                      "downstream. Choosing GBn2 changes what the rest of this file may say.\n"
+                      "  vacuum is NO solvent: the molecule alone, NoCutoff, no box, no ions, "
+                      "constraints as configured. It exists for the vacuum leg of an alchemical "
+                      "cycle and nothing else: only `solute.kind: ligand` is accepted, any stated "
+                      "box, cutoff or ion key (or a non-zero ionic strength) is refused, and "
+                      "`build-md` refuses a vacuum System -- ordinary MD in vacuum is not "
+                      "supported."),
             Field("padding_nm", float, default=DEFAULT_PADDING_NM, minimum=0.5, maximum=5.0,
                   unit="nm",
                   doc="Minimum distance from the solute to the box boundary. The built box may be "
@@ -273,7 +280,8 @@ BUILD_SCHEMA = Schema(
             Field("cutoff_nm", float, default=1.0, minimum=0.6, maximum=2.0, unit="nm",
                   doc="Nonbonded real-space cutoff. The box must be at least twice this in its "
                       "smallest reduced height; if it is not, the box is grown and that is logged."),
-        ], doc="Solvent treatment. Under GBn2 every key here except `model` is inapplicable."),
+        ], doc="Solvent treatment. Under GBn2 or vacuum every key here except `model` is "
+               "inapplicable."),
         Section("constraints", [
             Field("type", str, default="HBonds", enum=("HBonds", "AllBonds", "None"),
                   doc="HBonds constrains the LENGTH of every bond to a hydrogen, and permits the "
@@ -341,6 +349,31 @@ def _check_pairings(resolved: dict[str, Any]) -> None:
     """Refuse combinations that are individually valid and jointly wrong."""
     solvent = canonical_solvent(resolved["solvent"]["model"])
     implicit = is_implicit(solvent)
+    if is_vacuum(solvent):
+        # AN ALCHEMICAL VACUUM LEG, and only that. A peptide, protein or complex in vacuum is a
+        # different system nobody asked this tool to model, and a peptide-like build is a ligand
+        # build whose chemistry is then mapped for implicit radii -- none of which applies here.
+        kind = str(resolved["solute"]["kind"])
+        if kind != "ligand":
+            raise ConfigError(
+                f"solvent.model is vacuum but solute.kind is {kind!r}. A vacuum build is the "
+                f"vacuum leg of an alchemical cycle: ONE small molecule (solute.kind: ligand, "
+                f"from .smi, .sdf or a parameter package), NoCutoff, no box. A peptide, protein, "
+                f"peptide-like solute or complex in vacuum is refused.")
+        stated_solvent = resolved.get("_explicit_keys", {}).get("solvent", ())
+        for key in ("padding_nm", "box_shape", "cutoff_nm", "positive_ion", "negative_ion"):
+            if key in stated_solvent:
+                raise ConfigError(
+                    f"solvent.{key} is set, but solvent.model is vacuum: there is no box, no "
+                    f"periodic boundary, no cutoff and no salt. Remove the key; it would be "
+                    f"ignored, and a reader of the build would believe it applied.")
+        if "ionic_strength_molar" in stated_solvent and \
+                float(resolved["solvent"]["ionic_strength_molar"]) != 0.0:
+            raise ConfigError(
+                f"solvent.ionic_strength_molar is {resolved['solvent']['ionic_strength_molar']} "
+                f"but solvent.model is vacuum: there is no solvent to hold salt. Remove the key "
+                f"or set it to 0.")
+        return
     if implicit:
         # ff19SB with GBn2 is refused HERE, where the protein force field the file asked for is
         # still visible. Downstream it is not: the implicit branch of `_sys_document` takes the
@@ -571,7 +604,7 @@ def _sys_document(resolved: dict[str, Any]) -> dict[str, Any]:
         document["forcefield"]["protein"] = IMPLICIT_PROTEIN_FORCEFIELDS[protein]
     else:
         document["forcefield"]["protein"] = PROTEIN_FORCEFIELDS[protein]
-    if not is_implicit(solvent):
+    if not is_implicit(solvent) and not is_vacuum(solvent):
         document["solvent"].update({
             "model": solvent,
             "padding_nm": resolved["solvent"]["padding_nm"],
@@ -584,7 +617,7 @@ def _sys_document(resolved: dict[str, Any]) -> dict[str, Any]:
     hmr_block = resolved["hydrogen_mass_repartitioning"]
     document["constraints"] = {
         "type": resolved["constraints"]["type"],
-        "rigid_water": (False if is_implicit(solvent)
+        "rigid_water": (False if is_implicit(solvent) or is_vacuum(solvent)
                         else bool(resolved["constraints"]["rigid_water"])),
         # The builders take a scalar-or-null; the CONFIGURATION states it explicitly. `enabled:
         # false` collapses to null here, which is what "the force field's own masses" means to
@@ -1100,6 +1133,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
     solvent = canonical_solvent(resolved["solvent"]["model"])
     implicit = is_implicit(solvent)
+    vacuum = is_vacuum(solvent)
     # Two names for two different questions. `route` is how the System is BUILT and has exactly
     # two values, because there are exactly two parameterisation paths; `kind` is what the solute
     # IS and has three. `peptide-like` is a ligand build whose chemistry is then mapped.
@@ -1126,7 +1160,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     log.heading("Resolved configuration")
     for section in ("solute", "forcefield", "solvent", "constraints"):
         for key, value in resolved[section].items():
-            if implicit and section == "solvent" and key != "model":
+            if (implicit or vacuum) and section == "solvent" and key != "model":
                 continue
             origin = "set" if key in stated.get(section, ()) else "default"
             log.field(f"{section}.{key}", f"{value}   ({origin})")
@@ -1174,11 +1208,12 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         log.field("small-molecule FF", resolved["solute"]["ligand_forcefield"])
 
     log.field("solvent treatment", "implicit (no box, no ions, no barostat)" if implicit
-                                   else f"explicit {solvent}, periodic")
+                                   else "vacuum (no solvent, no box, NoCutoff; an alchemical leg)"
+                                   if vacuum else f"explicit {solvent}, periodic")
 
     from ..openmm.system_config import pairing_warnings
     from ..openmm.builders import (Log as _BuilderLog, _build_explicit, _build_implicit,
-                               _legacy_cfg)
+                                   _build_vacuum, _legacy_cfg)
 
     # `sys_resolved` came from `_resolution`, which records what RESOLVES; see there.
     cfg = _legacy_cfg(sys_resolved)
@@ -1250,7 +1285,8 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         # echo=False: this module re-emits the builder's lines into its own log below, and
         # letting the builder echo too prints every preparation line twice.
         builder_log = _BuilderLog(staging / "builder.log", echo=False)
-        builder = _build_implicit if implicit else _build_explicit
+        builder = (_build_implicit if implicit else _build_vacuum if vacuum
+                   else _build_explicit)
         structure_path = input_path
         if complex_build:
             from ..openmm.builders import _build_complex
@@ -1308,13 +1344,15 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             log.field("solute residue", f"{residue_name}  OK")
 
         periodic = system.usesPeriodicBoundaryConditions()
-        if implicit and periodic:
-            raise ConfigError("an implicit-solvent System must not be periodic, but this one is")
-        if not implicit and not periodic:
+        if (implicit or vacuum) and periodic:
+            raise ConfigError(f"an {'implicit-solvent' if implicit else 'vacuum'} System must "
+                              f"not be periodic, but this one is")
+        if not implicit and not vacuum and not periodic:
             raise ConfigError(f"an explicit-solvent ({solvent}) System must be periodic, but this "
                               f"one is not")
+        treatment = "implicit" if implicit else "vacuum" if vacuum else "explicit"
         log.field("periodicity", f"{'periodic' if periodic else 'non-periodic'}  OK "
-                                 f"({'explicit' if not implicit else 'implicit'})")
+                                 f"({treatment})")
 
         box = None
         if periodic:
@@ -1356,9 +1394,10 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         log.field("atoms", n_pdb)
         log.field("residues", len(residues))
         log.field("solute atoms", record["n_solute_atoms"])
-        log.field("waters", waters if not implicit else "0 (implicit solvent)")
+        log.field("waters", waters if not (implicit or vacuum)
+                  else f"0 ({treatment})")
         _ions = record.get("ions") or {}
-        log.field("ions", _ions.get("counts", _ions) if not implicit else "none")
+        log.field("ions", _ions.get("counts", _ions) if not (implicit or vacuum) else "none")
 
         # What was ACTUALLY loaded, not what the configuration asked for. The two differ in ways
         # that matter: the water label is short but ForceField() is given the qualified resource
@@ -1380,10 +1419,10 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             periodic=bool(periodic),
             box_vectors_nm=box,
             box_geometry=record.get("box_geometry"),
-            solvent={"treatment": "implicit" if implicit else "explicit",
+            solvent={"treatment": treatment,
                      "model": solvent,
                      "water_model": record.get("water_model"),
-                     "ions": record.get("ions") if not implicit else None},
+                     "ions": record.get("ions") if not (implicit or vacuum) else None},
             forcefield=sys_resolved.get("forcefield"),
             hmr=hmr,
             platform=openmm_platform_facts(),
@@ -1525,7 +1564,8 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         log.complete()
         log.heading("Summary")
         log(f"  built {n_pdb} particles, {len(residues)} residues, "
-            f"{'implicit ' + solvent if implicit else 'explicit ' + solvent}")
+            + ("implicit " + solvent if implicit else "vacuum" if vacuum
+               else "explicit " + solvent))
         log(f"  status: completed")
     except BaseException as exc:
         log.fail(f"{type(exc).__name__}: {exc}")
