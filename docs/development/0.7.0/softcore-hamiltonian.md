@@ -222,7 +222,9 @@ h.context_parameters(state); h.record     # the provenance record, plain data
 
 ## Refused
 
-Particles that differ in count, mass or constraints between the end states; virtual sites; a
+Particles that differ in count, mass, constraints or virtual sites between the end states; a
+virtual site that is, or is built from, a softcore particle (environment virtual sites, such as an
+OPC or TIP4P M site, are carried unchanged); a
 dummy that carries charge or epsilon, or a nonzero exception; A-only x B-only pairs not excluded; a
 net charge change; a common particle with LJ at one end only; any nonbonded force other than one
 plain NonbondedForce (GB, custom nonbonded, AMOEBA, Drude, ATM, an already-alchemical System);
