@@ -77,11 +77,22 @@ dummy would no longer factorise. `unscaled` stays implemented and tested. The re
 softcore form (`softcore_function: amber18`) and the boundary rule as two separate facts, so no
 record calls the combination "amber18".
 
-**Consequence for the end states.** Under `scaled`, `U(0)` is System A and `U(1)` is System B,
-plus the other region's internal nonbonded energy. That energy is a function of the group's
-internal coordinates only, so the group remains separable, and it is zero for a group with no
-internal 1-4 or 1-5+ pair (a single atom; ethanol's O-H). The plan annihilates a dummy's internal
-pairs too, so this is an open contract question with S2, recorded in their handoff.
+**The end states are the plan's Systems, exactly.** Contract section 4 (S0's ruling, S2's
+`346e6bf`) makes the plan keep a unique group's own exceptions physical at its dummy end, and puts
+its non-excluded internal pairs in a `UniqueGroupInternalNonbonded` CustomBondForce, which is zero
+at the physical end. That is exactly what this Hamiltonian keeps at every lambda. The builder
+checks the plan's force pair by pair against its own internal pairs, then leaves it out so they are
+not counted twice. Under `scaled`, `U(0)` is System A and `U(1)` is System B to < 1e-8 kJ/mol,
+including for S2's ethane -> n-pentane plan, whose appearing propyl group has internal 1-4s and
+1-5 pairs. "Internal" means one connected group. Pairs between two unique groups on one side are
+zero at the plan's dummy end, and how they switch along lambda is not defined here yet, so more
+than one unique group per side is refused by name.
+
+**One exclusion set.** The CUDA platform refuses a Context whose NonbondedForce and
+CustomNonbondedForces differ in their exclusions; Reference and CPU do not check. Every nonbonded
+force here therefore carries every exception of either end state plus the unique groups' internal
+pairs, and `test_every_nonbonded_force_carries_one_exclusion_set` holds that on CPU. It was found
+by the first CUDA lane.
 
 ## The dispersion correction
 

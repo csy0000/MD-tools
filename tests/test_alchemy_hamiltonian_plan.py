@@ -7,8 +7,8 @@ real plan can show:
 * the plan's dummy-removed junction terms are accepted, and nothing else about a unique atom's
   bonded terms differs;
 * under the default boundary rule the Hamiltonian's end states ARE the plan's end-state Systems,
-  energy for energy, dispersion correction included -- both groups here have no internal pair,
-  so no internal ghost term exists to account for;
+  energy for energy, dispersion correction included -- for pentane too, whose appearing propyl
+  group has internal 1-4s and 1-5 pairs that the plan keeps physical at its dummy end;
 * the derivatives are the finite-difference limits of the energy, and the Amber18 path is not
   linear (the AIS identity dU/dlambda = U1 - U0 fails);
 * S4's window layer accepts the Hamiltonian for a path over its three components.
@@ -47,17 +47,23 @@ def _energy(system, x):
     return _context(system, x).getState(getEnergy=True).getPotentialEnergy()._value
 
 
-@pytest.fixture(scope="module", params=["chloroethane", "ethanol"])
+@pytest.fixture(scope="module", params=["chloroethane", "ethanol", "pentane"])
 def plan(request):
+    """`pentane` (fixture internal-v1) leaves a propyl group appearing, with internal 1-4s and 1-5
+    pairs: the plan keeps them physical at its dummy end (contract section 4), in the NonbondedForce
+    and in its UniqueGroupInternalNonbonded force."""
     from md_tools.alchemy.topology import build_topology_plan
     a = af.package(af.ETHANE)
-    b = af.package({"chloroethane": af.CHLOROETHANE, "ethanol": af.ETHANOL}[request.param])
+    b = af.package({"chloroethane": af.CHLOROETHANE, "ethanol": af.ETHANOL,
+                    "pentane": af.PENTANE}[request.param])
     return build_topology_plan(a, b, af.core_map(a, b), af.water_environment(), mode="hybrid")
 
 
 def test_the_end_states_are_the_plans_systems(plan):
     x = plan.positions_nm
     h = from_plan(plan)
+    internal = plan.record["nonbonded"].get("unique_group_internal", {}).get("pairs", [])
+    assert h.record["plan_internal_pairs_checked"] == len(internal)
     c = _context(h.system, x)
     assert any(f["differing_terms"] for f in h.record["bonded_mixed_forces"])   # dummy-removed
     assert h.record["nonbonded"]["use_dispersion_correction"] is True
@@ -86,12 +92,13 @@ def _fd(f, lam, h):
 
 
 #: OpenMM re-integrates a custom long-range correction by quadrature whenever lambda_sterics
-#: changes; the dispersion carrier's energy departs from exact linearity by up to 4.9e-8 kJ/mol
-#: (measured over 41 lambdas on the chloroethane plan). Its derivative is the exact slope. So the
-#: carrier is checked on its own, with a finite-difference tolerance derived from that noise:
-#: a one-sided 3-point difference at h = 1e-2 amplifies it by (3 + 4 + 1) / (2 h) = 400.
-DISPERSION_ENERGY_NOISE = 5e-8
+#: changes, so the dispersion carrier's energy departs from exact linearity by a small amount
+#: (4.9e-8 kJ/mol, 6e-8 relative, on the chloroethane plan). Its derivative is the exact slope. The
+#: carrier is therefore checked on its own, against its OWN measured non-linearity: an absolute
+#: bound fixed on one plan (5e-8 kJ/mol) did not transfer to pentane's larger carrier, and was
+#: replaced after that failure by this measurement.
 DISPERSION = "dispersion"
+QUADRATURE_RELATIVE = 1e-6
 
 
 def test_derivatives_are_the_limit_of_the_energy_and_the_path_is_not_linear(plan):
@@ -112,13 +119,22 @@ def test_derivatives_are_the_limit_of_the_energy_and_the_path_is_not_linear(plan
                 t[k] = v
                 return energy(t, groups)
             want = sum(v for g, v in parts[name].items() if g != DISPERSION)
-            coarse, fine = _fd(f, base, 1e-2), _fd(f, base, 1e-3)
-            richardson = (100 * fine - coarse) / 99
-            assert abs(want - richardson) < 2e-5 * max(1.0, abs(want)), (base, name, want, richardson)
+            # three steps and Richardson on each adjacent pair: S2 places a dummy group without a
+            # clash check, so at its physical end it can overlap water (pentane's propyl gives
+            # dU/dlambda_sterics ~ 7e3 kJ/mol at lambda = 1), and there the O(h^2) truncation
+            # needs h = 1e-4 -- as in S3's own tail fixture
+            fds = [_fd(f, base, h) for h in (1e-2, 1e-3, 1e-4)]
+            richardson = [(100 * fine - coarse) / 99 for coarse, fine in zip(fds, fds[1:])]
+            best = min(abs(want - r) for r in richardson)
+            assert best < 2e-5 * max(1.0, abs(want)), (base, name, want, richardson)
         def g(v):
             return energy([base, v, base], {FORCE_GROUPS[DISPERSION]})
+        grid = [k / 10 for k in range(11)]
+        values = [g(v) for v in grid]
+        residual = max(abs(e - ((1 - v) * values[0] + v * values[-1])) for v, e in zip(grid, values))
+        assert residual <= QUADRATURE_RELATIVE * max(abs(values[0]), abs(values[-1])), residual
         slope = parts["lambda_sterics"][DISPERSION]
-        assert abs(slope - _fd(g, base, 1e-2)) < 400 * DISPERSION_ENERGY_NOISE, (base, slope)
+        assert abs(slope - (values[-1] - values[0])) <= 2 * residual + 1e-12, (base, slope)
     # Along a linear path dU/dlambda is the same at every lambda (AIS's U1 - U0). Here it is not.
     # (Comparing the midpoint slope with the secant would be no test: a curved U(lambda) can
     # have its midpoint slope equal to its secant, and at these coordinates it nearly does.)

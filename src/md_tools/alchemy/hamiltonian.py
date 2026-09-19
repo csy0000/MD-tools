@@ -112,6 +112,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
 from md_tools.alchemy.softcore import ONE_4PI_EPS0, SoftcoreSettings, pair_expressions
+from md_tools.alchemy.topology import INTERNAL_FORCE_NAME
 
 __all__ = [
     "HAMILTONIAN_SCHEMA", "PUBLIC_PARAMETERS", "FORCE_GROUPS", "AlchemicalHamiltonianError",
@@ -362,7 +363,16 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
     changing_lj = common - static_lj
     record["particles"]["common_lj_changing"] = sorted(changing_lj)
 
+    for label, region in (("A-only", a_set), ("B-only", b_set)):
+        groups = _connected_groups(region, system_a, system_b)
+        if len(groups) > 1:
+            raise AlchemicalHamiltonianError(
+                f"the {label} particles form {len(groups)} separate groups "
+                f"{[sorted(g) for g in groups]}. Pairs BETWEEN two unique groups are zero at the "
+                "dummy end (contract section 4), and how they are switched along lambda is not "
+                "defined here yet; one unique group per side is supported")
     internal_pairs = {"A": _internal_pairs(a_set, A.exceptions), "B": _internal_pairs(b_set, B.exceptions)}
+    checked = _check_internal_force(system_a, system_b, A, B, a_set, b_set, internal_pairs)
     # ONE exclusion set for every nonbonded force in the System. The CUDA platform refuses a
     # Context otherwise ("All Forces must have identical exceptions"); Reference and CPU do not
     # check, so a CPU-only suite passed with forces that differed (found by the first CUDA lane,
@@ -408,6 +418,7 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
             system.addForce(force)
         record["nonbonded"]["dispersion_coefficients_kj_nm3_mol"] = coefficients
     record["bonded_mixed_forces"] = mixed_bonded
+    record["plan_internal_pairs_checked"] = checked
     return AlchemicalHamiltonian(system=system, record=record)
 
 
@@ -458,10 +469,21 @@ def _end_state_problems(A: _EndState, B: _EndState, a_set, b_set, common) -> lis
         only_a = sorted(set(A.exceptions) - set(B.exceptions))[:5]
         only_b = sorted(set(B.exceptions) - set(A.exceptions))[:5]
         out.append(f"the exception pair sets differ (A only {only_a}, B only {only_b})")
-    for label, state, dummies in (("A", A, b_set), ("B", B, a_set)):
-        for (i, j), (qq, _s, ep) in state.exceptions.items():
-            if (i in dummies or j in dummies) and (qq != 0.0 or ep != 0.0):
-                out.append(f"exception {(i, j)} touches a dummy in System {label} but is not zero")
+    for label, state, dummies, physical in (("A", A, b_set, B), ("B", B, a_set, A)):
+        for (i, j), (qq, sg, ep) in state.exceptions.items():
+            if not (i in dummies or j in dummies):
+                continue
+            if i in dummies and j in dummies:
+                # contract section 4: a unique group's own exceptions keep their physical values
+                # at its dummy end (the Amber convention; the plan is the one definition)
+                if not _same(state.exceptions[(i, j)], physical.exceptions[(i, j)]):
+                    out.append(f"exception {(i, j)} is internal to the unique group that is a "
+                               f"dummy in System {label}, and differs from its physical value "
+                               f"{physical.exceptions[(i, j)]}; the plan keeps a group's own "
+                               "exceptions physical at its dummy end")
+            elif qq != 0.0 or ep != 0.0:
+                out.append(f"exception {(i, j)} joins a dummy of System {label} to a particle "
+                           "outside its group, but is not zero")
     for i in a_set:
         for j in b_set:
             if _pair(i, j) not in A.exceptions:
@@ -479,6 +501,90 @@ def _end_state_problems(A: _EndState, B: _EndState, a_set, b_set, common) -> lis
     return out
 
 
+def _same(p, q, rel=1e-12) -> bool:
+    return all(abs(a - b) <= rel * max(1.0, abs(a), abs(b)) for a, b in zip(p, q))
+
+
+def _connected_groups(region, system_a, system_b) -> list[set[int]]:
+    """The region's particles split into groups connected by bonds or constraints (both ends)."""
+    mm = _mm()
+    edges = set()
+    for s in (system_a, system_b):
+        for k in range(s.getNumConstraints()):
+            i, j, _ = s.getConstraintParameters(k)
+            edges.add((i, j))
+        for f in s.getForces():
+            if isinstance(f, mm.HarmonicBondForce):
+                for k in range(f.getNumBonds()):
+                    i, j, *_ = f.getBondParameters(k)
+                    edges.add((i, j))
+    parent = {i: i for i in region}
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i, j in edges:
+        if i in region and j in region:
+            parent[root(i)] = root(j)
+    groups: dict[int, set[int]] = {}
+    for i in region:
+        groups.setdefault(root(i), set()).add(i)
+    return list(groups.values())
+
+
+def _check_internal_force(system_a, system_b, A, B, a_set, b_set, internal_pairs) -> int:
+    """S2's `UniqueGroupInternalNonbonded` force must be exactly the internal pairs this Hamiltonian
+    keeps unscaled: physical values at the group's dummy end, zero at its physical end. It is then
+    left out -- the Hamiltonian's own softcore-internal force carries those pairs at every lambda,
+    and adding the plan's force too would count them twice. Returns the number of pairs checked."""
+    mm = _mm()
+    forces = []
+    for s in (system_a, system_b):
+        found = [f for f in s.getForces() if f.getName() == INTERNAL_FORCE_NAME]
+        if len(found) > 1:
+            raise AlchemicalHamiltonianError(f"more than one {INTERNAL_FORCE_NAME} force")
+        forces.append(found[0] if found else None)
+    fa, fb = forces
+    expected = {**{p: ("B", A) for p in internal_pairs["A"]},     # A's pairs: dummy end is B
+                **{p: ("A", B) for p in internal_pairs["B"]}}
+    if fa is None and fb is None:
+        if expected:
+            raise AlchemicalHamiltonianError(
+                f"the unique groups have {len(expected)} internal non-excluded pair(s), but the end "
+                f"states carry no {INTERNAL_FORCE_NAME} force: by contract section 4 a group's "
+                "internal pairs stay physical at its dummy end, so the end states are not the "
+                "plan's")
+        return 0
+    if fa is None or fb is None or not isinstance(fa, mm.CustomBondForce) \
+            or fa.getNumBonds() != fb.getNumBonds():
+        raise AlchemicalHamiltonianError(f"{INTERNAL_FORCE_NAME} is not the same CustomBondForce "
+                                         "layout in both end states")
+    seen = set()
+    for k in range(fa.getNumBonds()):
+        i, j, pa = fa.getBondParameters(k)
+        i2, j2, pb = fb.getBondParameters(k)
+        key = _pair(i, j)
+        if key != _pair(i2, j2) or key not in expected:
+            raise AlchemicalHamiltonianError(
+                f"{INTERNAL_FORCE_NAME} bond {k} on {key} is not an internal non-excluded pair of "
+                "one unique group")
+        dummy_end, state = expected[key]
+        physical = (state.charge[i] * state.charge[j], 0.5 * (state.sigma[i] + state.sigma[j]),
+                    math.sqrt(state.epsilon[i] * state.epsilon[j]))
+        at_dummy, at_physical = (pb, pa) if dummy_end == "B" else (pa, pb)
+        if not _same(at_dummy, physical) or at_physical[0] != 0.0 or at_physical[2] != 0.0:
+            raise AlchemicalHamiltonianError(
+                f"{INTERNAL_FORCE_NAME} pair {key} is {tuple(at_dummy)} at its dummy end and "
+                f"{tuple(at_physical)} at its physical end; expected {physical} and zero")
+        seen.add(key)
+    if seen != set(expected):
+        raise AlchemicalHamiltonianError(
+            f"{INTERNAL_FORCE_NAME} omits internal pair(s) {sorted(set(expected) - seen)[:5]}")
+    return len(seen)
+
+
 def _internal_pairs(region, exceptions) -> list[tuple[int, int]]:
     """Non-excluded pairs inside a region (not already exceptions)."""
     members = sorted(region)
@@ -491,8 +597,9 @@ def _add_other_forces(system, sa, sb, a_set, b_set) -> list[dict[str, Any]]:
     mixed: list[dict[str, Any]] = []
     for k, (fa, fb) in enumerate(zip(sa.getForces(), sb.getForces())):
         kind = _type(fa)
-        if kind == "NonbondedForce":
-            continue
+        if kind == "NonbondedForce" or fa.getName() == INTERNAL_FORCE_NAME:
+            continue              # the NonbondedForce is rebuilt; the plan's internal-pair force is
+            #                       checked by `_check_internal_force` and carried by group 8
         xa, xb = _xml(fa), _xml(fb)
         if xa == xb:
             copy = mm.XmlSerializer.deserialize(xa)

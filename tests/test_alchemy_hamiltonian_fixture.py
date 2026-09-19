@@ -100,61 +100,46 @@ def test_energy_against_the_reference(periodic, variant, boundary_14):
 @pytest.mark.parametrize("tail", [False, True], ids=["one-atom", "tail"])
 @pytest.mark.parametrize("periodic", [False, True], ids=["vacuum", "pme"])
 def test_physical_end_states(periodic, tail, boundary_14):
-    """U(0) is System A plus B's unscaled ghost terms; U(1) is System B plus A's.
+    """Under the default rule U(0) IS System A and U(1) IS System B, energy for energy: the plan's
+    dummy end already keeps a group's own internal terms physical (contract section 4), which is
+    exactly what the Hamiltonian keeps at every lambda.
 
-    The ghost is exactly what stays at full strength for the region that is not there, summed by
-    hand from the other end state: its internal non-excluded pairs and internal exceptions, and
-    -- only under the Amber18 rule `unscaled` -- its 1-4s with the core. Under `scaled` a
-    one-atom region leaves no ghost at all: U(0) IS System A.
+    Under `unscaled` (the Amber18 manual rule) the other region's 1-4s with the core also stay at
+    full strength, so the end state is the System plus those, summed here by hand from the end
+    state where the region is physical.
     """
     sa, sb, a, b, x, h, c, kw = _setup(periodic, boundary_14, tail=tail)
 
-    def ghost(system, region):
-        """Exceptions touching the region, and non-excluded pairs inside it, as vacuum terms."""
+    def boundary_14s(system, region):
         nb = next(f for f in system.getForces() if type(f).__name__ == "NonbondedForce")
-
-        def r_of(i, j):
-            d = x[j] - x[i]
-            if periodic:
-                d -= BOX * np.round(d / BOX)
-            return float(np.linalg.norm(d))
-
-        def pair(r, qq, sg, ep):
-            return fx.K_COULOMB * qq / r + 4 * ep * ((sg / r) ** 12 - (sg / r) ** 6)
-        total, excepted = 0.0, set()
+        total = 0.0
         for k in range(nb.getNumExceptions()):
             i, j, qq, sg, ep = nb.getExceptionParameters(k)
-            excepted.add((min(i, j), max(i, j)))
-            inside = i in region and j in region
-            if inside or ((i in region or j in region) and boundary_14 == "unscaled"):
-                total += pair(r_of(i, j), qq._value, sg._value, ep._value)
-        for i, j in itertools.combinations(sorted(region), 2):
-            if (i, j) not in excepted:
-                qi, si, ei = (v._value for v in nb.getParticleParameters(i))
-                qj, sj, ej = (v._value for v in nb.getParticleParameters(j))
-                total += pair(r_of(i, j), qi * qj, 0.5 * (si + sj), math.sqrt(ei * ej))
+            if (i in region) != (j in region):
+                d = x[j] - x[i]
+                if periodic:
+                    d -= BOX * np.round(d / BOX)
+                r = float(np.linalg.norm(d))
+                total += fx.K_COULOMB * qq._value / r + 4 * ep._value * (
+                    (sg._value / r) ** 12 - (sg._value / r) ** 6)
         return total
 
     e_a = _context(sa, x).getState(getEnergy=True).getPotentialEnergy()._value
     e_b = _context(sb, x).getState(getEnergy=True).getPotentialEnergy()._value
-    g_a, g_b = ghost(sa, a), ghost(sb, b)
+    ghost_a = ghost_b = 0.0
     if boundary_14 == "unscaled":
-        assert g_a != 0.0 and g_b != 0.0
-    elif not tail:
-        assert g_a == 0.0 and g_b == 0.0
-    else:
-        assert g_a == 0.0 and g_b != 0.0         # only the tail has an inside
-    assert h.energy(c, _state((0, 0, 0))) == pytest.approx(e_a + g_b, abs=TOL[periodic])
-    assert h.energy(c, _state((1, 1, 1))) == pytest.approx(e_b + g_a, abs=TOL[periodic])
+        ghost_a, ghost_b = boundary_14s(sa, a), boundary_14s(sb, b)
+        assert ghost_a != 0.0 and ghost_b != 0.0
+    assert h.energy(c, _state((0, 0, 0))) == pytest.approx(e_a + ghost_b, abs=TOL[periodic])
+    assert h.energy(c, _state((1, 1, 1))) == pytest.approx(e_b + ghost_a, abs=TOL[periodic])
 
 
 def _richardson(estimates):
     """Richardson extrapolation of each ADJACENT pair of estimates, steps a factor 10 apart, both
     O(h^2) (central, and the second-order one-sided form): (100 D(h/10) - D(h)) / 99 cancels the
-    h^2 term. Every pair, not only the smallest steps: with the dispersion correction on, OpenMM
-    re-integrates its long-range correction numerically whenever lambda_sterics changes, which
-    puts ~5e-9 kJ/mol of noise in the energy, so at h = 1e-4 a difference is noise-limited and
-    the (1e-2, 1e-3) pair is the informative one. Reported beside the raw differences."""
+    h^2 term. Every pair, not only the smallest steps: near a clash the (1e-3, 1e-4) pair is the
+    informative one, and with a noise floor the (1e-2, 1e-3) pair. Reported beside the raw
+    differences."""
     return [(100.0 * fine - coarse) / 99.0 for coarse, fine in zip(estimates, estimates[1:])]
 
 

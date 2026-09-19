@@ -9,12 +9,15 @@ Lennard-Jones changes, so the linear mixing of common-core terms is exercised as
 
 followed by an environment: a Cl- close to the substituted site, a Na+, a neutral LJ probe, and
 (periodic variant) TIP3P-like waters with flexible bonds. The end states follow the topology-plan
-dummy convention agreed with S2: in System A the B-only particle has charge 0 and epsilon 0 and
-every exception touching it is zero, System B mirrors that, bonded terms touching a unique particle
-are identical in both, and HA / FB (both on C0) are 1-3 to each other, hence excluded in both.
+dummy convention of the topology plan (contract section 4): in System A the B-only particles have
+charge 0 and epsilon 0 and every exception joining them to anything else is zero, while the group's
+OWN exceptions keep their physical values and its non-excluded internal pairs sit in a
+`UniqueGroupInternalNonbonded` CustomBondForce (zero at the physical end). System B mirrors that.
+Bonded terms touching a unique particle are identical in both, and HA / FB (both on C0) are 1-3 to
+each other, hence excluded in both.
 
-This is S3's own fixture, built in-test while S2's `tests/data/alchemy/` fixture does not exist.
-It is not a topology builder: it hand-writes two Systems and nothing more.
+This is S3's own hand-written fixture, kept beside S2's package fixtures because it is small enough
+for an independent numpy reference. It is not a topology builder.
 
 THE REFERENCE is written from the Amber18 rules, not from `md_tools.alchemy`: explicit pair loops,
 plain Ewald with an explicit k-vector sum (not PME), and bonded energies from the force parameters.
@@ -182,6 +185,29 @@ def build(periodic: bool, *, charges: bool = True, lj: bool = True, bonded: bool
         for j in b_only:
             pairs.setdefault((min(i, j), max(i, j)), 0)
 
+    def particle_params(end: int):
+        params = []
+        for i in range(N_MOLECULE):
+            q = tail_q.get(i, _Q[i][1]) if end == 1 and i in tail_q else _Q[i][end]
+            sg, ep = _LJ[i][end]
+            params.append((q, sg, ep))
+        params += list(_ENV)
+        for idx in range(len(params), len(params) + (4 if tail else 0)):
+            params.append((tail_q[idx], *_TAIL_LJ) if end == 1 else (0.0, _TAIL_LJ[0], 0.0))
+        for _ in waters:
+            params += list(_WATER)
+        return params
+
+    physical = {0: particle_params(0), 1: particle_params(1)}   # region A is physical at end 0
+    region = {0: set(A_ONLY), 1: set(b_only)}
+    internal_pairs = []                                          # (i, j, the end it is physical at)
+    for end, members in region.items():
+        members = sorted(members)
+        for x, i in enumerate(members):
+            for j in members[x + 1:]:
+                if (i, j) not in pairs:
+                    internal_pairs.append((i, j, end))
+
     def system(end: int):
         s = openmm.System()
         for m in masses:
@@ -196,27 +222,38 @@ def build(periodic: bool, *, charges: bool = True, lj: bool = True, bonded: bool
         else:
             nb.setNonbondedMethod(openmm.NonbondedForce.NoCutoff)
         dummy = b_only if end == 0 else A_ONLY
-        params = []
-        for i in range(N_MOLECULE):
-            q = tail_q.get(i, _Q[i][1]) if end == 1 and i in tail_q else _Q[i][end]
-            sg, ep = _LJ[i][end]
-            params.append((q, sg, ep))
-        params += list(_ENV)
-        for idx in range(len(params), len(params) + (4 if tail else 0)):
-            params.append((tail_q[idx], *_TAIL_LJ) if end == 1 else (0.0, _TAIL_LJ[0], 0.0))
-        for _ in waters:
-            params += list(_WATER)
+        params = physical[end]
         for q, sg, ep in params:
             nb.addParticle(q if charges else 0.0, sg, ep if lj else 0.0)
         for (i, j), kind in sorted(pairs.items()):
-            if kind < 4 or i in dummy or j in dummy:
+            # contract section 4: a unique group's OWN 1-4s keep their physical values at its dummy
+            # end; every other exception touching a dummy is zero
+            inside_dummy = i in dummy and j in dummy
+            if kind < 4 or ((i in dummy or j in dummy) and not inside_dummy):
                 nb.addException(i, j, 0.0, 0.1, 0.0)
             else:
-                qi, si, ei = params[i]
-                qj, sj, ej = params[j]
+                source = physical[1 - end] if inside_dummy else params
+                qi, si, ei = source[i]
+                qj, sj, ej = source[j]
                 nb.addException(i, j, (qi * qj / 1.2) if charges else 0.0, 0.5 * (si + sj),
                                 (0.5 * math.sqrt(ei * ej)) if lj else 0.0)
         s.addForce(nb)
+        if internal_pairs:
+            # ...and its non-excluded internal pairs live here at its dummy end, as S2's plan does
+            from md_tools.alchemy.topology import COULOMB_CONSTANT, INTERNAL_FORCE_NAME
+            f = openmm.CustomBondForce(
+                f"{COULOMB_CONSTANT!r}*chargeprod/r + 4*epsilon*((sigma/r)^12 - (sigma/r)^6)")
+            for name in ("chargeprod", "sigma", "epsilon"):
+                f.addPerBondParameter(name)
+            f.setName(INTERNAL_FORCE_NAME)
+            f.setUsesPeriodicBoundaryConditions(periodic)
+            for i, j, phys_end in internal_pairs:
+                qi, si, ei = physical[phys_end][i]
+                qj, sj, ej = physical[phys_end][j]
+                at_dummy = end != phys_end
+                f.addBond(i, j, [qi * qj if (at_dummy and charges) else 0.0, 0.5 * (si + sj),
+                                 math.sqrt(ei * ej) if (at_dummy and lj) else 0.0])
+            s.addForce(f)
         hb, ha, ht = (openmm.HarmonicBondForce(), openmm.HarmonicAngleForce(),
                       openmm.PeriodicTorsionForce())
         for (i, j), pa, pb in bonds:

@@ -86,3 +86,31 @@ def test_cuda_matches_reference_per_force_group(precision, tail):
     print(f"\n{precision} {'tail' if tail else 'one-atom'}: end-state calibration {calib:.2e} kJ/mol, "
           f"forces {force_calib:.2e} kJ/mol/nm; "
           f"worst group |dE| = {max(abs(r[3]) for r in report):.2e}")
+
+
+@pytest.mark.parametrize("precision", ["mixed", "double"])
+def test_cuda_matches_reference_on_the_plan_with_internal_pairs(precision):
+    """S2's real ethane -> n-pentane plan (fixture internal-v1) in TIP3P: an appearing propyl group
+    whose internal 1-4s and 1-5 pairs the plan keeps physical at its dummy end, and which the
+    Hamiltonian carries at every lambda. Same rules as above: calibrated on the plan's System A."""
+    from tests import alchemy_fixtures as af
+    from md_tools.alchemy.hamiltonian import from_plan
+    from md_tools.alchemy.topology import build_topology_plan
+    a, b = af.package(af.ETHANE), af.package(af.PENTANE)
+    plan = build_topology_plan(a, b, af.core_map(a, b), af.water_environment(), mode="hybrid")
+    x = plan.positions_nm
+    plain_cuda = _context(plan.system_a, x, "CUDA", precision)
+    plain_ref = _context(plan.system_a, x, "Reference")
+    calib = abs(_energy(plain_cuda) - _energy(plain_ref))
+    h = from_plan(plan)
+    assert h.record["plan_internal_pairs_checked"] > 0
+    cuda, ref = _context(h.system, x, "CUDA", precision), _context(h.system, x, "Reference")
+    assert cuda.getPlatform().getName() == "CUDA"
+    for v in (0.0, 0.25, 0.5, 0.75, 1.0):
+        state = dict(zip(NAMES, (v, v, v)))
+        e_c, e_r = h.energy(cuda, state), h.energy(ref, state)
+        assert abs(e_c - e_r) <= max(10 * calib, FLOOR[precision] * abs(e_r)), (precision, v, e_c, e_r)
+        d_c, d_r = h.derivatives(cuda, state), h.derivatives(ref, state)
+        for p in NAMES:
+            tol = max(20 * calib, FLOOR[precision] * max(1.0, abs(d_r[p]), abs(e_r)))
+            assert abs(d_c[p] - d_r[p]) <= tol, (precision, v, p, d_c[p], d_r[p], tol)
