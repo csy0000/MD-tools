@@ -1132,7 +1132,10 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                                   f"{steps * timestep_fs / 1000.0:g} ps "
                                   f"({steps * timestep_fs / 1e6:g} ns)")
         log.update(timestep=timestep)
-        log.field("solvent", "implicit (no barostat possible)" if implicit else "explicit")
+        solvation = checked.solvation or ("implicit" if implicit else "explicit")
+        log.field("solvent", {"implicit": "implicit (no barostat possible)",
+                              "vacuum": "vacuum (an alchemical leg; no box, no barostat)",
+                              "explicit": "explicit"}[solvation])
 
         # -- the Force layout, fixed before any state is loaded -----------------------------
         #
@@ -1260,7 +1263,8 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         topology_sha = file_facts(topology_path)["sha256"]
         fingerprint = _config_fingerprint(stage, system_sha, topology_sha)
         log.update(stage={k: v for k, v in stage.items() if k != "pending_parent"},
-                   fingerprint=fingerprint, implicit=bool(implicit),
+                   fingerprint=fingerprint, implicit=bool(implicit) and solvation != "vacuum",
+                   solvation=solvation,
                    inputs={"topology": file_facts(topology_path),
                            "system": file_facts(system_path)},
                    derived={"production_ps": steps * timestep_fs / 1000.0,

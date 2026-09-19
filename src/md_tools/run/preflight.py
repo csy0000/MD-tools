@@ -398,6 +398,12 @@ class LoadedInputs:
     particles: int
     implicit: bool
     barostats: int
+    #: "explicit", "implicit" or "vacuum". `implicit` above stays what it always was -- not
+    #: periodic -- because the runtime's behaviour keys on it; this names what the System IS, and
+    #: says "vacuum" only when a build record that hashes this exact file says so. Nothing is
+    #: inferred from geometry beyond the old periodic/non-periodic reading.
+    solvation: str = ""
+    build_record: str | None = None
 
     @property
     def periodic(self) -> bool:
@@ -433,10 +439,52 @@ def load_inputs(topology, system, *, flags=("-p", "-s")) -> LoadedInputs:
             f"{topology_path.name} has {atoms} atom(s) but {system_path.name} has {particles} "
             f"particle(s). They must describe the same system; a mismatched pair produces "
             f"coordinates assigned to the wrong particles and no error at all.")
+    periodic = base.usesPeriodicBoundaryConditions()
+    record = matching_build_record(system_path)
+    solvation = ("vacuum" if record and record["solvation"] == "vacuum"
+                 else "explicit" if periodic else "implicit")
     return LoadedInputs(topology_path=topology_path, system_path=system_path, pdb=pdb,
                         system=base, particles=particles,
-                        implicit=not base.usesPeriodicBoundaryConditions(),
-                        barostats=count_barostats(base))
+                        implicit=not periodic,
+                        barostats=count_barostats(base), solvation=solvation,
+                        build_record=record["path"] if record else None)
+
+
+#: The sentence build-md uses too: one refusal, one wording.
+VACUUM_REFUSAL = ("Vacuum builds are alchemical legs; ordinary MD in vacuum is not supported.")
+
+
+def matching_build_record(system_path) -> dict[str, Any] | None:
+    """The build-top record beside *system_path* that hashes this exact file, or None.
+
+    PROVENANCE, not geometry: a vacuum build and an ordinary non-periodic test System look the
+    same from inside, so only a record whose `outputs.system_xml.sha256` IS this file's sha256 may
+    say what the System is. Every `*.log` beside the System is considered; one that is not a
+    record, is not a completed build-top record, or names another file is ignored, never trusted.
+    """
+    import hashlib
+
+    from ..build.record import BEGIN, RecordError, read_record
+
+    path = Path(system_path)
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    for candidate in sorted(path.parent.glob("*.log")):
+        try:
+            if candidate.stat().st_size > 20_000_000 or BEGIN not in candidate.read_text(
+                    encoding="utf-8", errors="replace"):
+                continue
+            document = read_record(candidate)
+        except (OSError, RecordError):
+            continue
+        if document.get("record_type") != "build-top" or document.get("status") != "completed":
+            continue
+        if ((document.get("outputs") or {}).get("system_xml") or {}).get("sha256") != digest:
+            continue
+        return {"path": str(candidate),
+                "solvation": (document.get("solvent") or {}).get("treatment")}
+    return None
 
 
 @dataclass(frozen=True)
@@ -639,6 +687,10 @@ class StagePreflight(ExecutionPreflight):
     solute: tuple = ()
     excluded_bonds: tuple = ()
     implicit: bool = False
+    #: "explicit", "implicit" or "vacuum" -- what the stage record calls the System. A vacuum leg
+    #: is non-periodic like an implicit one and behaves the same (NVT, no barostat), but it is
+    #: never LABELLED implicit.
+    solvation: str = ""
     seed: int = 0
     restrained: bool = False
     #: The molecular Hamiltonian's identity, taken BEFORE the restraint and barostat are added,
@@ -866,9 +918,21 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
                     machine_config=None, protocol="this stage", pending_parent=None,
                     timestep_fs=None, ensemble=None, tau=0.0, stage=None,
                     number_of_groups=None, groupfile=None, whole=None, segment=1,
-                    source_trajectory=None, system2=None, topology2=None) -> StagePreflight:
-    """A conventional stage, run on its own or planned as one link of a chain."""
+                    source_trajectory=None, system2=None, topology2=None,
+                    vacuum_leg: bool = False) -> StagePreflight:
+    """A conventional stage, run on its own or planned as one link of a chain.
+
+    *vacuum_leg* is True only for the alchemical window runner, which integrates the vacuum leg
+    of a cycle on purpose. Everything else -- md-run, a generated stage script -- is refused a
+    System whose build record says vacuum, before anything is created or any device touched.
+    """
     from ..md.stage import check_trajectory_suffix
+
+    record = matching_build_record(system) if system else None
+    if record and record["solvation"] == "vacuum" and not vacuum_leg:
+        raise PreflightError(
+            f"{protocol}: -s {system} is a vacuum build (its build record {record['path']} says "
+            f"so). {VACUUM_REFUSAL}")
 
     _reject_flags_outside_their_protocol(
         protocol_name="a cMD stage", number_of_groups=number_of_groups, groupfile=groupfile,
@@ -1086,7 +1150,8 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
         raise PreflightError(f"{where}: implicit solvent must carry no barostat")
 
     return {"prepared_system": system, "solute": tuple(int(i) for i in solute),
-            "excluded_bonds": tuple(excluded), "implicit": bool(implicit), "seed": int(seed),
+            "excluded_bonds": tuple(excluded), "implicit": bool(implicit),
+            "solvation": loaded.solvation, "seed": int(seed),
             "restrained": float(stage.get("restraint_kcal_per_mol_A2") or 0.0) > 0.0,
             "hamiltonian_identity": hamiltonian_identity}
 
