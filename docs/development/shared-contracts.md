@@ -291,6 +291,15 @@ those mapped identities through the combined topology. Residue numbers change wh
 combined; a mask resolved before combination and reinterpreted afterwards silently selects
 different atoms.
 
+**Adding a field to the plan record invalidates every stored plan.** `plan_sha256` covers the
+whole record, so a new field changes the digest of plans already written, and a campaign holding
+those digests refuses its own legs. Field additions are therefore BATCHED and landed BEFORE a
+campaign starts, never during one, and the record carries a schema version
+(`md-tools-topology-plan/<n>`) that moves with them. `alchemy.topology.check_plan_digest` tells
+the two cases apart for a caller: the record's schema moved while the ligand Hamiltonian,
+endpoints and map did not — rebuild, the physics is unchanged — or the plan is genuinely
+different, and it names the first field that differs.
+
 The existing `md_tools.ais.two_state` is **not** this. It mixes two Systems with identical
 particles, masses and constraints — `_structural_differences` refuses anything else — which is an
 implicit identity atom map. Reuse its constraints and its honesty about limitations; do not reuse
