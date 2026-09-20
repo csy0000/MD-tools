@@ -283,23 +283,23 @@ configurational integral separates -- as the dual-topology dummy ligand's alread
   correction this release does not implement. A decoupling plan for a ligand with non-zero net
   formal charge is REFUSED by name (the campaign's three TYK2 ligands are neutral).
 
-### 4. Pairing the legs of the cycle
+### 4. Pairing the legs of the cycle (S0's ruling, 2026-09-20: by ROLE, not by mode)
 
-`matched_legs` pairs a complex decoupling leg with a solvent decoupling leg, and must require:
-the same package (reference, package sha256, parameter digest), the same mode, the same applied
-1-4 scales, the same constraint policy, and the same ligand-side terms -- every bonded term, the
-internal pairs and exceptions -- in package-local identities. That is `ligand_hamiltonian_sha256`
-as it already is, with one change I want reviewed:
+Two different objects were being called a restraint, and the rule follows the difference:
 
-**The restraint must be excluded from that digest for decoupling legs.** In dual topology the
-centroid restraint is part of the digest because it MUST be identical in both legs to cancel. In
-ABFE it is the opposite: the complex leg carries a Boresch restraint to the protein and the
-solvent leg carries none (or a different one), and the restraint's free energy is computed and
-subtracted separately. Keeping it in the digest would make the two legs of a correct cycle refuse
-each other. Proposal: the digest covers the restraint for `dual`, not for `decoupling`;
-`matched_legs` reports both legs' restraint records side by side so S4 checks them against its own
-convention rather than against a digest that cannot know it. **S0/S3: this is the one design
-decision here I am least sure of.**
+| role | what it is | in a cycle |
+|---|---|---|
+| `alchemical-coupling` | part of the construction: dual topology's centroid restraint, which shapes the path | must be present and IDENTICAL in both legs; `matched_legs` refuses otherwise |
+| `standard-state` | an external term whose free energy is computed and corrected: ABFE's Boresch restraint | may differ; at most one leg of a pair may carry one; both records are reported side by side for S4, never silently ignored |
+
+`ligand_hamiltonian_sha256` therefore covers the ligand's OWN Hamiltonian only -- bonded terms,
+internal nonbonded, parameters -- and NO restraint, in any mode: a restraint is not part of what
+the ligand is. The digest keeps one meaning, dual topology keeps its guarantee, and a correct ABFE
+cycle stops refusing itself. `record.restraints` is a list and every entry carries its role, the
+atoms, the functional form and the constants. One field is deliberately not compared between legs,
+`periodic`: it is a property of the box (a solvated leg takes the minimum image, a vacuum leg has
+no images), both evaluate the same centroid separation for a molecule that does not straddle a
+boundary, and requiring it to match would make every vacuum/solvent dual cycle impossible.
 
 ### 5. Restraints are S4's, and the plan records that they exist
 
@@ -323,7 +323,23 @@ REFUSED: the construction cannot supply the restraint, but it can refuse to pret
 complete without one. In a ligand-only solvated or vacuum environment `required` is false, with
 the reason recorded ("no binding site to leave").
 
-### 6. What this does not change
+### 6. What S3's Hamiltonian expects (confirmed, 2026-09-20)
+
+S3 confirms that nothing new is needed on the Hamiltonian side: its softcore forces use
+interaction groups, so a pair softens only when exactly one end is in the unique region, and
+pairs INSIDE the region are excluded from the weighted Ewald sum and carried at full strength at
+every lambda by its own internal force. The ligand's intramolecular Hamiltonian is therefore
+lambda-independent by construction, which is what this design needs, and 32-38 atoms with
+internal 1-4 and 1-5+ pairs is what the tail and n-pentane fixtures already exercise. Nothing
+assumes `b_only` is non-empty.
+
+**One thing the plan must NOT assert.** S3's builder does not read `plan.common`; it computes
+common = all particles - `a_only` - `b_only`. In decoupling that is the whole environment, which
+is exactly the region that must soften against the ligand -- while `plan.common`, which means
+"ligand particles physical at both endpoints", is empty. The two sets are different by design and
+no check may require them to agree.
+
+### 7. What this does not change
 
 Single, dual and hybrid are untouched. The refusals, the junction rule, the internal-nonbonded
 convention, the applied 1-4 scales, `plan_sha256` and `ligand_hamiltonian_sha256` all keep their

@@ -168,19 +168,25 @@ def internal_nonbonded_energy(record: dict, endpoint: str, positions_nm: np.ndar
 
 
 def restraint_energy(record: dict, positions_nm: np.ndarray, box_nm: Optional[np.ndarray]) -> float:
-    restraint = record.get("restraint")
-    if not restraint:
-        return 0.0
-    ca = positions_nm[restraint["group_a"]].mean(axis=0)
-    cb = positions_nm[restraint["group_b"]].mean(axis=0)
-    d = cb - ca
-    if restraint["periodic"]:
-        box = np.asarray(box_nm, dtype=float)
-        if np.count_nonzero(box - np.diag(np.diag(box))):
-            raise ValueError("restraint_energy evaluates rectangular boxes only")
-        lengths = np.diag(box)
-        d = d - lengths * np.round(d / lengths)
-    return 0.5 * restraint["k_kj_mol_nm2"] * float(np.dot(d, d))
+    """The energy of the restraints this plan BUILDS: the alchemical-coupling ones.
+
+    A standard-state restraint is recorded but built by the executor, so it is not evaluated here.
+    """
+    total = 0.0
+    for restraint in record.get("restraints") or []:
+        if restraint.get("role") != "alchemical-coupling":
+            continue
+        ca = positions_nm[restraint["group_a"]].mean(axis=0)
+        cb = positions_nm[restraint["group_b"]].mean(axis=0)
+        d = cb - ca
+        if restraint["periodic"]:
+            box = np.asarray(box_nm, dtype=float)
+            if np.count_nonzero(box - np.diag(np.diag(box))):
+                raise ValueError("restraint_energy evaluates rectangular boxes only")
+            lengths = np.diag(box)
+            d = d - lengths * np.round(d / lengths)
+        total += 0.5 * restraint["k_kj_mol_nm2"] * float(np.dot(d, d))
+    return total
 
 
 # ------------------------------------------------------------------------------------------------

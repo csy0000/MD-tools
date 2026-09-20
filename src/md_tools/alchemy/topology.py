@@ -103,7 +103,9 @@ __all__ = [
 #:
 #: 1: the original record. 2: adds ligand_hamiltonian_sha256, environment.solvation,
 #:    nonbonded.unique_group_internal and the per-slot unique_group_internal flag.
-PLAN_SCHEMA = "md-tools-topology-plan/2"
+#: 3: `restraint` becomes `restraints`, a list whose entries carry a ROLE, and no restraint is
+#:    part of ligand_hamiltonian_sha256 in any mode (S0 ruling, 2026-09-20).
+PLAN_SCHEMA = "md-tools-topology-plan/3"
 #: What a stored record's identity is compared on when its digest no longer matches: if these all
 #: agree, only the record's shape moved and the physics is the same.
 PLAN_IDENTITY_FIELDS = ("ligand_hamiltonian_sha256", "mode", "atom_map.sha256",
@@ -1209,6 +1211,7 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
             force.setName("DualTopologyCentroidRestraint")
             system.addForce(force)
         restraint = {
+            "role": "alchemical-coupling",
             "kind": "harmonic centroid-centroid", "energy": "0.5*k*|c_A - c_B|^2",
             "k_kj_mol_nm2": float(dual_restraint_k), "weights": "geometric centroid (all 1)",
             "group_a": group_a, "group_b": group_b, "periodic": bool(env_info["periodic"]),
@@ -1327,7 +1330,12 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
         },
         "terms": term_slots,
         "constraints": constraint_record,
-        "restraint": restraint,
+        # A LIST, and every entry carries its ROLE, because two different things are called a
+        # restraint: an `alchemical-coupling` restraint is part of the construction and must be
+        # identical in both legs of a cycle, while a `standard-state` one (ABFE's Boresch) is an
+        # external term whose free energy is computed and corrected, deliberately present in one
+        # leg and absent from the other. Neither is part of the ligand's own Hamiltonian.
+        "restraints": [restraint] if restraint else [],
         "coordinates": {"units": "nm", "placement": placement,
                         "positions_sha256": _positions_sha256(positions)},
         "numbering": numbering,
@@ -1354,7 +1362,7 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
 # ------------------------------------------------------------------------------------------------
 # legs of one cycle
 # ------------------------------------------------------------------------------------------------
-LIGAND_HAMILTONIAN_SCHEME = "md-tools-ligand-hamiltonian/1"
+LIGAND_HAMILTONIAN_SCHEME = "md-tools-ligand-hamiltonian/2"
 
 
 def ligand_hamiltonian(record: dict) -> dict[str, Any]:
@@ -1366,6 +1374,9 @@ def ligand_hamiltonian(record: dict) -> dict[str, Any]:
     agree on all of it: the same packages, map, mode, applied 1-4 scales and constraint policy,
     and the same dummy treatment term by term, or the dummy contributions and the ligand's own
     intramolecular energy do not cancel between them.
+
+    NO RESTRAINT is in here, in any mode (S0 ruling, 2026-09-20): a restraint is not part of what
+    the ligand IS. `matched_legs` checks restraints separately, by their role.
     """
     hyb_a = record["endpoints"]["A"]["hybrid_index_of_local_atom"]
     hyb_b = record["endpoints"]["B"]["hybrid_index_of_local_atom"]
@@ -1386,7 +1397,6 @@ def ligand_hamiltonian(record: dict) -> dict[str, Any]:
     groups = sorted([g["dummy_at"], g["local_atoms"],
                      {k: (None if v is None else name[v]) for k, v in g["frame"].items()}]
                     for g in record["dummy_groups"])
-    restraint = record.get("restraint")
     body = {
         "scheme": LIGAND_HAMILTONIAN_SCHEME,
         "mode": record["mode"],
@@ -1403,9 +1413,6 @@ def ligand_hamiltonian(record: dict) -> dict[str, Any]:
         "exclusions": sorted(atoms(s["atoms"]) for s in record["nonbonded"]["exclusions"]),
         "internal_pairs": sorted([atoms(p["atoms"]), p["dummy_at"], p["physical"]]
                                  for p in internal["pairs"]),
-        "restraint": None if not restraint else {
-            "k_kj_mol_nm2": restraint["k_kj_mol_nm2"], "group_a": atoms(restraint["group_a"]),
-            "group_b": atoms(restraint["group_b"])},
     }
     return json.loads(_canonical(body))
 
@@ -1418,6 +1425,8 @@ def matched_legs(first: "TopologyPlan", second: "TopologyPlan") -> dict[str, Any
     ligands' own intramolecular Hamiltonian are identical in both legs, which is what makes them
     cancel -- the environment is all that differs.
     """
+    coupling = _restraints_by_role(first.record, second.record, "alchemical-coupling")
+    standard_state = _restraints_by_role(first.record, second.record, "standard-state")
     one, two = ligand_hamiltonian(first.record), ligand_hamiltonian(second.record)
     differing = sorted(k for k in set(one) | set(two) if one.get(k) != two.get(k))
     if "applied_1_4_scales" in differing:
@@ -1437,8 +1446,58 @@ def matched_legs(first: "TopologyPlan", second: "TopologyPlan") -> dict[str, Any
             f"{' ' + str(named) if named else ''}. Build both legs from the same packages, map "
             f"and mode, in environments that apply the same 1-4 scales and constraint policy to "
             f"the ligand.")
+    # ALCHEMICAL-COUPLING restraints shape the path: dual topology's centroid restraint cancels
+    # only because both legs carry the same one.
+    if _named_atoms(first.record, coupling[0]) != _named_atoms(second.record, coupling[1]):
+        raise TopologyError(
+            f"these legs carry different alchemical-coupling restraints ({len(coupling[0])} and "
+            f"{len(coupling[1])}): such a restraint is part of the construction, and a cycle "
+            f"cancels it only if both legs carry the same one.")
+    # STANDARD-STATE restraints (ABFE's Boresch) are external terms whose free energy is computed
+    # and corrected: deliberately in one leg and not the other, never silently ignored.
+    if standard_state[0] and standard_state[1]:
+        raise TopologyError(
+            "both legs carry a standard-state restraint. Its free energy is computed and "
+            "corrected for the leg that has one; two legs restrained at once is not a cycle this "
+            "construction describes.")
     digest = _sha256_text(_canonical(one))
     return {"scheme": LIGAND_HAMILTONIAN_SCHEME, "ligand_hamiltonian_sha256": digest,
             "plans": [first.sha256, second.sha256],
             "environments": [first.record["environment"]["system_sha256"],
-                             second.record["environment"]["system_sha256"]]}
+                             second.record["environment"]["system_sha256"]],
+            "restraints": {
+                "alchemical_coupling": "identical in both legs" if coupling[0] else "none",
+                # Reported rather than compared: what it is worth is S4's to decide, and a
+                # difference here is the point of an absolute-binding cycle, not a defect.
+                "standard_state": [standard_state[0], standard_state[1]]}}
+
+
+def _restraints_by_role(first: dict, second: dict, role: str) -> tuple[list, list]:
+    return tuple([r for r in (record.get("restraints") or []) if r.get("role") == role]
+                 for record in (first, second))
+
+
+#: Fields of a restraint record that are NOT compared between two legs. `periodic` is a property
+#: of the box, not of the restraint: a solvated leg takes the minimum image and a vacuum leg has
+#: no images, while both evaluate the same centroid separation for a molecule that does not
+#: straddle a boundary -- and the cancellation argument depends only on that separation. Requiring
+#: it to match would make every vacuum/solvent dual cycle impossible.
+RESTRAINT_FIELDS_NOT_COMPARED = ("periodic",)
+
+
+def _named_atoms(record: dict, restraints: list) -> list:
+    """Restraint records with their atoms in package-local identities, for comparing two legs."""
+    hyb_a = record["endpoints"]["A"]["hybrid_index_of_local_atom"]
+    hyb_b = record["endpoints"]["B"].get("hybrid_index_of_local_atom") or []
+    name = {h: ["A", i] for i, h in enumerate(hyb_a)}
+    for j, h in enumerate(hyb_b):
+        name.setdefault(h, ["B", j])
+    out = []
+    for restraint in restraints:
+        entry = {k: v for k, v in restraint.items()
+                 if not k.startswith("group_") and k not in RESTRAINT_FIELDS_NOT_COMPARED}
+        for key in ("group_a", "group_b"):
+            if key in restraint:
+                entry[key] = [name.get(h, ["environment", h]) for h in restraint[key]]
+        out.append(entry)
+    return out

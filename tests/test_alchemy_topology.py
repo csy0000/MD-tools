@@ -369,7 +369,8 @@ def test_dual_topology_shares_no_particle_and_restrains_the_centroids(eta, cle, 
     assert not plan.common
     assert plan.a_only == frozenset(range(8)) and len(plan.b_only) == 8
     assert len(plan.record["nonbonded"]["exclusions"]) == 64
-    restraint = plan.record["restraint"]
+    [restraint] = plan.record["restraints"]
+    assert restraint["role"] == "alchemical-coupling"
     assert restraint["present_at"] == "both endpoints, identically"
     for side, pkg in (("A", eta), ("B", cle)):
         accounting = _accounting(plan, water, pkg, side)
@@ -1212,3 +1213,66 @@ def test_a_plan_written_under_another_schema_is_refused_with_what_to_do(hybrid, 
     (written / "plan.json").write_text(json.dumps(document))
     with pytest.raises(TopologyError, match="is rebuilt rather than read"):
         load_plan(written)
+
+
+def test_a_restraint_is_never_part_of_the_ligand_hamiltonian(eta, cle, water):
+    """S0's ruling: the digest covers what the ligand IS; a restraint is not part of that."""
+    from md_tools.alchemy.topology import ligand_hamiltonian
+
+    dual = _build(eta, cle, core_map(eta, cle), water, "dual")
+    body = ligand_hamiltonian(dual.record)
+    assert dual.record["restraints"] and "restraint" not in body
+    assert not any("restraint" in str(key) for key in body)
+
+
+def test_two_dual_legs_must_carry_the_same_coupling_restraint(eta, cle, water):
+    """An alchemical-coupling restraint shapes the path: it cancels only if both legs share it."""
+    import copy
+
+    from openmm import app
+
+    from md_tools.alchemy.topology import TopologyError, matched_legs
+
+    solvent = _build(eta, cle, core_map(eta, cle), water, "dual")
+    vacuum = _build(eta, cle, core_map(eta, cle), vacuum_environment(eta, constraints=app.HBonds),
+                    "dual")
+    assert matched_legs(solvent, vacuum)["restraints"]["alchemical_coupling"] == \
+        "identical in both legs"
+
+    weaker = copy.deepcopy(vacuum.record)
+    weaker["restraints"][0]["k_kj_mol_nm2"] = 10.0
+    changed = type(vacuum)(record=weaker, system_a=vacuum.system_a, system_b=vacuum.system_b,
+                           topology=vacuum.topology, positions_nm=vacuum.positions_nm)
+    with pytest.raises(TopologyError, match="different alchemical-coupling restraints"):
+        matched_legs(solvent, changed)
+
+
+def test_a_standard_state_restraint_may_differ_between_legs_and_is_reported(eta, cle, water):
+    """ABFE's Boresch restraint: in one leg, not the other, and never silently ignored."""
+    import copy
+
+    from openmm import app
+
+    from md_tools.alchemy.topology import TopologyError, matched_legs
+
+    complex_leg = _build(eta, cle, core_map(eta, cle), water, "hybrid")
+    solvent_leg = _build(eta, cle, core_map(eta, cle),
+                         vacuum_environment(eta, constraints=app.HBonds), "hybrid")
+    boresch = {"role": "standard-state", "kind": "boresch", "ligand_atoms": [0, 1, 2],
+               "environment_atoms": [10, 11, 12]}
+    with_restraint = copy.deepcopy(complex_leg.record)
+    with_restraint["restraints"] = [boresch]
+    restrained = type(complex_leg)(record=with_restraint, system_a=complex_leg.system_a,
+                                   system_b=complex_leg.system_b, topology=complex_leg.topology,
+                                   positions_nm=complex_leg.positions_nm)
+    report = matched_legs(restrained, solvent_leg)
+    assert report["restraints"]["standard_state"][0][0]["kind"] == "boresch"
+    assert report["restraints"]["standard_state"][1] == []
+
+    both = copy.deepcopy(solvent_leg.record)
+    both["restraints"] = [boresch]
+    other = type(solvent_leg)(record=both, system_a=solvent_leg.system_a,
+                              system_b=solvent_leg.system_b, topology=solvent_leg.topology,
+                              positions_nm=solvent_leg.positions_nm)
+    with pytest.raises(TopologyError, match="both legs carry a standard-state restraint"):
+        matched_legs(restrained, other)
