@@ -100,7 +100,8 @@ Two additions, for these rows only:
 | T1.0 | **protocol, registered before sampling.** Amber18 one-step diagonal path; 16 windows at s = k/15 for every RBFE leg, 20 for each ABFE decoupling leg, 8 for restraint attachment (λ_restraints 0 → 1, ligand coupled); 2 fs, LangevinMiddle 1/ps, 300 K, NPT 1.01325 bar (MC barostat every 25 steps); each window minimised at its own state, 500 ps equilibration discarded, **5 ns production**, reports every 2 ps; **3 independent repeats**; complex and solvent legs of one edge paired by `matched_legs`. The pilot rule of M2.0 applies unchanged: a short pilot may add windows only where neighbour overlap < 0.03 | — | — | — | — | — | — | the protocol for T1–T5 |
 | T1 | RBFE `ejm_31` → `ejm_42` (ΔΔG_exp = −0.24 kcal/mol), solvent and complex legs | ΔΔG_bind | experiment, **reported not gated**; gated: repeats, TI vs MBAR, overlap, `matched_legs` | gate | CUDA | `pytest tests/test_alchemy_tyk2.py -k rbfe_42` | — | NOT RUN (P1, P2) |
 | T2 | RBFE `ejm_31` → `ejm_43` (ΔΔG_exp = +1.28) | ΔΔG_bind | as T1 | gate | CUDA | `-k rbfe_43` | — | NOT RUN (P1, P2) |
-| T3 | **the third edge, `ejm_42` → `ejm_43`**, if approved: it makes the three edges a closed cycle | ΔΔG(31→42) + ΔΔG(42→43) + ΔΔG(43→31) = 0 | the cycle's own closure — the only self-contained accuracy check available without another engine | gate, on the summed σ | CUDA | `-k rbfe_closure` | — | NOT RUN, **and not in the user's two-edge target**: it costs one more edge (about 3.5 GPU-days) and is the only internal accuracy check. S4 recommends it; S0 and the user decide |
+| T3 | RBFE `ejm_42` → `ejm_43`, **approved by the user 2026-09-20**, solvent and complex legs | ΔΔG_bind | as T1 | gate | CUDA | `-k rbfe_42_43` | — | NOT RUN (P1, P2) |
+| T3c | **the closed cycle** 31→42→43→31, from T1, T2 and T3 | ΔΔG(31→42) + ΔΔG(42→43) + ΔΔG(43→31) = 0. The third leg is T2 reversed (`reversed_leg`), so its sign is explicit | the cycle's own closure — the only internal accuracy check without a second engine; a systematic error in one edge is invisible in that edge alone | **threshold fixed 2026-09-20, before sampling**: \|sum\| < 0.5 kcal/mol AND < 3 σ_c, σ_c = √(σ₁² + σ₂² + σ₃²) over the three combined-repeat edges; σ_c > 0.25 kcal/mol → INCONCLUSIVE. Same gate as everywhere else; no closure-specific relaxation | CUDA | `-k rbfe_closure` | — | NOT RUN |
 | T4 | ABFE `ejm_31` in TYK2: restraint attachment, complex decoupling (restrained), solvent decoupling, analytic release to 1 M | ΔG°_bind | experiment (−9.54 kcal/mol) reported, not gated; gated: restraint independence (two anchor sets), repeats, TI vs MBAR, overlap | gate | CUDA | `-k abfe` | — | NOT RUN (**P3**, P1, P4) |
 | T5 | the Boresch restraint chosen for T4 | the release term by quadrature vs Boresch's closed form; anchors away from collinear | rows R3, R4 above, on the real anchors | as R3, R4 | CPU | `-k abfe_restraint` | — | NOT RUN (P4) |
 
@@ -126,13 +127,13 @@ cross-state reporting at 2 ps); ligand in water ≈ 3 000 particles ≈ 600 ns/d
 | T1 complex leg | 16 × 3 × 5.5 | 264 ns | 3.3 days |
 | T1 solvent leg | 16 × 3 × 5.5 | 264 ns | 0.45 day |
 | T2 | as T1 | 528 ns | 3.75 days |
-| T3 (if approved) | as T1 | 528 ns | 3.75 days |
+| T3 (approved) | as T1 | 528 ns | 3.75 days |
 | T4 complex decoupling | 20 × 3 × 5.5 | 330 ns | 4.1 days |
 | T4 restraint attachment | 8 × 3 × 2.5 | 60 ns | 0.75 day |
 | T4 solvent decoupling | 20 × 3 × 5.5 | 330 ns | 0.55 day |
 | T4 second anchor set (restraint independence) | complex decoupling + attachment again | 390 ns | 4.85 days |
-| **total, two edges + ABFE** | | ≈ 2 100 ns | **≈ 18 GPU-days**, or about 4.5 days on four cards |
-| with T3 | | ≈ 2 600 ns | ≈ 22 GPU-days |
+| **total, three edges + ABFE** | | ≈ 2 600 ns | **≈ 22 GPU-days**, or about 5.5 days on four cards |
+| of which the three RBFE edges alone (T1, T2, T3, the path S0 named) | | ≈ 1 580 ns | ≈ 11.5 GPU-days |
 
 Levers, if that is too much: 2 repeats instead of 3 (−33 %), 3 ns production instead of 5
 (−40 %, at the cost of precision on the near-null `ejm_42` edge), or dropping the second anchor
