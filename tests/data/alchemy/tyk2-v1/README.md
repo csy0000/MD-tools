@@ -71,13 +71,38 @@ the nine build RECORDS (`records/<ligand>/<kind>/built.log`, with `environment.h
 `environment.user` and the invoked `md_openmm.py` path replaced by `<redacted>`) — so the
 provenance of the builds that were run is in git even though their output is not. Total ~2.8 MB.
 
+## Rebuilding it, from a fresh clone
+
+You need an environment where `import md_tools` works (this checkout on `PYTHONPATH`, or the
+package installed) and where `md-openmm build-top` can run: OpenMM, OpenFF toolkit,
+openmmforcefields, RDKit. No AmberTools is needed to REBUILD -- the packages are committed, so no
+charge is calculated -- and nothing touches a GPU.
+
 ```bash
-python build_tyk2_fixture.py --out <dir>                          # all nine builds
+python build_tyk2_fixture.py --check-prepared        # verifies, builds nothing
+python build_tyk2_fixture.py --out <dir>             # all nine builds, ~2 min per complex
 python build_tyk2_fixture.py --out <dir> --ligand ejm_31 --kind complex
 ```
 
-`$MD_DATA` is set to an empty directory inside `--out` for every build: the machine's catalog is
-never read or written, and the packages here are the only ones used.
+The script runs `build-top` as a subprocess and pins it to the `md_tools` the script itself
+imported: `build-top` runs with its working directory inside the build, so a relative
+`PYTHONPATH=src` would stop resolving there and the subprocess would silently use whatever
+md-tools is INSTALLED in the environment instead of this checkout. `$MD_DATA` is set to an empty
+directory inside `--out` for every build, so the machine's catalog is never read or written and
+the packages here are the only ones used.
+
+`--check-prepared` is the first thing to run and it refuses, naming the file, when:
+
+| what happened | what it says |
+|---|---|
+| an upstream input differs from the bytes this fixture was prepared from | the file, both sha256, and that README names the upstream commit (`inputs/SHA256SUMS`) |
+| a prepared structure is not what the script derives from `inputs/` | the file, and that nothing is rebuilt from a file that does not reproduce |
+| a file is missing (a partial copy) | the file, and that every file it needs is committed beside the script |
+| `build-top` refuses a build | build-top's own message, then which build it was and where its partial output is |
+
+Upstream is a moving repository: a newer `protein.pdb` may be a better structure and is still not
+the one these packages, records and prepared structures were made from. That is reported as a
+difference to look at, never rebuilt into something else silently.
 
 ## What was built, and what it measured
 

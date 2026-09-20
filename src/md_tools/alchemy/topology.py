@@ -79,7 +79,8 @@ import numpy as np
 from ..ligands.mapping import LigandSelector
 from ..ligands.package import (LigandPackage, compare_parameter_tables, load_package,
                                subsystem_parameter_table)
-from .topology_mapping import AtomMap, MapError, _bonds, _neighbours, _positions, validate_map
+from .topology_mapping import (MAP_SCHEMA, AtomMap, MapError, _bonds, _neighbours, _positions,
+                               validate_map)
 
 __all__ = [
     "PLAN_SCHEMA",
@@ -89,6 +90,7 @@ __all__ = [
     "TopologyError",
     "TopologyPlan",
     "PLAN_IDENTITY_FIELDS",
+    "build_decoupling_plan",
     "build_topology_plan",
     "check_plan_digest",
     "ligand_hamiltonian",
@@ -103,7 +105,9 @@ __all__ = [
 #:
 #: 1: the original record. 2: adds ligand_hamiltonian_sha256, environment.solvation,
 #:    nonbonded.unique_group_internal and the per-slot unique_group_internal flag.
-PLAN_SCHEMA = "md-tools-topology-plan/2"
+#: 3: `restraint` becomes `restraints`, a list whose entries carry a ROLE, and no restraint is
+#:    part of ligand_hamiltonian_sha256 in any mode (S0 ruling, 2026-09-20).
+PLAN_SCHEMA = "md-tools-topology-plan/3"
 #: What a stored record's identity is compared on when its digest no longer matches: if these all
 #: agree, only the record's shape moved and the physics is the same.
 PLAN_IDENTITY_FIELDS = ("ligand_hamiltonian_sha256", "mode", "atom_map.sha256",
@@ -740,32 +744,151 @@ def _classify(quartet: Sequence[int], bonds: set) -> str:
     return "proper" if chain else "improper"
 
 
-def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom_map: AtomMap,
-                        environment: Environment, *, mode: str,
+def _standard_state_restraint(restraint: Optional[dict], absent_b: bool,
+                              environment: Environment, hyb_a: list, n_env: int,
+                              package_a: LigandPackage, checks: list) -> list:
+    """Record the restraint a decoupling leg is run with, or refuse a leg that needs one.
+
+    The plan does not build it: a Boresch restraint, its free energy and the standard-state
+    correction are the executor's. What the plan owes a reader is that it EXISTS and which atoms
+    it holds -- a decoupled ligand with no restraint wanders out of the site and the integral
+    diverges, and nothing downstream could tell afterwards.
+    """
+    from ..md.stage import SOLVENT_RESIDUES
+
+    if restraint is None and not absent_b:
+        return []
+    if restraint is not None and not absent_b:
+        raise TopologyError("a standard-state restraint belongs to a decoupling plan; the other "
+                            "modes transform one real molecule into another")
+    ligand_residue = {atom.residue.index for atom in environment.topology.atoms()
+                      if atom.index in set(hyb_a)}
+    protein = sorted({residue.name for residue in environment.topology.residues()
+                      if residue.index not in ligand_residue
+                      and residue.name.strip().upper() not in SOLVENT_RESIDUES})
+    if restraint is None:
+        if protein:
+            raise TopologyError(
+                f"this environment holds {len(protein)} non-solvent residue kind(s) besides the "
+                f"ligand ({', '.join(protein[:6])}...), so a decoupling leg in it needs a "
+                f"standard-state restraint: a decoupled ligand with none wanders out of the site "
+                f"and the free energy diverges. Pass restraint={{'kind': 'boresch', "
+                f"'ligand_atoms': [...], 'environment_atoms': [...]}}; the executor builds the "
+                f"force, computes its free energy and applies the standard-state correction.")
+        _check(checks, "standard-state-restraint",
+               {"required": False, "why": "no binding site to leave: the environment holds only "
+                                          "the ligand and solvent"})
+        return []
+    unknown = sorted(set(restraint) - {"kind", "ligand_atoms", "environment_atoms", "parameters"})
+    if unknown:
+        raise TopologyError(f"unknown key(s) {unknown} in the restraint record")
+    ligand_atoms = [int(i) for i in restraint.get("ligand_atoms") or []]
+    environment_atoms = [int(i) for i in restraint.get("environment_atoms") or []]
+    if not ligand_atoms or not environment_atoms:
+        raise TopologyError("a standard-state restraint names ligand_atoms and environment_atoms")
+    ligand = set(hyb_a)
+    if not set(ligand_atoms) <= ligand:
+        raise TopologyError(f"restraint ligand_atoms {sorted(set(ligand_atoms) - ligand)} are not "
+                            f"the ligand's particles")
+    if set(environment_atoms) & ligand or max(environment_atoms) >= n_env:
+        raise TopologyError("restraint environment_atoms must be particles of the environment, "
+                            "not the ligand")
+    by_index = {atom.index: atom for atom in environment.topology.atoms()}
+    local = {h: i for i, h in enumerate(hyb_a)}
+    record = {
+        "role": "standard-state",
+        "kind": str(restraint.get("kind") or "boresch"),
+        "built_by": "the executor (md_tools.alchemy.restraints): the plan records it, and does "
+                    "not build it",
+        "ligand_atoms": ligand_atoms,
+        "ligand_atom_names": [package_a.atom_names[local[h]] for h in ligand_atoms],
+        "environment_atoms": environment_atoms,
+        # Named for review: an index means nothing to a person checking a binding site.
+        "environment_atom_labels": [
+            f"{by_index[h].residue.chain.id}:{by_index[h].residue.id}"
+            f"{by_index[h].residue.name}:{by_index[h].name}" for h in environment_atoms],
+        "parameters": restraint.get("parameters"),
+    }
+    _check(checks, "standard-state-restraint",
+           {"required": bool(protein), "kind": record["kind"],
+            "ligand_atoms": record["ligand_atom_names"],
+            "environment_atoms": record["environment_atom_labels"]})
+    return [record]
+
+
+def build_decoupling_plan(package: LigandPackage, environment: Environment, *,
+                          restraint: Optional[dict] = None) -> TopologyPlan:
+    """The plan an absolute-binding leg needs: endpoint B is the ligand ABSENT.
+
+    At lambda 0 this is the environment as built. At lambda 1 the ligand interacts with nothing
+    outside itself -- every particle charge 0 and epsilon 0, every exception to the environment
+    zero -- while its OWN Hamiltonian is retained unchanged: bonded terms, internal exceptions and
+    internal pairs, physical at both ends. That is what the standard-state correction assumes, and
+    it makes the ligand's intramolecular Hamiltonian lambda-independent.
+
+    The whole ligand is the unique region, so the softcore covers exactly the ligand-environment
+    pairs. `common` and `b_only` are empty: `common` here means "ligand particles physical at
+    both endpoints", which is not the set a Hamiltonian computes as "everything that is not
+    unique" -- those two are different by design.
+
+    A ligand with a non-zero net formal charge is refused: decoupling it changes the box's net
+    charge, and PME's neutralising background then contributes a free energy that needs a
+    finite-size correction (Rocklin et al.) this release does not implement.
+    """
+    net = package.metadata["chemical_state"]["net_formal_charge"]
+    if net != 0:
+        raise TopologyError(
+            f"{package.reference} has net formal charge {net}: decoupling it changes the box's "
+            f"net charge, and PME's neutralising background then contributes a free energy that "
+            f"needs a finite-size correction (Rocklin et al.) this release does not implement. "
+            f"Not impossible -- not implemented.")
+    return build_topology_plan(package, None, None, environment, mode="decoupling",
+                               restraint=restraint)
+
+
+def build_topology_plan(package_a: LigandPackage, package_b: Optional[LigandPackage],
+                        atom_map: Optional[AtomMap], environment: Environment, *, mode: str,
                         dual_restraint_k: float = DEFAULT_DUAL_RESTRAINT_K,
-                        b_positions_nm: Optional[np.ndarray] = None) -> TopologyPlan:
+                        b_positions_nm: Optional[np.ndarray] = None,
+                        restraint: Optional[dict] = None) -> TopologyPlan:
     """Build and check the plan. Nothing is written; `TopologyPlan.write` writes it.
 
     *b_positions_nm* is endpoint B's pose in B package order (a docked pose, for example). Left
     None, package B's reference conformer is superposed on the mapped A atoms, which is what a
     reference conformer is for, and the core RMSD of that fit is recorded.
+
+    In `mode: "decoupling"` there is no endpoint B and no map: pass `package_b=None` and
+    `atom_map=None`, and `build_decoupling_plan` is the entry point that does.
     """
     from openmm import CustomBondForce, CustomCentroidBondForce, version
     from openmm.app import Element, Topology
 
-    try:
-        map_report = validate_map(package_a, package_b, atom_map, mode)
-    except MapError as exc:
-        raise TopologyError(str(exc)) from exc
+    absent_b = mode == "decoupling"
+    if absent_b:
+        if package_b is not None or atom_map is not None:
+            raise TopologyError("mode 'decoupling' has no endpoint B: package_b and atom_map "
+                                "must be None")
+        package_b = package_a          # every "B" table lookup below is over the empty B set
+        map_report = {"mode": mode, "checks": [], "unique_components": {"A": [], "B": []},
+                      "notes": {"decoupling": "no map: endpoint B is the ligand ABSENT"}}
+    else:
+        if package_b is None or atom_map is None:
+            raise TopologyError(f"mode {mode!r} needs an endpoint B package and an atom map")
+        try:
+            map_report = validate_map(package_a, package_b, atom_map, mode)
+        except MapError as exc:
+            raise TopologyError(str(exc)) from exc
     checks: list[dict[str, Any]] = list(map_report["checks"])
     residue_a, ligand_env = _ligand_residue(environment, package_a)
     env_info = _check_environment(environment, package_a, ligand_env, checks)
     env_system = environment.system
     n_env = env_system.getNumParticles()
     dual = mode == "dual"
+    #: Everything a whole-molecule dummy needs: no junction, every bonded term retained.
+    whole_molecule_dummy = dual or absent_b
 
-    a_to_b, b_to_a = ({}, {}) if dual else (atom_map.a_to_b, atom_map.b_to_a)
-    n_a, n_b = len(package_a.atom_names), len(package_b.atom_names)
+    a_to_b, b_to_a = ({}, {}) if whole_molecule_dummy else (atom_map.a_to_b, atom_map.b_to_a)
+    n_a, n_b = len(package_a.atom_names), (0 if absent_b else len(package_b.atom_names))
     hyb_a = list(ligand_env)
     appended = [b for b in range(n_b) if b not in b_to_a]
     hyb_b = [0] * n_b
@@ -780,9 +903,15 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
     n_total = n_env + len(appended)
 
     # -- positions ------------------------------------------------------------------------------
-    mapped_pairs = sorted(atom_map.pairs)
+    mapped_pairs = [] if absent_b else sorted(atom_map.pairs)
     xa = environment.positions_nm[[hyb_a[a] for a, _ in mapped_pairs]]
-    if b_positions_nm is None:
+    if absent_b:
+        # Nothing to place: endpoint B adds no particle, and every coordinate is the
+        # environment's own.
+        placed = np.zeros((0, 3))
+        placement = {"method": "none: endpoint B is the ligand absent"}
+        rmsd = 0.0
+    elif b_positions_nm is None:
         source_b = _positions(package_b) / 10.0
         rot, cs, ct = _kabsch(source_b[[b for _, b in mapped_pairs]], xa)
         placed = (source_b - cs) @ rot.T + ct
@@ -794,7 +923,9 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
         if placed.shape != (n_b, 3):
             raise TopologyError(f"b_positions_nm must be ({n_b}, 3) in B package order")
         placement = {"method": "given", "positions_sha256": _positions_sha256(placed)}
-    rmsd = float(np.sqrt(np.mean(np.sum((placed[[b for _, b in mapped_pairs]] - xa) ** 2, axis=1))))
+    if not absent_b:
+        rmsd = float(np.sqrt(np.mean(np.sum((placed[[b for _, b in mapped_pairs]] - xa) ** 2,
+                                            axis=1))))
     placement["mapped_rmsd_nm"] = rmsd
     positions = np.vstack([environment.positions_nm, placed[appended]]) if appended \
         else environment.positions_nm.copy()
@@ -810,7 +941,7 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
     # -- dummy groups and their frames ----------------------------------------------------------
     groups = []
     junction_of: dict[tuple[str, int], dict] = {}   # (source side, local atom) -> junction
-    if not dual:
+    if not whole_molecule_dummy:
         for side, package, components, core in (
                 ("A", package_a, map_report["unique_components"]["A"], set(a_to_b)),
                 ("B", package_b, map_report["unique_components"]["B"], set(b_to_a))):
@@ -856,7 +987,8 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
     for k in range(env_system.getNumConstraints()):
         i, j, d = env_system.getConstraintParameters(k)
         env_constraints[tuple(sorted((i, j)))] = _q(d)
-    b_bond_rows = {tuple(sorted((r[0], r[1]))): r for r in package_b.table["bonds"]}
+    b_bond_rows = {} if absent_b else {tuple(sorted((r[0], r[1]))): r
+                                       for r in package_b.table["bonds"]}
     added_constraints = []
     for (i, j), row in sorted(b_bond_rows.items()):
         key = tuple(sorted((hyb_b[i], hyb_b[j])))
@@ -937,7 +1069,8 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
         return {tuple(sorted((to_hyb[r[0]], to_hyb[r[1]]))): tuple(r[2:5])
                 for r in table["exceptions"]}
 
-    exc_a, exc_b = exc_rows(package_a, hyb_a), exc_rows(package_b, hyb_b)
+    exc_a = exc_rows(package_a, hyb_a)
+    exc_b = {} if absent_b else exc_rows(package_b, hyb_b)
     env_slots = {}
     for k in range(nb_a.getNumExceptions()):
         i, j, *_ = nb_a.getExceptionParameters(k)
@@ -955,7 +1088,10 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
     # separates exactly as its retained bonded terms do. Per connected GROUP, never across two
     # groups: two dummy groups on different anchors are separated by physical coordinates, and a
     # pair between them would not separate. In dual topology each whole ligand is one group.
-    if dual:
+    if absent_b:
+        # ONE group: the whole ligand, a dummy at B, bonded to nothing in the environment.
+        unique_groups = [{"dummy_at": "B", "atoms": sorted(hyb_a)}]
+    elif dual:
         unique_groups = [{"dummy_at": "B", "atoms": sorted(hyb_a)},
                          {"dummy_at": "A", "atoms": sorted(b_only)}]
     else:
@@ -1050,11 +1186,12 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
 
     # bonded terms
     bonds_a_graph = {tuple(sorted((hyb_a[i], hyb_a[j]))) for i, j in _bonds(package_a.mol)}
-    bonds_b_graph = {tuple(sorted((hyb_b[i], hyb_b[j]))) for i, j in _bonds(package_b.mol)}
+    bonds_b_graph = (set() if absent_b else
+                     {tuple(sorted((hyb_b[i], hyb_b[j]))) for i, j in _bonds(package_b.mol)})
 
     def dummy_decision(atoms_hyb: Sequence[int], kind: str, source: str) -> bool:
         """Whether a term touching *source*'s unique atoms is kept where they are dummies."""
-        if dual:
+        if whole_molecule_dummy:
             return True     # a whole dummy ligand keeps every intramolecular bonded term
         local = local_a if source == "A" else local_b
         unique = set(a_only) if source == "A" else set(b_only)
@@ -1139,7 +1276,7 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
         "bond", bond_a, bond_b,
         env_slots_of(bond_a.getNumBonds(), bond_a.getBondParameters,
                      lambda row: tuple(sorted(row[:2]))),
-        bond_rows(package_a, hyb_a), bond_rows(package_b, hyb_b), width=2,
+        bond_rows(package_a, hyb_a), [] if absent_b else bond_rows(package_b, hyb_b), width=2,
         add=lambda f, key, p: f.addBond(key[0], key[1], p[0], p[1]),
         setp=lambda f, slot, p: f.setBondParameters(slot, *f.getBondParameters(slot)[:2], *p))}
 
@@ -1154,7 +1291,7 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
         "angle", angle_a, angle_b,
         env_slots_of(angle_a.getNumAngles(), angle_a.getAngleParameters,
                      lambda row: (min(row[0], row[2]), row[1], max(row[0], row[2]))),
-        angle_rows(package_a, hyb_a), angle_rows(package_b, hyb_b), width=3,
+        angle_rows(package_a, hyb_a), [] if absent_b else angle_rows(package_b, hyb_b), width=3,
         add=lambda f, key, p: f.addAngle(*key, *p),
         setp=lambda f, slot, p: f.setAngleParameters(slot, *f.getAngleParameters(slot)[:3], *p))
 
@@ -1176,7 +1313,7 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
                      lambda row: (*_torsion_key(row[:4], _classify(row[:4], bonds_a_graph)),
                                   int(row[4]))),
         torsion_rows(package_a, hyb_a, bonds_a_graph),
-        torsion_rows(package_b, hyb_b, bonds_b_graph), width=4,
+        [] if absent_b else torsion_rows(package_b, hyb_b, bonds_b_graph), width=4,
         add=lambda f, key, p: f.addTorsion(*key[:4], key[4], *p),
         setp=lambda f, slot, p: f.setTorsionParameters(
             slot, *f.getTorsionParameters(slot)[:5], *p),
@@ -1194,8 +1331,13 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
                         removed += 1
         group["terms_retained"], group["terms_removed"] = kept, removed
 
-    # -- the dual restraint -------------------------------------------------------------------
-    restraint = None
+    # -- restraints ---------------------------------------------------------------------------
+    # An ALCHEMICAL-COUPLING restraint is built here, because it is part of the construction. A
+    # STANDARD-STATE one (ABFE's Boresch) is only RECORDED: the executor builds it, computes its
+    # free energy and applies the standard-state correction.
+    standard_state = _standard_state_restraint(restraint, absent_b, environment, hyb_a, n_env,
+                                               package_a, checks)
+    coupling_restraint = None
     if dual:
         group_a = [hyb_a[a] for a, _ in mapped_pairs]
         group_b = [hyb_b[b] for _, b in mapped_pairs]
@@ -1208,7 +1350,8 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
             force.setUsesPeriodicBoundaryConditions(bool(env_info["periodic"]))
             force.setName("DualTopologyCentroidRestraint")
             system.addForce(force)
-        restraint = {
+        coupling_restraint = {
+            "role": "alchemical-coupling",
             "kind": "harmonic centroid-centroid", "energy": "0.5*k*|c_A - c_B|^2",
             "k_kj_mol_nm2": float(dual_restraint_k), "weights": "geometric centroid (all 1)",
             "group_a": group_a, "group_b": group_b, "periodic": bool(env_info["periodic"]),
@@ -1297,9 +1440,17 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
                                           "insertion_code": residue_a.insertionCode,
                                           "name": residue_a.name,
                                           "index_1based": residue_a.index + 1}},
-            "B": endpoint_record(package_b, "B", hyb_b),
+            "B": ({"absent": True, "reference": None, "hybrid_index_of_local_atom": [],
+                   "what": "endpoint B is the ligand ABSENT: its interactions with the "
+                           "environment are removed and its own Hamiltonian is retained"}
+                  if absent_b else endpoint_record(package_b, "B", hyb_b)),
         },
-        "atom_map": atom_map.record(package_a, package_b),
+        "atom_map": ({"schema": MAP_SCHEMA, "package_a": package_a.reference, "package_b": None,
+                      "a_to_b": {}, "b_to_a": {}, "by_name": [],
+                      "note": "no map: endpoint B is the ligand absent",
+                      "sha256": _sha256_text(_canonical(
+                          {"decoupling": package_a.reference}))}
+                     if absent_b else atom_map.record(package_a, package_b)),
         "map_validation": map_report,
         "environment": {**environment.identity(), **env_info},
         "particles": {"n_total": n_total, "n_environment": n_env, "common": common,
@@ -1310,6 +1461,17 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
                                            "configurational free energy.",
                                  "core_mass_changes": mass_changes}},
         "dummy_groups": groups,
+        # STATED, not inferred. A reader of a decoupling record must be able to see WHICH
+        # convention produced it: "decoupled" and "annihilated" differ in what the other leg of
+        # the cycle has to cancel, and a record that only omits the word leaves that to guesswork.
+        **({"decoupling": {
+            "intramolecular": "retained",
+            "what_vanishes": "the ligand's interactions with the environment, and nothing else",
+            "annihilation": "refused in v1: removing the ligand's internal nonbonded terms too "
+                            "changes what the solvent leg must cancel and needs its own "
+                            "derivation",
+            "standard_state_correction": "the executor's, over the recorded restraint",
+        }} if absent_b else {}),
         "dummy_nonbonded": "annihilated: charge 0 and epsilon 0 on the particle, zero on every "
                            "exception touching it; bonded terms per the junction rule",
         "nonbonded": {
@@ -1327,7 +1489,12 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
         },
         "terms": term_slots,
         "constraints": constraint_record,
-        "restraint": restraint,
+        # A LIST, and every entry carries its ROLE, because two different things are called a
+        # restraint: an `alchemical-coupling` restraint is part of the construction and must be
+        # identical in both legs of a cycle, while a `standard-state` one (ABFE's Boresch) is an
+        # external term whose free energy is computed and corrected, deliberately present in one
+        # leg and absent from the other. Neither is part of the ligand's own Hamiltonian.
+        "restraints": ([coupling_restraint] if coupling_restraint else []) + standard_state,
         "coordinates": {"units": "nm", "placement": placement,
                         "positions_sha256": _positions_sha256(positions)},
         "numbering": numbering,
@@ -1354,7 +1521,7 @@ def build_topology_plan(package_a: LigandPackage, package_b: LigandPackage, atom
 # ------------------------------------------------------------------------------------------------
 # legs of one cycle
 # ------------------------------------------------------------------------------------------------
-LIGAND_HAMILTONIAN_SCHEME = "md-tools-ligand-hamiltonian/1"
+LIGAND_HAMILTONIAN_SCHEME = "md-tools-ligand-hamiltonian/2"
 
 
 def ligand_hamiltonian(record: dict) -> dict[str, Any]:
@@ -1366,6 +1533,9 @@ def ligand_hamiltonian(record: dict) -> dict[str, Any]:
     agree on all of it: the same packages, map, mode, applied 1-4 scales and constraint policy,
     and the same dummy treatment term by term, or the dummy contributions and the ligand's own
     intramolecular energy do not cancel between them.
+
+    NO RESTRAINT is in here, in any mode (S0 ruling, 2026-09-20): a restraint is not part of what
+    the ligand IS. `matched_legs` checks restraints separately, by their role.
     """
     hyb_a = record["endpoints"]["A"]["hybrid_index_of_local_atom"]
     hyb_b = record["endpoints"]["B"]["hybrid_index_of_local_atom"]
@@ -1386,12 +1556,12 @@ def ligand_hamiltonian(record: dict) -> dict[str, Any]:
     groups = sorted([g["dummy_at"], g["local_atoms"],
                      {k: (None if v is None else name[v]) for k, v in g["frame"].items()}]
                     for g in record["dummy_groups"])
-    restraint = record.get("restraint")
     body = {
         "scheme": LIGAND_HAMILTONIAN_SCHEME,
         "mode": record["mode"],
-        "endpoints": {side: {k: record["endpoints"][side][k] for k in
-                             ("reference", "package_sha256", "parameter_digest")}
+        # `.get`, because a decoupling plan's endpoint B is the ligand ABSENT and has no package.
+        "endpoints": {side: {k: record["endpoints"][side].get(k) for k in
+                             ("reference", "package_sha256", "parameter_digest", "absent")}
                       for side in ("A", "B")},
         "atom_map_sha256": record["atom_map"]["sha256"],
         "applied_1_4_scales": {k: record["environment"]["nonbonded_applied"][k]
@@ -1403,9 +1573,6 @@ def ligand_hamiltonian(record: dict) -> dict[str, Any]:
         "exclusions": sorted(atoms(s["atoms"]) for s in record["nonbonded"]["exclusions"]),
         "internal_pairs": sorted([atoms(p["atoms"]), p["dummy_at"], p["physical"]]
                                  for p in internal["pairs"]),
-        "restraint": None if not restraint else {
-            "k_kj_mol_nm2": restraint["k_kj_mol_nm2"], "group_a": atoms(restraint["group_a"]),
-            "group_b": atoms(restraint["group_b"])},
     }
     return json.loads(_canonical(body))
 
@@ -1418,6 +1585,8 @@ def matched_legs(first: "TopologyPlan", second: "TopologyPlan") -> dict[str, Any
     ligands' own intramolecular Hamiltonian are identical in both legs, which is what makes them
     cancel -- the environment is all that differs.
     """
+    coupling = _restraints_by_role(first.record, second.record, "alchemical-coupling")
+    standard_state = _restraints_by_role(first.record, second.record, "standard-state")
     one, two = ligand_hamiltonian(first.record), ligand_hamiltonian(second.record)
     differing = sorted(k for k in set(one) | set(two) if one.get(k) != two.get(k))
     if "applied_1_4_scales" in differing:
@@ -1437,8 +1606,58 @@ def matched_legs(first: "TopologyPlan", second: "TopologyPlan") -> dict[str, Any
             f"{' ' + str(named) if named else ''}. Build both legs from the same packages, map "
             f"and mode, in environments that apply the same 1-4 scales and constraint policy to "
             f"the ligand.")
+    # ALCHEMICAL-COUPLING restraints shape the path: dual topology's centroid restraint cancels
+    # only because both legs carry the same one.
+    if _named_atoms(first.record, coupling[0]) != _named_atoms(second.record, coupling[1]):
+        raise TopologyError(
+            f"these legs carry different alchemical-coupling restraints ({len(coupling[0])} and "
+            f"{len(coupling[1])}): such a restraint is part of the construction, and a cycle "
+            f"cancels it only if both legs carry the same one.")
+    # STANDARD-STATE restraints (ABFE's Boresch) are external terms whose free energy is computed
+    # and corrected: deliberately in one leg and not the other, never silently ignored.
+    if standard_state[0] and standard_state[1]:
+        raise TopologyError(
+            "both legs carry a standard-state restraint. Its free energy is computed and "
+            "corrected for the leg that has one; two legs restrained at once is not a cycle this "
+            "construction describes.")
     digest = _sha256_text(_canonical(one))
     return {"scheme": LIGAND_HAMILTONIAN_SCHEME, "ligand_hamiltonian_sha256": digest,
             "plans": [first.sha256, second.sha256],
             "environments": [first.record["environment"]["system_sha256"],
-                             second.record["environment"]["system_sha256"]]}
+                             second.record["environment"]["system_sha256"]],
+            "restraints": {
+                "alchemical_coupling": "identical in both legs" if coupling[0] else "none",
+                # Reported rather than compared: what it is worth is S4's to decide, and a
+                # difference here is the point of an absolute-binding cycle, not a defect.
+                "standard_state": [standard_state[0], standard_state[1]]}}
+
+
+def _restraints_by_role(first: dict, second: dict, role: str) -> tuple[list, list]:
+    return tuple([r for r in (record.get("restraints") or []) if r.get("role") == role]
+                 for record in (first, second))
+
+
+#: Fields of a restraint record that are NOT compared between two legs. `periodic` is a property
+#: of the box, not of the restraint: a solvated leg takes the minimum image and a vacuum leg has
+#: no images, while both evaluate the same centroid separation for a molecule that does not
+#: straddle a boundary -- and the cancellation argument depends only on that separation. Requiring
+#: it to match would make every vacuum/solvent dual cycle impossible.
+RESTRAINT_FIELDS_NOT_COMPARED = ("periodic",)
+
+
+def _named_atoms(record: dict, restraints: list) -> list:
+    """Restraint records with their atoms in package-local identities, for comparing two legs."""
+    hyb_a = record["endpoints"]["A"]["hybrid_index_of_local_atom"]
+    hyb_b = record["endpoints"]["B"].get("hybrid_index_of_local_atom") or []
+    name = {h: ["A", i] for i, h in enumerate(hyb_a)}
+    for j, h in enumerate(hyb_b):
+        name.setdefault(h, ["B", j])
+    out = []
+    for restraint in restraints:
+        entry = {k: v for k, v in restraint.items()
+                 if not k.startswith("group_") and k not in RESTRAINT_FIELDS_NOT_COMPARED}
+        for key in ("group_a", "group_b"):
+            if key in restraint:
+                entry[key] = [name.get(h, ["environment", h]) for h in restraint[key]]
+        out.append(entry)
+    return out
