@@ -692,3 +692,33 @@ def test_the_bonded_integrand_has_an_expectation_and_warns():
     print(f"\nbonded integrand: identical junctions {analytic:.3f} kJ/mol (core only); "
           f"one dummy-removed junction angle {moved:.3f}, of which "
           f"{split['unique_touching']:.3f} is the junction term")
+
+
+def test_the_symmetric_internal_pair_convention_is_accepted_and_exact():
+    """Plan schema /5, prepared before S2 lands it: a unique group's internal pairs as zero carrier
+    exceptions in BOTH NonbondedForces, carried by the plan's own force with the same parameters at
+    both ends. The Hamiltonian must add that force once, add nothing of its own for those pairs,
+    and reproduce both end states exactly -- the asymmetry that motivated the change is gone, so
+    U(0) is now exact where the TYK2 leg showed -0.076484 kJ/mol."""
+    sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
+    # the appearing group is physical in System B (end 1)
+    da, db, carried = fx.carried_internal_pairs(sa, sb, set(b), 1)
+    assert carried > 0
+    h = build_hamiltonian(da, db, a, b)
+    assert h.record["plan_internal_pairs_convention"] == "carried"
+    assert h.record["plan_internal_pairs_checked"] == carried
+    c = _context(h.system, x)
+    assert h.energy(c, _state((0, 0, 0))) == pytest.approx(
+        _context(da, x).getState(getEnergy=True).getPotentialEnergy()._value, abs=TOL[True])
+    assert h.energy(c, _state((1, 1, 1))) == pytest.approx(
+        _context(db, x).getState(getEnergy=True).getPotentialEnergy()._value, abs=TOL[True])
+    internal = {v: h.energy_components(c, _state((v, v, v)))["softcore_internal"]
+                for v in (0.0, 0.5, 1.0)}
+    assert len(set(round(e, 9) for e in internal.values())) == 1, internal
+    assert internal[0.0] != 0.0
+
+    # a half-converted plan -- some pairs carried, others still ordinary NonbondedForce pairs --
+    # is refused by name rather than silently counted twice
+    half_a, half_b, _ = fx.carried_internal_pairs(sa, sb, sorted(b)[:2], 1)
+    with pytest.raises(AlchemicalHamiltonianError, match="half converted"):
+        build_hamiltonian(half_a, half_b, a, b)
