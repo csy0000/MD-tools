@@ -9,6 +9,7 @@ Energies run on OpenMM's Reference platform. Nothing here is CUDA evidence.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -240,3 +241,55 @@ def test_an_abfe_decoupling_leg_in_the_complex_needs_a_restraint_and_records_it(
     assert report["ligand_hamiltonian_sha256"] == complex_leg.record["ligand_hamiltonian_sha256"]
     assert report["restraints"]["standard_state"][0][0]["kind"] == "boresch"
     assert report["restraints"]["standard_state"][1] == []
+
+
+# ------------------------------------------------------------------------------------------------
+# what a stranger with the repository sees when something is wrong
+# ------------------------------------------------------------------------------------------------
+def _script_in(copy: Path, *args: str):
+    import md_tools
+
+    root = str(Path(md_tools.__file__).resolve().parents[1])
+    return subprocess.run([sys.executable, str(copy / "build_tyk2_fixture.py"), *args],
+                          capture_output=True, text=True, timeout=600, cwd=root)
+
+
+def test_the_committed_inputs_are_the_bytes_the_fixture_was_prepared_from():
+    """`inputs/SHA256SUMS`, checked here as well as by the script: upstream is a moving target."""
+    import hashlib
+
+    listing = (TYK2 / "inputs" / "SHA256SUMS").read_text().splitlines()
+    assert len(listing) == 4
+    for line in listing:
+        digest, name = line.split()
+        actual = hashlib.sha256((TYK2 / "inputs" / name).read_bytes()).hexdigest()
+        assert actual == digest, name
+
+
+@pytest.mark.parametrize("damage", ["input-changed", "input-missing", "package-missing"])
+def test_the_fixture_script_refuses_clearly_rather_than_tracebacking(tmp_path, damage):
+    copy = tmp_path / "tyk2-v1"
+    shutil.copytree(TYK2, copy)
+    if damage == "input-changed":
+        protein = copy / "inputs" / "protein.pdb"
+        lines = protein.read_text().splitlines(keepends=True)
+        lines[4] = lines[4].replace("-11.428", "-11.999")
+        protein.write_text("".join(lines))
+        expected = "not the"                       # both digests, and what they mean
+    elif damage == "input-missing":
+        (copy / "inputs" / "protein.pdb").unlink()
+        expected = "is missing"
+    else:
+        shutil.rmtree(copy / "packages" / "LOCAL-DKNAYSZNMZIMIZ")
+        expected = "is missing"
+
+    if damage == "package-missing":
+        done = _script_in(copy, "--out", str(tmp_path / "out"), "--ligand", "ejm_31",
+                          "--kind", "vacuum")
+    else:
+        done = _script_in(copy, "--check-prepared")
+    assert done.returncode != 0
+    output = done.stdout + done.stderr
+    assert expected in output, output[-800:]
+    assert "Traceback" not in output, output[-800:]
+    assert "README.md" in output or "committed beside this script" in output

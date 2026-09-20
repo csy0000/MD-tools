@@ -32,11 +32,53 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
+
+class FixtureError(SystemExit):
+    """A refusal a person can act on, rather than a traceback."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"build_tyk2_fixture: {message}")
+
+
+def _require(path: Path, what: str) -> Path:
+    if not path.exists():
+        raise FixtureError(
+            f"{what} is missing: {path}. This fixture is `tests/data/alchemy/tyk2-v1/` and every "
+            f"file it needs is committed beside this script; a partial copy cannot rebuild it. "
+            f"Restore it from the repository (see README.md, 'Source and licence').")
+    return path
+
+
+def check_inputs() -> int:
+    """The upstream files, by sha256: this fixture was prepared from THESE bytes.
+
+    Upstream is a moving repository. A newer `protein.pdb` may be a better structure and is still
+    not the one the committed packages, records and prepared structures were made from, so it is
+    named as a difference rather than silently rebuilt into something else.
+    """
+    import hashlib
+
+    listing = _require(HERE / "inputs" / "SHA256SUMS", "the input checksum list")
+    bad = 0
+    for line in listing.read_text().splitlines():
+        digest, name = line.split()
+        path = _require(HERE / "inputs" / name.lstrip("*"), f"the upstream input {name}")
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != digest:
+            print(f"{name}: sha256 {actual}, not the {digest} this fixture was prepared from. "
+                  f"README.md names the upstream commit these came from.", file=sys.stderr)
+            bad += 1
+    return bad
+
 #: Maestro cap atom names -> the names the Amber ff14SB templates use. The whole edit.
 CAP_RENAMES = {
     "ACE": {"C1": "C", "O1": "O", "C2": "CH3", "H2_1": "HH31", "H2_2": "HH32", "H2_3": "HH33"},
     "NME": {"N1": "N", "HN1": "H", "C1": "CH3", "H1_1": "HH31", "H1_2": "HH32", "H1_3": "HH33"},
 }
+
+def reference_of(ligand: str) -> str:
+    return LIGANDS[ligand][1]
+
 
 #: ligand -> (residue name, catalog reference). The packages are committed; nothing is charged again.
 LIGANDS = {
@@ -90,23 +132,26 @@ def complex_pdb(protein: str, ligand_sdf: Path, residue_name: str) -> str:
 
 def prepared_files() -> dict[str, str]:
     """Every prepared structure, derived from `inputs/` here and now."""
-    protein = rename_caps(HERE / "inputs" / "protein.pdb")
+    protein = rename_caps(_require(HERE / "inputs" / "protein.pdb", "the upstream protein"))
     files = {"protein_caps_renamed.pdb": protein}
     for ligand, (residue_name, _) in LIGANDS.items():
-        files[f"complex_{ligand}.pdb"] = complex_pdb(protein, HERE / "prepared" / f"{ligand}.sdf",
-                                                     residue_name)
+        sdf = _require(HERE / "prepared" / f"{ligand}.sdf", f"the extracted ligand {ligand}")
+        files[f"complex_{ligand}.pdb"] = complex_pdb(protein, sdf, residue_name)
     return files
 
 
 def check_prepared() -> int:
-    """Refuse if what the committed prepared/ files say differs from what this script derives."""
-    bad = 0
+    """Refuse if the upstream inputs, or the prepared files derived from them, have moved."""
+    bad = check_inputs()
     for name, text in prepared_files().items():
-        committed = (HERE / "prepared" / name).read_text()
+        committed = _require(HERE / "prepared" / name, f"the prepared structure {name}").read_text()
         if committed != text:
-            print(f"{name}: the committed file is not what this script derives", file=sys.stderr)
+            print(f"{name}: the committed file is not what this script derives from inputs/. "
+                  f"Either an input changed (see above) or the preparation did; nothing is "
+                  f"rebuilt from a file that does not reproduce.", file=sys.stderr)
             bad += 1
-    print("prepared files reproduce" if not bad else f"{bad} prepared file(s) differ")
+    print("inputs and prepared files reproduce" if not bad
+          else f"{bad} file(s) differ; nothing was built")
     return bad
 
 
@@ -123,16 +168,24 @@ def build(out: Path, ligand: str, kind: str) -> Path:
         name = f"{ligand}.sdf"
         shutil.copy(HERE / "prepared" / name, work / "input" / name)
     config = work / "build" / "build.config"
-    text = (HERE / "builds" / ligand / kind / "build.config").read_text()
+    text = _require(HERE / "builds" / ligand / kind / "build.config",
+                    f"the {kind} build configuration for {ligand}").read_text()
+    for reference in (reference_of(ligand),):
+        _require(HERE / "packages" / reference, f"the parameter package {reference}")
     config.write_text(text.replace("../../../packages", str(HERE / "packages")))
     md_data = out / "md_data_root"
     md_data.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    done = subprocess.run(
         [sys.executable, "-m", "md_tools.cli.md_openmm", "build-top", "-i", f"input/{name}",
          "--config", "build/build.config", "-os", "build/built.xml", "-op", "build/built.pdb",
          "-log", "build/built.log"],
-        cwd=work, check=True,
-        env={**os.environ, "MD_DATA": str(md_data), "PYTHONPATH": _md_tools_path()})
+        cwd=work, env={**os.environ, "MD_DATA": str(md_data), "PYTHONPATH": _md_tools_path()})
+    if done.returncode != 0:
+        # build-top has already said why, above, and says it better than a traceback would.
+        raise FixtureError(
+            f"`md-openmm build-top` refused the {kind} build of {ligand} (exit "
+            f"{done.returncode}); its own message is above. Nothing further was built, and "
+            f"{work} holds what it wrote.")
     return work / "build"
 
 
