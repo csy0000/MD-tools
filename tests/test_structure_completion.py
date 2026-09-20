@@ -83,3 +83,43 @@ def test_an_old_configuration_naming_input_remove_is_refused(tmp_path):
                       encoding="utf-8")
     with pytest.raises(ConfigError, match="input.remove is retired"):
         resolve_build_config(config)
+
+
+def _renamed(residue_name: str, renames: dict[str, str]):
+    """ALA.pdb with one residue's atoms renamed: every atom present, under other names."""
+    from openmm import app
+
+    pdb = app.PDBFile(str(ALA))
+    for atom in pdb.topology.atoms():
+        if atom.residue.name == residue_name and atom.name in renames:
+            atom.name = renames[atom.name]
+    return pdb.topology, pdb.positions
+
+
+def test_a_residue_whose_atoms_are_renamed_is_not_reported_as_missing_them():
+    """The TYK2 case: upstream caps carry Maestro names, and every atom is present.
+
+    The old message said "missing heavy atoms" and pointed at `input.missing_atoms: add`, which
+    would have added a second copy of each. It must name the template mismatch instead, and must
+    not suggest adding anything.
+    """
+    topology, positions = _renamed("ACE", {"C": "C1", "O": "O1", "CH3": "C2",
+                                           "H1": "H2_1", "H2": "H2_2", "H3": "H2_3"})
+    with pytest.raises(CompletionError) as refusal:
+        inspect_structure(topology, positions)
+    message = str(refusal.value)
+    assert "under names the force-field template does not define" in message
+    assert "ACE has" in message and "where the template has" in message
+    assert "do NOT set input.missing_atoms: add" in message
+    assert "are missing heavy atoms" not in message
+
+
+def test_a_genuinely_incomplete_residue_still_gets_the_old_message():
+    """The other branch: an atom that really is absent keeps the refusal that fits it."""
+    topology, positions = _structure(drop=("ALA", "CB"))
+    with pytest.raises(CompletionError) as refusal:
+        inspect_structure(topology, positions)
+    message = str(refusal.value)
+    assert "are missing heavy atoms" in message and "ALA lacks CB" in message
+    assert "Set input.missing_atoms: add" in message
+    assert "template does not define" not in message

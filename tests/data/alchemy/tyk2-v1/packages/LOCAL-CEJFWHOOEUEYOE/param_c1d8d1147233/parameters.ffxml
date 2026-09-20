@@ -1,0 +1,376 @@
+<ForceField>
+  <AtomTypes>
+    <Type name="MDT_param_c1d8d1147233-0" mass="12.01078" class="MDT_param_c1d8d1147233-0" element="C" />
+    <Type name="MDT_param_c1d8d1147233-1" mass="12.01078" class="MDT_param_c1d8d1147233-1" element="C" />
+    <Type name="MDT_param_c1d8d1147233-2" mass="12.01078" class="MDT_param_c1d8d1147233-2" element="C" />
+    <Type name="MDT_param_c1d8d1147233-3" mass="12.01078" class="MDT_param_c1d8d1147233-3" element="C" />
+    <Type name="MDT_param_c1d8d1147233-4" mass="12.01078" class="MDT_param_c1d8d1147233-4" element="C" />
+    <Type name="MDT_param_c1d8d1147233-5" mass="12.01078" class="MDT_param_c1d8d1147233-5" element="C" />
+    <Type name="MDT_param_c1d8d1147233-6" mass="12.01078" class="MDT_param_c1d8d1147233-6" element="C" />
+    <Type name="MDT_param_c1d8d1147233-7" mass="12.01078" class="MDT_param_c1d8d1147233-7" element="C" />
+    <Type name="MDT_param_c1d8d1147233-8" mass="12.01078" class="MDT_param_c1d8d1147233-8" element="C" />
+    <Type name="MDT_param_c1d8d1147233-9" mass="12.01078" class="MDT_param_c1d8d1147233-9" element="C" />
+    <Type name="MDT_param_c1d8d1147233-10" mass="35.4532" class="MDT_param_c1d8d1147233-10" element="Cl" />
+    <Type name="MDT_param_c1d8d1147233-11" mass="15.99943" class="MDT_param_c1d8d1147233-11" element="O" />
+    <Type name="MDT_param_c1d8d1147233-12" mass="14.00672" class="MDT_param_c1d8d1147233-12" element="N" />
+    <Type name="MDT_param_c1d8d1147233-13" mass="14.00672" class="MDT_param_c1d8d1147233-13" element="N" />
+    <Type name="MDT_param_c1d8d1147233-14" mass="12.01078" class="MDT_param_c1d8d1147233-14" element="C" />
+    <Type name="MDT_param_c1d8d1147233-15" mass="12.01078" class="MDT_param_c1d8d1147233-15" element="C" />
+    <Type name="MDT_param_c1d8d1147233-16" mass="14.00672" class="MDT_param_c1d8d1147233-16" element="N" />
+    <Type name="MDT_param_c1d8d1147233-17" mass="12.01078" class="MDT_param_c1d8d1147233-17" element="C" />
+    <Type name="MDT_param_c1d8d1147233-18" mass="15.99943" class="MDT_param_c1d8d1147233-18" element="O" />
+    <Type name="MDT_param_c1d8d1147233-19" mass="12.01078" class="MDT_param_c1d8d1147233-19" element="C" />
+    <Type name="MDT_param_c1d8d1147233-20" mass="35.4532" class="MDT_param_c1d8d1147233-20" element="Cl" />
+    <Type name="MDT_param_c1d8d1147233-21" mass="1.007947" class="MDT_param_c1d8d1147233-21" element="H" />
+    <Type name="MDT_param_c1d8d1147233-22" mass="1.007947" class="MDT_param_c1d8d1147233-22" element="H" />
+    <Type name="MDT_param_c1d8d1147233-23" mass="1.007947" class="MDT_param_c1d8d1147233-23" element="H" />
+    <Type name="MDT_param_c1d8d1147233-24" mass="1.007947" class="MDT_param_c1d8d1147233-24" element="H" />
+    <Type name="MDT_param_c1d8d1147233-25" mass="1.007947" class="MDT_param_c1d8d1147233-25" element="H" />
+    <Type name="MDT_param_c1d8d1147233-26" mass="1.007947" class="MDT_param_c1d8d1147233-26" element="H" />
+    <Type name="MDT_param_c1d8d1147233-27" mass="1.007947" class="MDT_param_c1d8d1147233-27" element="H" />
+    <Type name="MDT_param_c1d8d1147233-28" mass="1.007947" class="MDT_param_c1d8d1147233-28" element="H" />
+    <Type name="MDT_param_c1d8d1147233-29" mass="1.007947" class="MDT_param_c1d8d1147233-29" element="H" />
+    <Type name="MDT_param_c1d8d1147233-30" mass="1.007947" class="MDT_param_c1d8d1147233-30" element="H" />
+    <Type name="MDT_param_c1d8d1147233-31" mass="12.01078" class="MDT_param_c1d8d1147233-31" element="C" />
+    <Type name="MDT_param_c1d8d1147233-32" mass="1.007947" class="MDT_param_c1d8d1147233-32" element="H" />
+    <Type name="MDT_param_c1d8d1147233-33" mass="1.007947" class="MDT_param_c1d8d1147233-33" element="H" />
+    <Type name="MDT_param_c1d8d1147233-34" mass="1.007947" class="MDT_param_c1d8d1147233-34" element="H" />
+  </AtomTypes>
+  <NonbondedForce coulomb14scale="0.8333333333333334" lj14scale="0.5">
+    <UseAttributeFromResidue name="charge" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-0" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-1" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-2" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-3" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-4" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-5" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-6" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-7" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-8" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-9" />
+    <Atom sigma="0.3307527806460624" epsilon="1.111270837866897" class="MDT_param_c1d8d1147233-10" />
+    <Atom sigma="0.3039812205065809" epsilon="0.8795023257036865" class="MDT_param_c1d8d1147233-11" />
+    <Atom sigma="0.3206876023663901" epsilon="0.7016212989374017" class="MDT_param_c1d8d1147233-12" />
+    <Atom sigma="0.3206876023663901" epsilon="0.7016212989374017" class="MDT_param_c1d8d1147233-13" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-14" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-15" />
+    <Atom sigma="0.3206876023663901" epsilon="0.7016212989374017" class="MDT_param_c1d8d1147233-16" />
+    <Atom sigma="0.34806468869450646" epsilon="0.3635030558377792" class="MDT_param_c1d8d1147233-17" />
+    <Atom sigma="0.3039812205065809" epsilon="0.8795023257036865" class="MDT_param_c1d8d1147233-18" />
+    <Atom sigma="0.337953176162662" epsilon="0.45538911611061844" class="MDT_param_c1d8d1147233-19" />
+    <Atom sigma="0.3307527806460624" epsilon="1.111270837866897" class="MDT_param_c1d8d1147233-20" />
+    <Atom sigma="0.2572581535063279" epsilon="0.06531785996356952" class="MDT_param_c1d8d1147233-21" />
+    <Atom sigma="0.2572581535063279" epsilon="0.06531785996356952" class="MDT_param_c1d8d1147233-22" />
+    <Atom sigma="0.24536265277299726" epsilon="0.05483968129296432" class="MDT_param_c1d8d1147233-23" />
+    <Atom sigma="0.2572581535063279" epsilon="0.06531785996356952" class="MDT_param_c1d8d1147233-24" />
+    <Atom sigma="0.2572581535063279" epsilon="0.06531785996356952" class="MDT_param_c1d8d1147233-25" />
+    <Atom sigma="0.11034276772973167" epsilon="0.058955968900150965" class="MDT_param_c1d8d1147233-26" />
+    <Atom sigma="0.2572581535063279" epsilon="0.06531785996356952" class="MDT_param_c1d8d1147233-27" />
+    <Atom sigma="0.11034276772973167" epsilon="0.058955968900150965" class="MDT_param_c1d8d1147233-28" />
+    <Atom sigma="0.26445434132681245" epsilon="0.06602135607582665" class="MDT_param_c1d8d1147233-29" />
+    <Atom sigma="0.26445434132681245" epsilon="0.06602135607582665" class="MDT_param_c1d8d1147233-30" />
+    <Atom sigma="0.337953176162662" epsilon="0.45538911611061844" class="MDT_param_c1d8d1147233-31" />
+    <Atom sigma="0.26445434132681245" epsilon="0.06602135607582665" class="MDT_param_c1d8d1147233-32" />
+    <Atom sigma="0.26445434132681245" epsilon="0.06602135607582665" class="MDT_param_c1d8d1147233-33" />
+    <Atom sigma="0.26445434132681245" epsilon="0.06602135607582665" class="MDT_param_c1d8d1147233-34" />
+  </NonbondedForce>
+  <HarmonicBondForce>
+    <Bond class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-1" length="0.1400774190845" k="315454.5253553757" />
+    <Bond class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-4" length="0.1467813669186" k="223802.32785241498" />
+    <Bond class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-7" length="0.1400774190845" k="315454.5253553757" />
+    <Bond class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-2" length="0.1400774190845" k="315454.5253553757" />
+    <Bond class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-10" length="0.17492571023979997" k="153268.49736961938" />
+    <Bond class1="MDT_param_c1d8d1147233-2" class2="MDT_param_c1d8d1147233-8" length="0.1400774190845" k="315454.5253553757" />
+    <Bond class1="MDT_param_c1d8d1147233-2" class2="MDT_param_c1d8d1147233-21" length="0.10859499048589999" k="323272.6619188584" />
+    <Bond class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-5" length="0.1400774190845" k="315454.5253553757" />
+    <Bond class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-12" length="0.13895946609589999" k="275382.5734136725" />
+    <Bond class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-15" length="0.1400774190845" k="315454.5253553757" />
+    <Bond class1="MDT_param_c1d8d1147233-4" class2="MDT_param_c1d8d1147233-11" length="0.12248193104019998" k="637637.5156846368" />
+    <Bond class1="MDT_param_c1d8d1147233-4" class2="MDT_param_c1d8d1147233-12" length="0.1383769967656" k="273475.5146344746" />
+    <Bond class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-6" length="0.1400774190845" k="315454.5253553757" />
+    <Bond class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-22" length="0.10859499048589999" k="323272.6619188584" />
+    <Bond class1="MDT_param_c1d8d1147233-6" class2="MDT_param_c1d8d1147233-13" length="0.133886585269" k="323931.2392846725" />
+    <Bond class1="MDT_param_c1d8d1147233-6" class2="MDT_param_c1d8d1147233-23" length="0.10859499048589999" k="323272.6619188584" />
+    <Bond class1="MDT_param_c1d8d1147233-7" class2="MDT_param_c1d8d1147233-9" length="0.1400774190845" k="315454.5253553757" />
+    <Bond class1="MDT_param_c1d8d1147233-7" class2="MDT_param_c1d8d1147233-20" length="0.17492571023979997" k="153268.49736961938" />
+    <Bond class1="MDT_param_c1d8d1147233-8" class2="MDT_param_c1d8d1147233-9" length="0.1400774190845" k="315454.5253553757" />
+    <Bond class1="MDT_param_c1d8d1147233-8" class2="MDT_param_c1d8d1147233-24" length="0.10859499048589999" k="323272.6619188584" />
+    <Bond class1="MDT_param_c1d8d1147233-9" class2="MDT_param_c1d8d1147233-25" length="0.10859499048589999" k="323272.6619188584" />
+    <Bond class1="MDT_param_c1d8d1147233-12" class2="MDT_param_c1d8d1147233-26" length="0.10187011914499998" k="402555.08871273004" />
+    <Bond class1="MDT_param_c1d8d1147233-13" class2="MDT_param_c1d8d1147233-14" length="0.133886585269" k="323931.2392846725" />
+    <Bond class1="MDT_param_c1d8d1147233-14" class2="MDT_param_c1d8d1147233-15" length="0.1400774190845" k="315454.5253553757" />
+    <Bond class1="MDT_param_c1d8d1147233-14" class2="MDT_param_c1d8d1147233-16" length="0.13895946609589999" k="275382.5734136725" />
+    <Bond class1="MDT_param_c1d8d1147233-15" class2="MDT_param_c1d8d1147233-27" length="0.10859499048589999" k="323272.6619188584" />
+    <Bond class1="MDT_param_c1d8d1147233-16" class2="MDT_param_c1d8d1147233-17" length="0.1383769967656" k="273475.5146344746" />
+    <Bond class1="MDT_param_c1d8d1147233-16" class2="MDT_param_c1d8d1147233-28" length="0.10187011914499998" k="402555.08871273004" />
+    <Bond class1="MDT_param_c1d8d1147233-17" class2="MDT_param_c1d8d1147233-18" length="0.12248193104019998" k="637637.5156846368" />
+    <Bond class1="MDT_param_c1d8d1147233-17" class2="MDT_param_c1d8d1147233-19" length="0.1529107327625" k="169279.03202668665" />
+    <Bond class1="MDT_param_c1d8d1147233-19" class2="MDT_param_c1d8d1147233-29" length="0.10939788916649999" k="299455.7843479737" />
+    <Bond class1="MDT_param_c1d8d1147233-19" class2="MDT_param_c1d8d1147233-30" length="0.10939788916649999" k="299455.7843479737" />
+    <Bond class1="MDT_param_c1d8d1147233-19" class2="MDT_param_c1d8d1147233-31" length="0.15336821898359998" k="180110.9017334405" />
+    <Bond class1="MDT_param_c1d8d1147233-31" class2="MDT_param_c1d8d1147233-32" length="0.10939788916649999" k="299455.7843479737" />
+    <Bond class1="MDT_param_c1d8d1147233-31" class2="MDT_param_c1d8d1147233-33" length="0.10939788916649999" k="299455.7843479737" />
+    <Bond class1="MDT_param_c1d8d1147233-31" class2="MDT_param_c1d8d1147233-34" length="0.10939788916649999" k="299455.7843479737" />
+  </HarmonicBondForce>
+  <HarmonicAngleForce>
+    <Angle class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-1" class3="MDT_param_c1d8d1147233-2" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-1" class3="MDT_param_c1d8d1147233-10" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-4" class3="MDT_param_c1d8d1147233-11" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-4" class3="MDT_param_c1d8d1147233-12" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-7" class3="MDT_param_c1d8d1147233-9" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-7" class3="MDT_param_c1d8d1147233-20" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-4" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-7" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-2" class3="MDT_param_c1d8d1147233-8" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-2" class3="MDT_param_c1d8d1147233-21" angle="2.091636539381344" k="273.094684216716" />
+    <Angle class1="MDT_param_c1d8d1147233-2" class2="MDT_param_c1d8d1147233-1" class3="MDT_param_c1d8d1147233-10" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-2" class2="MDT_param_c1d8d1147233-8" class3="MDT_param_c1d8d1147233-9" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-2" class2="MDT_param_c1d8d1147233-8" class3="MDT_param_c1d8d1147233-24" angle="2.091636539381344" k="273.094684216716" />
+    <Angle class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-5" class3="MDT_param_c1d8d1147233-6" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-5" class3="MDT_param_c1d8d1147233-22" angle="2.091636539381344" k="273.094684216716" />
+    <Angle class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-12" class3="MDT_param_c1d8d1147233-4" angle="2.102557279891683" k="657.3881463095896" />
+    <Angle class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-12" class3="MDT_param_c1d8d1147233-26" angle="2.060527159002061" k="310.5154027736061" />
+    <Angle class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-15" class3="MDT_param_c1d8d1147233-14" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-15" class3="MDT_param_c1d8d1147233-27" angle="2.091636539381344" k="273.094684216716" />
+    <Angle class1="MDT_param_c1d8d1147233-4" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-7" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-4" class2="MDT_param_c1d8d1147233-12" class3="MDT_param_c1d8d1147233-26" angle="2.060527159002061" k="310.5154027736061" />
+    <Angle class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-12" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-15" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-6" class3="MDT_param_c1d8d1147233-13" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-6" class3="MDT_param_c1d8d1147233-23" angle="2.091636539381344" k="273.094684216716" />
+    <Angle class1="MDT_param_c1d8d1147233-6" class2="MDT_param_c1d8d1147233-5" class3="MDT_param_c1d8d1147233-22" angle="2.091636539381344" k="273.094684216716" />
+    <Angle class1="MDT_param_c1d8d1147233-6" class2="MDT_param_c1d8d1147233-13" class3="MDT_param_c1d8d1147233-14" angle="2.0578102328475882" k="1213.2223494861184" />
+    <Angle class1="MDT_param_c1d8d1147233-7" class2="MDT_param_c1d8d1147233-9" class3="MDT_param_c1d8d1147233-8" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-7" class2="MDT_param_c1d8d1147233-9" class3="MDT_param_c1d8d1147233-25" angle="2.091636539381344" k="273.094684216716" />
+    <Angle class1="MDT_param_c1d8d1147233-8" class2="MDT_param_c1d8d1147233-2" class3="MDT_param_c1d8d1147233-21" angle="2.091636539381344" k="273.094684216716" />
+    <Angle class1="MDT_param_c1d8d1147233-8" class2="MDT_param_c1d8d1147233-9" class3="MDT_param_c1d8d1147233-25" angle="2.091636539381344" k="273.094684216716" />
+    <Angle class1="MDT_param_c1d8d1147233-9" class2="MDT_param_c1d8d1147233-7" class3="MDT_param_c1d8d1147233-20" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-9" class2="MDT_param_c1d8d1147233-8" class3="MDT_param_c1d8d1147233-24" angle="2.091636539381344" k="273.094684216716" />
+    <Angle class1="MDT_param_c1d8d1147233-11" class2="MDT_param_c1d8d1147233-4" class3="MDT_param_c1d8d1147233-12" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-12" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-15" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-13" class2="MDT_param_c1d8d1147233-6" class3="MDT_param_c1d8d1147233-23" angle="2.091636539381344" k="273.094684216716" />
+    <Angle class1="MDT_param_c1d8d1147233-13" class2="MDT_param_c1d8d1147233-14" class3="MDT_param_c1d8d1147233-15" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-13" class2="MDT_param_c1d8d1147233-14" class3="MDT_param_c1d8d1147233-16" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-14" class2="MDT_param_c1d8d1147233-15" class3="MDT_param_c1d8d1147233-27" angle="2.091636539381344" k="273.094684216716" />
+    <Angle class1="MDT_param_c1d8d1147233-14" class2="MDT_param_c1d8d1147233-16" class3="MDT_param_c1d8d1147233-17" angle="2.102557279891683" k="657.3881463095896" />
+    <Angle class1="MDT_param_c1d8d1147233-14" class2="MDT_param_c1d8d1147233-16" class3="MDT_param_c1d8d1147233-28" angle="2.060527159002061" k="310.5154027736061" />
+    <Angle class1="MDT_param_c1d8d1147233-15" class2="MDT_param_c1d8d1147233-14" class3="MDT_param_c1d8d1147233-16" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-16" class2="MDT_param_c1d8d1147233-17" class3="MDT_param_c1d8d1147233-18" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-16" class2="MDT_param_c1d8d1147233-17" class3="MDT_param_c1d8d1147233-19" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-17" class2="MDT_param_c1d8d1147233-16" class3="MDT_param_c1d8d1147233-28" angle="2.060527159002061" k="310.5154027736061" />
+    <Angle class1="MDT_param_c1d8d1147233-17" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-29" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_c1d8d1147233-17" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-30" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_c1d8d1147233-17" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-31" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_c1d8d1147233-18" class2="MDT_param_c1d8d1147233-17" class3="MDT_param_c1d8d1147233-19" angle="2.095903466990631" k="706.7696784494784" />
+    <Angle class1="MDT_param_c1d8d1147233-19" class2="MDT_param_c1d8d1147233-31" class3="MDT_param_c1d8d1147233-32" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_c1d8d1147233-19" class2="MDT_param_c1d8d1147233-31" class3="MDT_param_c1d8d1147233-33" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_c1d8d1147233-19" class2="MDT_param_c1d8d1147233-31" class3="MDT_param_c1d8d1147233-34" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_c1d8d1147233-29" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-30" angle="1.8908789677076112" k="306.81862462732323" />
+    <Angle class1="MDT_param_c1d8d1147233-29" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-31" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_c1d8d1147233-30" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-31" angle="1.9188319964264946" k="559.2803824294216" />
+    <Angle class1="MDT_param_c1d8d1147233-32" class2="MDT_param_c1d8d1147233-31" class3="MDT_param_c1d8d1147233-33" angle="1.8908789677076112" k="306.81862462732323" />
+    <Angle class1="MDT_param_c1d8d1147233-32" class2="MDT_param_c1d8d1147233-31" class3="MDT_param_c1d8d1147233-34" angle="1.8908789677076112" k="306.81862462732323" />
+    <Angle class1="MDT_param_c1d8d1147233-33" class2="MDT_param_c1d8d1147233-31" class3="MDT_param_c1d8d1147233-34" angle="1.8908789677076112" k="306.81862462732323" />
+  </HarmonicAngleForce>
+  <PeriodicTorsionForce ordering="smirnoff">
+    <Proper class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-1" class3="MDT_param_c1d8d1147233-2" class4="MDT_param_c1d8d1147233-8" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-1" class3="MDT_param_c1d8d1147233-2" class4="MDT_param_c1d8d1147233-21" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-4" class3="MDT_param_c1d8d1147233-12" class4="MDT_param_c1d8d1147233-3" periodicity1="2" phase1="3.141592653589793" k1="8.792558778390793" periodicity2="1" phase2="0.0" k2="1.0140894260755025" />
+    <Proper class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-4" class3="MDT_param_c1d8d1147233-12" class4="MDT_param_c1d8d1147233-26" periodicity1="2" phase1="3.141592653589793" k1="8.792558778390793" periodicity2="1" phase2="0.0" k2="1.0140894260755025" />
+    <Proper class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-7" class3="MDT_param_c1d8d1147233-9" class4="MDT_param_c1d8d1147233-8" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-7" class3="MDT_param_c1d8d1147233-9" class4="MDT_param_c1d8d1147233-25" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-4" class4="MDT_param_c1d8d1147233-11" periodicity1="2" phase1="3.141592653589793" k1="4.449255831644488" />
+    <Proper class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-4" class4="MDT_param_c1d8d1147233-12" periodicity1="2" phase1="3.141592653589793" k1="4.449255831644488" />
+    <Proper class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-7" class4="MDT_param_c1d8d1147233-9" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-7" class4="MDT_param_c1d8d1147233-20" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-2" class3="MDT_param_c1d8d1147233-8" class4="MDT_param_c1d8d1147233-9" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-2" class3="MDT_param_c1d8d1147233-8" class4="MDT_param_c1d8d1147233-24" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-2" class2="MDT_param_c1d8d1147233-1" class3="MDT_param_c1d8d1147233-0" class4="MDT_param_c1d8d1147233-4" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-2" class2="MDT_param_c1d8d1147233-1" class3="MDT_param_c1d8d1147233-0" class4="MDT_param_c1d8d1147233-7" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-2" class2="MDT_param_c1d8d1147233-8" class3="MDT_param_c1d8d1147233-9" class4="MDT_param_c1d8d1147233-7" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-2" class2="MDT_param_c1d8d1147233-8" class3="MDT_param_c1d8d1147233-9" class4="MDT_param_c1d8d1147233-25" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-5" class3="MDT_param_c1d8d1147233-6" class4="MDT_param_c1d8d1147233-13" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-5" class3="MDT_param_c1d8d1147233-6" class4="MDT_param_c1d8d1147233-23" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-12" class3="MDT_param_c1d8d1147233-4" class4="MDT_param_c1d8d1147233-11" periodicity1="2" phase1="3.141592653589793" k1="10.215589190962545" periodicity2="1" phase2="0.0" k2="-1.790149771764285" />
+    <Proper class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-15" class3="MDT_param_c1d8d1147233-14" class4="MDT_param_c1d8d1147233-13" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-15" class3="MDT_param_c1d8d1147233-14" class4="MDT_param_c1d8d1147233-16" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-4" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-1" class4="MDT_param_c1d8d1147233-10" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-4" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-7" class4="MDT_param_c1d8d1147233-9" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-4" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-7" class4="MDT_param_c1d8d1147233-20" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-4" class2="MDT_param_c1d8d1147233-12" class3="MDT_param_c1d8d1147233-3" class4="MDT_param_c1d8d1147233-5" periodicity1="2" phase1="3.141592653589793" k1="5.950394871183448" />
+    <Proper class1="MDT_param_c1d8d1147233-4" class2="MDT_param_c1d8d1147233-12" class3="MDT_param_c1d8d1147233-3" class4="MDT_param_c1d8d1147233-15" periodicity1="2" phase1="3.141592653589793" k1="5.950394871183448" />
+    <Proper class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-12" class4="MDT_param_c1d8d1147233-26" periodicity1="2" phase1="3.141592653589793" k1="5.950394871183448" />
+    <Proper class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-15" class4="MDT_param_c1d8d1147233-14" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-15" class4="MDT_param_c1d8d1147233-27" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-6" class3="MDT_param_c1d8d1147233-13" class4="MDT_param_c1d8d1147233-14" periodicity1="2" phase1="3.141592653589793" k1="23.389190521390137" />
+    <Proper class1="MDT_param_c1d8d1147233-6" class2="MDT_param_c1d8d1147233-5" class3="MDT_param_c1d8d1147233-3" class4="MDT_param_c1d8d1147233-12" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-6" class2="MDT_param_c1d8d1147233-5" class3="MDT_param_c1d8d1147233-3" class4="MDT_param_c1d8d1147233-15" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-6" class2="MDT_param_c1d8d1147233-13" class3="MDT_param_c1d8d1147233-14" class4="MDT_param_c1d8d1147233-15" periodicity1="2" phase1="3.141592653589793" k1="23.389190521390137" />
+    <Proper class1="MDT_param_c1d8d1147233-6" class2="MDT_param_c1d8d1147233-13" class3="MDT_param_c1d8d1147233-14" class4="MDT_param_c1d8d1147233-16" periodicity1="2" phase1="3.141592653589793" k1="9.791299431495895" />
+    <Proper class1="MDT_param_c1d8d1147233-7" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-1" class4="MDT_param_c1d8d1147233-10" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-7" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-4" class4="MDT_param_c1d8d1147233-11" periodicity1="2" phase1="3.141592653589793" k1="4.449255831644488" />
+    <Proper class1="MDT_param_c1d8d1147233-7" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-4" class4="MDT_param_c1d8d1147233-12" periodicity1="2" phase1="3.141592653589793" k1="4.449255831644488" />
+    <Proper class1="MDT_param_c1d8d1147233-7" class2="MDT_param_c1d8d1147233-9" class3="MDT_param_c1d8d1147233-8" class4="MDT_param_c1d8d1147233-24" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-8" class2="MDT_param_c1d8d1147233-2" class3="MDT_param_c1d8d1147233-1" class4="MDT_param_c1d8d1147233-10" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-8" class2="MDT_param_c1d8d1147233-9" class3="MDT_param_c1d8d1147233-7" class4="MDT_param_c1d8d1147233-20" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-9" class2="MDT_param_c1d8d1147233-8" class3="MDT_param_c1d8d1147233-2" class4="MDT_param_c1d8d1147233-21" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-10" class2="MDT_param_c1d8d1147233-1" class3="MDT_param_c1d8d1147233-2" class4="MDT_param_c1d8d1147233-21" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-11" class2="MDT_param_c1d8d1147233-4" class3="MDT_param_c1d8d1147233-12" class4="MDT_param_c1d8d1147233-26" periodicity1="2" phase1="3.141592653589793" k1="5.418493811073432" periodicity2="1" phase2="0.0" k2="5.12589189748288" />
+    <Proper class1="MDT_param_c1d8d1147233-12" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-5" class4="MDT_param_c1d8d1147233-22" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-12" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-15" class4="MDT_param_c1d8d1147233-14" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-12" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-15" class4="MDT_param_c1d8d1147233-27" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-13" class2="MDT_param_c1d8d1147233-6" class3="MDT_param_c1d8d1147233-5" class4="MDT_param_c1d8d1147233-22" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-13" class2="MDT_param_c1d8d1147233-14" class3="MDT_param_c1d8d1147233-15" class4="MDT_param_c1d8d1147233-27" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-13" class2="MDT_param_c1d8d1147233-14" class3="MDT_param_c1d8d1147233-16" class4="MDT_param_c1d8d1147233-17" periodicity1="2" phase1="3.141592653589793" k1="5.950394871183448" />
+    <Proper class1="MDT_param_c1d8d1147233-13" class2="MDT_param_c1d8d1147233-14" class3="MDT_param_c1d8d1147233-16" class4="MDT_param_c1d8d1147233-28" periodicity1="2" phase1="3.141592653589793" k1="5.950394871183448" />
+    <Proper class1="MDT_param_c1d8d1147233-14" class2="MDT_param_c1d8d1147233-13" class3="MDT_param_c1d8d1147233-6" class4="MDT_param_c1d8d1147233-23" periodicity1="2" phase1="3.141592653589793" k1="9.791299431495895" />
+    <Proper class1="MDT_param_c1d8d1147233-14" class2="MDT_param_c1d8d1147233-16" class3="MDT_param_c1d8d1147233-17" class4="MDT_param_c1d8d1147233-18" periodicity1="2" phase1="3.141592653589793" k1="10.215589190962545" periodicity2="1" phase2="0.0" k2="-1.790149771764285" />
+    <Proper class1="MDT_param_c1d8d1147233-14" class2="MDT_param_c1d8d1147233-16" class3="MDT_param_c1d8d1147233-17" class4="MDT_param_c1d8d1147233-19" periodicity1="2" phase1="3.141592653589793" k1="8.792558778390793" periodicity2="1" phase2="0.0" k2="1.0140894260755025" />
+    <Proper class1="MDT_param_c1d8d1147233-15" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-5" class4="MDT_param_c1d8d1147233-22" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-15" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-12" class4="MDT_param_c1d8d1147233-26" periodicity1="2" phase1="3.141592653589793" k1="5.950394871183448" />
+    <Proper class1="MDT_param_c1d8d1147233-15" class2="MDT_param_c1d8d1147233-14" class3="MDT_param_c1d8d1147233-16" class4="MDT_param_c1d8d1147233-17" periodicity1="2" phase1="3.141592653589793" k1="5.950394871183448" />
+    <Proper class1="MDT_param_c1d8d1147233-15" class2="MDT_param_c1d8d1147233-14" class3="MDT_param_c1d8d1147233-16" class4="MDT_param_c1d8d1147233-28" periodicity1="2" phase1="3.141592653589793" k1="5.950394871183448" />
+    <Proper class1="MDT_param_c1d8d1147233-16" class2="MDT_param_c1d8d1147233-14" class3="MDT_param_c1d8d1147233-15" class4="MDT_param_c1d8d1147233-27" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-16" class2="MDT_param_c1d8d1147233-17" class3="MDT_param_c1d8d1147233-19" class4="MDT_param_c1d8d1147233-29" periodicity1="3" phase1="0.0" k1="0.90899008864106" />
+    <Proper class1="MDT_param_c1d8d1147233-16" class2="MDT_param_c1d8d1147233-17" class3="MDT_param_c1d8d1147233-19" class4="MDT_param_c1d8d1147233-30" periodicity1="3" phase1="0.0" k1="0.90899008864106" />
+    <Proper class1="MDT_param_c1d8d1147233-16" class2="MDT_param_c1d8d1147233-17" class3="MDT_param_c1d8d1147233-19" class4="MDT_param_c1d8d1147233-31" periodicity1="4" phase1="0.0" k1="-1.2357696604958257" periodicity2="2" phase2="0.0" k2="1.2228252771806152" />
+    <Proper class1="MDT_param_c1d8d1147233-17" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-31" class4="MDT_param_c1d8d1147233-32" periodicity1="3" phase1="0.0" k1="0.6139598093351945" />
+    <Proper class1="MDT_param_c1d8d1147233-17" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-31" class4="MDT_param_c1d8d1147233-33" periodicity1="3" phase1="0.0" k1="0.6139598093351945" />
+    <Proper class1="MDT_param_c1d8d1147233-17" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-31" class4="MDT_param_c1d8d1147233-34" periodicity1="3" phase1="0.0" k1="0.6139598093351945" />
+    <Proper class1="MDT_param_c1d8d1147233-18" class2="MDT_param_c1d8d1147233-17" class3="MDT_param_c1d8d1147233-16" class4="MDT_param_c1d8d1147233-28" periodicity1="2" phase1="3.141592653589793" k1="5.418493811073432" periodicity2="1" phase2="0.0" k2="5.12589189748288" />
+    <Proper class1="MDT_param_c1d8d1147233-18" class2="MDT_param_c1d8d1147233-17" class3="MDT_param_c1d8d1147233-19" class4="MDT_param_c1d8d1147233-29" periodicity1="1" phase1="0.0" k1="3.899093020128699" periodicity2="2" phase2="0.0" k2="0.8293868677579376" periodicity3="3" phase3="3.141592653589793" k3="-0.9060988429849224" />
+    <Proper class1="MDT_param_c1d8d1147233-18" class2="MDT_param_c1d8d1147233-17" class3="MDT_param_c1d8d1147233-19" class4="MDT_param_c1d8d1147233-30" periodicity1="1" phase1="0.0" k1="3.899093020128699" periodicity2="2" phase2="0.0" k2="0.8293868677579376" periodicity3="3" phase3="3.141592653589793" k3="-0.9060988429849224" />
+    <Proper class1="MDT_param_c1d8d1147233-18" class2="MDT_param_c1d8d1147233-17" class3="MDT_param_c1d8d1147233-19" class4="MDT_param_c1d8d1147233-31" periodicity1="2" phase1="0.0" k1="-1.9202777621481042" />
+    <Proper class1="MDT_param_c1d8d1147233-19" class2="MDT_param_c1d8d1147233-17" class3="MDT_param_c1d8d1147233-16" class4="MDT_param_c1d8d1147233-28" periodicity1="2" phase1="3.141592653589793" k1="8.792558778390793" periodicity2="1" phase2="0.0" k2="1.0140894260755025" />
+    <Proper class1="MDT_param_c1d8d1147233-20" class2="MDT_param_c1d8d1147233-7" class3="MDT_param_c1d8d1147233-9" class4="MDT_param_c1d8d1147233-25" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-21" class2="MDT_param_c1d8d1147233-2" class3="MDT_param_c1d8d1147233-8" class4="MDT_param_c1d8d1147233-24" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-22" class2="MDT_param_c1d8d1147233-5" class3="MDT_param_c1d8d1147233-6" class4="MDT_param_c1d8d1147233-23" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-24" class2="MDT_param_c1d8d1147233-8" class3="MDT_param_c1d8d1147233-9" class4="MDT_param_c1d8d1147233-25" periodicity1="2" phase1="3.141592653589793" k1="13.624769480588176" />
+    <Proper class1="MDT_param_c1d8d1147233-29" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-31" class4="MDT_param_c1d8d1147233-32" periodicity1="3" phase1="0.0" k1="1.0001407846270824" />
+    <Proper class1="MDT_param_c1d8d1147233-29" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-31" class4="MDT_param_c1d8d1147233-33" periodicity1="3" phase1="0.0" k1="1.0001407846270824" />
+    <Proper class1="MDT_param_c1d8d1147233-29" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-31" class4="MDT_param_c1d8d1147233-34" periodicity1="3" phase1="0.0" k1="1.0001407846270824" />
+    <Proper class1="MDT_param_c1d8d1147233-30" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-31" class4="MDT_param_c1d8d1147233-32" periodicity1="3" phase1="0.0" k1="1.0001407846270824" />
+    <Proper class1="MDT_param_c1d8d1147233-30" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-31" class4="MDT_param_c1d8d1147233-33" periodicity1="3" phase1="0.0" k1="1.0001407846270824" />
+    <Proper class1="MDT_param_c1d8d1147233-30" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-31" class4="MDT_param_c1d8d1147233-34" periodicity1="3" phase1="0.0" k1="1.0001407846270824" />
+    <Improper class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-2" class4="MDT_param_c1d8d1147233-10" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-2" class3="MDT_param_c1d8d1147233-10" class4="MDT_param_c1d8d1147233-0" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-1" class2="MDT_param_c1d8d1147233-10" class3="MDT_param_c1d8d1147233-0" class4="MDT_param_c1d8d1147233-2" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-4" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-11" class4="MDT_param_c1d8d1147233-12" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-4" class2="MDT_param_c1d8d1147233-11" class3="MDT_param_c1d8d1147233-12" class4="MDT_param_c1d8d1147233-0" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-4" class2="MDT_param_c1d8d1147233-12" class3="MDT_param_c1d8d1147233-0" class4="MDT_param_c1d8d1147233-11" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-7" class2="MDT_param_c1d8d1147233-0" class3="MDT_param_c1d8d1147233-9" class4="MDT_param_c1d8d1147233-20" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-7" class2="MDT_param_c1d8d1147233-9" class3="MDT_param_c1d8d1147233-20" class4="MDT_param_c1d8d1147233-0" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-7" class2="MDT_param_c1d8d1147233-20" class3="MDT_param_c1d8d1147233-0" class4="MDT_param_c1d8d1147233-9" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-1" class3="MDT_param_c1d8d1147233-4" class4="MDT_param_c1d8d1147233-7" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-4" class3="MDT_param_c1d8d1147233-7" class4="MDT_param_c1d8d1147233-1" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-0" class2="MDT_param_c1d8d1147233-7" class3="MDT_param_c1d8d1147233-1" class4="MDT_param_c1d8d1147233-4" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-2" class2="MDT_param_c1d8d1147233-1" class3="MDT_param_c1d8d1147233-8" class4="MDT_param_c1d8d1147233-21" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-2" class2="MDT_param_c1d8d1147233-8" class3="MDT_param_c1d8d1147233-21" class4="MDT_param_c1d8d1147233-1" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-2" class2="MDT_param_c1d8d1147233-21" class3="MDT_param_c1d8d1147233-1" class4="MDT_param_c1d8d1147233-8" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-8" class2="MDT_param_c1d8d1147233-2" class3="MDT_param_c1d8d1147233-9" class4="MDT_param_c1d8d1147233-24" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-8" class2="MDT_param_c1d8d1147233-9" class3="MDT_param_c1d8d1147233-24" class4="MDT_param_c1d8d1147233-2" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-8" class2="MDT_param_c1d8d1147233-24" class3="MDT_param_c1d8d1147233-2" class4="MDT_param_c1d8d1147233-9" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-6" class4="MDT_param_c1d8d1147233-22" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-6" class3="MDT_param_c1d8d1147233-22" class4="MDT_param_c1d8d1147233-3" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-5" class2="MDT_param_c1d8d1147233-22" class3="MDT_param_c1d8d1147233-3" class4="MDT_param_c1d8d1147233-6" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-12" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-4" class4="MDT_param_c1d8d1147233-26" periodicity1="2" phase1="3.141592653589793" k1="1.7843938939524613" />
+    <Improper class1="MDT_param_c1d8d1147233-12" class2="MDT_param_c1d8d1147233-4" class3="MDT_param_c1d8d1147233-26" class4="MDT_param_c1d8d1147233-3" periodicity1="2" phase1="3.141592653589793" k1="1.7843938939524613" />
+    <Improper class1="MDT_param_c1d8d1147233-12" class2="MDT_param_c1d8d1147233-26" class3="MDT_param_c1d8d1147233-3" class4="MDT_param_c1d8d1147233-4" periodicity1="2" phase1="3.141592653589793" k1="1.7843938939524613" />
+    <Improper class1="MDT_param_c1d8d1147233-15" class2="MDT_param_c1d8d1147233-3" class3="MDT_param_c1d8d1147233-14" class4="MDT_param_c1d8d1147233-27" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-15" class2="MDT_param_c1d8d1147233-14" class3="MDT_param_c1d8d1147233-27" class4="MDT_param_c1d8d1147233-3" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-15" class2="MDT_param_c1d8d1147233-27" class3="MDT_param_c1d8d1147233-3" class4="MDT_param_c1d8d1147233-14" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-5" class3="MDT_param_c1d8d1147233-12" class4="MDT_param_c1d8d1147233-15" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-12" class3="MDT_param_c1d8d1147233-15" class4="MDT_param_c1d8d1147233-5" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-3" class2="MDT_param_c1d8d1147233-15" class3="MDT_param_c1d8d1147233-5" class4="MDT_param_c1d8d1147233-12" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-6" class2="MDT_param_c1d8d1147233-5" class3="MDT_param_c1d8d1147233-13" class4="MDT_param_c1d8d1147233-23" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-6" class2="MDT_param_c1d8d1147233-13" class3="MDT_param_c1d8d1147233-23" class4="MDT_param_c1d8d1147233-5" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-6" class2="MDT_param_c1d8d1147233-23" class3="MDT_param_c1d8d1147233-5" class4="MDT_param_c1d8d1147233-13" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-9" class2="MDT_param_c1d8d1147233-7" class3="MDT_param_c1d8d1147233-8" class4="MDT_param_c1d8d1147233-25" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-9" class2="MDT_param_c1d8d1147233-8" class3="MDT_param_c1d8d1147233-25" class4="MDT_param_c1d8d1147233-7" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-9" class2="MDT_param_c1d8d1147233-25" class3="MDT_param_c1d8d1147233-7" class4="MDT_param_c1d8d1147233-8" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-14" class2="MDT_param_c1d8d1147233-13" class3="MDT_param_c1d8d1147233-15" class4="MDT_param_c1d8d1147233-16" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-14" class2="MDT_param_c1d8d1147233-15" class3="MDT_param_c1d8d1147233-16" class4="MDT_param_c1d8d1147233-13" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-14" class2="MDT_param_c1d8d1147233-16" class3="MDT_param_c1d8d1147233-13" class4="MDT_param_c1d8d1147233-15" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-16" class2="MDT_param_c1d8d1147233-14" class3="MDT_param_c1d8d1147233-17" class4="MDT_param_c1d8d1147233-28" periodicity1="2" phase1="3.141592653589793" k1="1.7843938939524613" />
+    <Improper class1="MDT_param_c1d8d1147233-16" class2="MDT_param_c1d8d1147233-17" class3="MDT_param_c1d8d1147233-28" class4="MDT_param_c1d8d1147233-14" periodicity1="2" phase1="3.141592653589793" k1="1.7843938939524613" />
+    <Improper class1="MDT_param_c1d8d1147233-16" class2="MDT_param_c1d8d1147233-28" class3="MDT_param_c1d8d1147233-14" class4="MDT_param_c1d8d1147233-17" periodicity1="2" phase1="3.141592653589793" k1="1.7843938939524613" />
+    <Improper class1="MDT_param_c1d8d1147233-17" class2="MDT_param_c1d8d1147233-16" class3="MDT_param_c1d8d1147233-18" class4="MDT_param_c1d8d1147233-19" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-17" class2="MDT_param_c1d8d1147233-18" class3="MDT_param_c1d8d1147233-19" class4="MDT_param_c1d8d1147233-16" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+    <Improper class1="MDT_param_c1d8d1147233-17" class2="MDT_param_c1d8d1147233-19" class3="MDT_param_c1d8d1147233-16" class4="MDT_param_c1d8d1147233-18" periodicity1="2" phase1="3.141592653589793" k1="7.391908600398789" />
+  </PeriodicTorsionForce>
+  <Residues>
+    <Residue name="MDT_param_c1d8d1147233">
+      <Atom name="C1" type="MDT_param_c1d8d1147233-0" charge="-0.1436286" />
+      <Atom name="C2" type="MDT_param_c1d8d1147233-1" charge="0.052371400000000005" />
+      <Atom name="C3" type="MDT_param_c1d8d1147233-2" charge="-0.1290286" />
+      <Atom name="C4" type="MDT_param_c1d8d1147233-3" charge="0.1275714" />
+      <Atom name="C5" type="MDT_param_c1d8d1147233-4" charge="0.6916713999999999" />
+      <Atom name="C6" type="MDT_param_c1d8d1147233-5" charge="-0.3033286" />
+      <Atom name="C7" type="MDT_param_c1d8d1147233-6" charge="0.4441714" />
+      <Atom name="C8" type="MDT_param_c1d8d1147233-7" charge="0.052371400000000005" />
+      <Atom name="C9" type="MDT_param_c1d8d1147233-8" charge="-0.09602859999999999" />
+      <Atom name="C10" type="MDT_param_c1d8d1147233-9" charge="-0.1290286" />
+      <Atom name="Cl1" type="MDT_param_c1d8d1147233-10" charge="-0.0599286" />
+      <Atom name="O1" type="MDT_param_c1d8d1147233-11" charge="-0.5501286000000001" />
+      <Atom name="N1" type="MDT_param_c1d8d1147233-12" charge="-0.4601286" />
+      <Atom name="N2" type="MDT_param_c1d8d1147233-13" charge="-0.7370286" />
+      <Atom name="C11" type="MDT_param_c1d8d1147233-14" charge="0.5491714" />
+      <Atom name="C12" type="MDT_param_c1d8d1147233-15" charge="-0.32032859999999996" />
+      <Atom name="N3" type="MDT_param_c1d8d1147233-16" charge="-0.5494286" />
+      <Atom name="C13" type="MDT_param_c1d8d1147233-17" charge="0.6690714" />
+      <Atom name="O2" type="MDT_param_c1d8d1147233-18" charge="-0.5931286" />
+      <Atom name="C14" type="MDT_param_c1d8d1147233-19" charge="-0.1564286" />
+      <Atom name="Cl2" type="MDT_param_c1d8d1147233-20" charge="-0.0599286" />
+      <Atom name="H1" type="MDT_param_c1d8d1147233-21" charge="0.1569714" />
+      <Atom name="H2" type="MDT_param_c1d8d1147233-22" charge="0.1829714" />
+      <Atom name="H3" type="MDT_param_c1d8d1147233-23" charge="0.025071400000000004" />
+      <Atom name="H4" type="MDT_param_c1d8d1147233-24" charge="0.1479714" />
+      <Atom name="H5" type="MDT_param_c1d8d1147233-25" charge="0.1569714" />
+      <Atom name="H6" type="MDT_param_c1d8d1147233-26" charge="0.3304714" />
+      <Atom name="H7" type="MDT_param_c1d8d1147233-27" charge="0.1789714" />
+      <Atom name="H8" type="MDT_param_c1d8d1147233-28" charge="0.3314714" />
+      <Atom name="H9" type="MDT_param_c1d8d1147233-29" charge="0.07567140000000001" />
+      <Atom name="H10" type="MDT_param_c1d8d1147233-30" charge="0.07567140000000001" />
+      <Atom name="C15" type="MDT_param_c1d8d1147233-31" charge="-0.0971286" />
+      <Atom name="H11" type="MDT_param_c1d8d1147233-32" charge="0.0453384" />
+      <Atom name="H12" type="MDT_param_c1d8d1147233-33" charge="0.0453384" />
+      <Atom name="H13" type="MDT_param_c1d8d1147233-34" charge="0.0453384" />
+      <Bond atomName1="C1" atomName2="C2" />
+      <Bond atomName1="C1" atomName2="C5" />
+      <Bond atomName1="C1" atomName2="C8" />
+      <Bond atomName1="C2" atomName2="C3" />
+      <Bond atomName1="C2" atomName2="Cl1" />
+      <Bond atomName1="C3" atomName2="C9" />
+      <Bond atomName1="C3" atomName2="H1" />
+      <Bond atomName1="C4" atomName2="C6" />
+      <Bond atomName1="C4" atomName2="N1" />
+      <Bond atomName1="C4" atomName2="C12" />
+      <Bond atomName1="C5" atomName2="O1" />
+      <Bond atomName1="C5" atomName2="N1" />
+      <Bond atomName1="C6" atomName2="C7" />
+      <Bond atomName1="C6" atomName2="H2" />
+      <Bond atomName1="C7" atomName2="N2" />
+      <Bond atomName1="C7" atomName2="H3" />
+      <Bond atomName1="C8" atomName2="C10" />
+      <Bond atomName1="C8" atomName2="Cl2" />
+      <Bond atomName1="C9" atomName2="C10" />
+      <Bond atomName1="C9" atomName2="H4" />
+      <Bond atomName1="C10" atomName2="H5" />
+      <Bond atomName1="N1" atomName2="H6" />
+      <Bond atomName1="N2" atomName2="C11" />
+      <Bond atomName1="C11" atomName2="C12" />
+      <Bond atomName1="C11" atomName2="N3" />
+      <Bond atomName1="C12" atomName2="H7" />
+      <Bond atomName1="N3" atomName2="C13" />
+      <Bond atomName1="N3" atomName2="H8" />
+      <Bond atomName1="C13" atomName2="O2" />
+      <Bond atomName1="C13" atomName2="C14" />
+      <Bond atomName1="C14" atomName2="H9" />
+      <Bond atomName1="C14" atomName2="H10" />
+      <Bond atomName1="C14" atomName2="C15" />
+      <Bond atomName1="C15" atomName2="H11" />
+      <Bond atomName1="C15" atomName2="H12" />
+      <Bond atomName1="C15" atomName2="H13" />
+    </Residue>
+  </Residues>
+</ForceField>

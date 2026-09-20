@@ -64,6 +64,43 @@ def _chain_breaks(topology, positions) -> list[dict[str, Any]]:
     return breaks
 
 
+def _renamed_not_missing(fixer, flagged: list) -> list:
+    """The flagged residues whose atoms are PRESENT under names the template does not define.
+
+    A template is matched by atom NAME, so a residue written with another program's names reads as
+    one missing exactly those atoms -- which is what a prepared structure with Maestro cap names
+    (ACE `C1 O1 C2 H2_*`) does. The old refusal said "missing heavy atoms" and pointed at
+    `input.missing_atoms: add`, which would have added a SECOND copy of every one of them. A
+    residue is reported here instead when it carries at least as many atoms as the template
+    defines and at least as many unrecognised names as the atoms said to be missing.
+    """
+    by_key = {}
+    for residue in fixer.topology.residues():
+        by_key[(residue.chain.id, str(residue.id).strip(),
+                (residue.insertionCode or "").strip())] = residue
+    renamed = []
+    for entry in flagged:
+        template = fixer.templates.get(entry["residue"])
+        residue = by_key.get((entry["chain"], entry["resid"], entry["insertion_code"]))
+        if template is None or residue is None:
+            continue
+        # HEAVY ATOMS ONLY, on both sides: PDBFixer's templates define no hydrogens, so counting
+        # a residue's hydrogens against them made every incomplete residue look renamed -- an
+        # alanine missing its CB "has H HA HB1 HB2 HB3 where the template has CB".
+        def heavy(atoms):
+            return [a.name for a in atoms if (a.element is None or a.element.symbol != "H")]
+
+        defined = set(heavy(template.topology.atoms()))
+        present = heavy(residue.atoms())
+        missing = [name for name in entry["missing_atoms"] if name in defined]
+        unmatched = sorted(name for name in present if name not in defined)
+        if unmatched and len(present) >= len(defined) and len(unmatched) >= len(missing):
+            renamed.append({**entry, "unmatched_names": unmatched,
+                            "template_atom_count": len(defined),
+                            "present_atom_count": len(present)})
+    return renamed
+
+
 def inspect_structure(topology, positions, *, missing_atoms: str = "refuse"):
     """(topology, positions, record) with missing heavy atoms handled under `missing_atoms`."""
     from pdbfixer import PDBFixer
@@ -109,7 +146,23 @@ def inspect_structure(topology, positions, *, missing_atoms: str = "refuse"):
     }
     if not incomplete and not terminals:
         return topology, positions, record
+    renamed = _renamed_not_missing(fixer, incomplete + terminals)
+    record["residues_with_unmatched_atom_names"] = renamed
     if missing_atoms == "refuse":
+        if renamed:
+            shown = "; ".join(
+                f"{r['chain']}:{r['resid']}{r['insertion_code']} {r['residue']} has "
+                f"{' '.join(r['unmatched_names'])} where the template has "
+                f"{' '.join(r['missing_atoms'])}" for r in renamed[:12])
+            more = len(renamed) - 12
+            raise CompletionError(
+                f"{len(renamed)} residue(s) carry the right number of atoms under names the "
+                f"force-field template does not define ({shown}"
+                f"{f'; and {more} more' if more > 0 else ''}). These atoms are PRESENT: what does "
+                f"not match is their NAMES, which is how templates are matched. Rename them to "
+                f"the template's names in your structure -- md-tools does not rename atoms in "
+                f"someone's file -- and do NOT set input.missing_atoms: add, which would add a "
+                f"second copy of each. Nothing was written.")
         shown = "; ".join(f"{r['chain']}:{r['resid']}{r['insertion_code']} {r['residue']} lacks "
                           f"{' '.join(r['missing_atoms'])}" for r in (incomplete + terminals)[:12])
         more = len(incomplete) + len(terminals) - 12
