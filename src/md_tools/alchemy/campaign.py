@@ -168,3 +168,49 @@ def combine_repeats(legs: Sequence[Leg]) -> Leg:
                 "sigma_used": "repeat spread" if spread_sigma > estimator_sigma else "estimator",
                 "rule": "the larger of the estimator's uncertainty and the repeat spread"},
                first.ligand_hamiltonian_sha256)
+
+def matched_leg_report(first_dir, second_dir) -> dict[str, Any]:
+    """S2's `matched_legs` on the plans two leg directories were prepared from.
+
+    Refuses (TopologyError) unless both legs carry one ligand Hamiltonian; also refuses a
+    plan.json that is not the plan its leg.json names.
+    """
+    from types import SimpleNamespace
+
+    from md_tools.alchemy.topology import matched_legs
+
+    plans = []
+    for d in (Path(first_dir), Path(second_dir)):
+        record, _, _ = read_leg(d)
+        plan = json.loads((d / "plan.json").read_text())
+        if plan.get("plan_sha256") != record["plan_sha256"]:
+            raise WindowError(f"{d}/plan.json is not the plan {d}/leg.json was prepared from")
+        plans.append(SimpleNamespace(record=plan, sha256=plan["plan_sha256"]))
+    return matched_legs(*plans)
+
+
+def relative_hydration_from_legs(vacuum_dir, solvent_dir, *, repeats: Sequence[str],
+                                 estimator: str = "MBAR") -> dict[str, Any]:
+    """ddG_hyd(A->B) from a vacuum and a solvent leg, each over its independent repeats.
+
+    `matched_legs` runs first: two legs that do not share one ligand Hamiltonian are refused
+    before any sample is read.
+    """
+    from md_tools.alchemy.cycles import relative_hydration
+
+    report = matched_leg_report(vacuum_dir, solvent_dir)
+    legs, analyses = {}, {}
+    for role, d in (("vacuum", vacuum_dir), ("solvent", solvent_dir)):
+        per = [analyze_leg(d, repeat=r, estimator=estimator) for r in repeats]
+        for (leg, _), r in zip(per, repeats):
+            if leg.ligand_hamiltonian_sha256 != report["ligand_hamiltonian_sha256"]:
+                raise WindowError(f"{d} ({r}) carries ligand Hamiltonian "
+                                  f"{str(leg.ligand_hamiltonian_sha256)[:12]}..., matched_legs "
+                                  f"says {report['ligand_hamiltonian_sha256'][:12]}...")
+        legs[role] = combine_repeats([leg for leg, _ in per])
+        analyses[role] = {r: a for (_, a), r in zip(per, repeats)}
+    result = relative_hydration(vacuum=legs["vacuum"], solvent=legs["solvent"])
+    result["matched_legs"] = report
+    result["repeats"] = list(repeats)
+    result["analyses"] = analyses
+    return result
