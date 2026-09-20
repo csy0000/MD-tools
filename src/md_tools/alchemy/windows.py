@@ -109,6 +109,10 @@ class WindowError(ValueError):
     pass
 
 
+#: The plan's environment labels (S2, `plan.record["environment"]["solvation"]`).
+SOLVATIONS = ("explicit", "implicit", "vacuum")
+
+
 def _sha256_bytes(blob: bytes) -> str:
     return hashlib.sha256(blob).hexdigest()
 
@@ -427,6 +431,9 @@ class WindowSettings:
     friction_per_ps: float = 1.0
     barostat_interval: int = 25
     seed: int = 20260919
+    #: LocalEnergyMinimizer iterations at the window's own state before velocities are drawn, on
+    #: a fresh start only (0 = none). Part of the window's identity.
+    minimize_iterations: int = 0
 
     def __post_init__(self):
         for name in ("steps", "report_interval", "checkpoint_interval"):
@@ -464,7 +471,8 @@ def _checkpoint_dir(paths):
 
 
 def window_identity(*, hamiltonian, path: AlchemicalPath, states, window_id, settings,
-                    system_sha256, timestep, restraint=None) -> dict[str, Any]:
+                    system_sha256, timestep, restraint=None,
+                    solvation: str | None = None) -> dict[str, Any]:
     ids = [s.state_id for s in states]
     if window_id not in ids:
         raise WindowError(f"window {window_id!r} is not one of the states {ids}")
@@ -478,9 +486,13 @@ def window_identity(*, hamiltonian, path: AlchemicalPath, states, window_id, set
             "checkpoint_interval": settings.checkpoint_interval,
             "equilibration_steps": settings.equilibration_steps,
             "friction_per_ps": settings.friction_per_ps,
-            "barostat_interval": settings.barostat_interval, "seed": settings.seed},
+            "barostat_interval": settings.barostat_interval, "seed": settings.seed,
+            "minimize_iterations": settings.minimize_iterations},
         "timestep_fs": timestep["timestep_fs"],
         "restraint": restraint.to_record() if restraint is not None else None,
+        #: the plan's label (explicit / implicit / vacuum); None only for a window run without a
+        #: plan (analytic test models)
+        "solvation": solvation,
         "sample_provenance": "origin_state = window_id's state; never the rank or device",
     }
     doc["fingerprint"] = _sha256_bytes(_canonical(doc))
@@ -492,7 +504,8 @@ def run_window(*, topology, system, hamiltonian, path: AlchemicalPath,
                settings: WindowSettings, coordinates=None, cpu: bool = False, device=None,
                machine_config=None, overwrite: bool = False, restraint=None,
                stop_after_steps: int | None = None, prepared=None,
-               check: bool = False) -> dict[str, Any]:
+               check: bool = False, solvation: str | None = None,
+               vacuum_leg: bool | None = None) -> dict[str, Any]:
     """Run (or continue, or verify) one fixed-lambda window. Returns a summary.
 
     `system` is the serialised `hamiltonian.system` on disk; its sha256 must be the Hamiltonian's,
@@ -512,6 +525,13 @@ def run_window(*, topology, system, hamiltonian, path: AlchemicalPath,
 
     out_dir = Path(out_dir)
     paths = window_paths(out_dir, window_id)
+    if solvation is not None and solvation not in SOLVATIONS:
+        raise WindowError(f"solvation {solvation!r} is not one of {SOLVATIONS}")
+    derived = solvation == "vacuum"
+    if vacuum_leg is not None and bool(vacuum_leg) != derived:
+        raise WindowError(
+            f"vacuum_leg={vacuum_leg} disagrees with the plan's solvation {solvation!r}: the "
+            f"vacuum permission is derived from the plan, never asserted by a caller")
     check_hamiltonian_matches_path(hamiltonian, path)
     origin = next((s for s in states if s.state_id == window_id), None)
     if origin is None:
@@ -523,7 +543,8 @@ def run_window(*, topology, system, hamiltonian, path: AlchemicalPath,
         topology=topology, system=system, coordinates=coordinates, output=paths["out"],
         log=paths["record"], restart=paths["restart"], checkpoint=paths["checkpoint"], cpu=cpu,
         device=device, machine_config=machine_config, protocol=f"alchemical window {window_id}",
-        timestep_fs=settings.timestep_fs, ensemble="NPT" if npt else "NVT")
+        timestep_fs=settings.timestep_fs, ensemble="NPT" if npt else "NVT",
+        vacuum_leg=derived)
     extra = {"samples": paths["samples"], "completion": paths["completion"]}
     check_output_collisions(outputs={**checked.inventory.roles, **extra},
                             inputs={"p": topology, "s": system,
@@ -539,7 +560,8 @@ def run_window(*, topology, system, hamiltonian, path: AlchemicalPath,
                           "when the states are NPT, and two would both move the volume")
     identity = window_identity(hamiltonian=hamiltonian, path=path, states=states,
                                window_id=window_id, settings=settings, system_sha256=system_sha,
-                               timestep=checked.timestep, restraint=restraint)
+                               timestep=checked.timestep, restraint=restraint,
+                               solvation=solvation)
     fingerprint = identity["fingerprint"]
     total_steps = settings.equilibration_steps + settings.steps
     columns = stream_columns(states, path.components, npt)
@@ -614,6 +636,8 @@ def run_window(*, topology, system, hamiltonian, path: AlchemicalPath,
     else:
         _set_initial_coordinates(simulation, checked.loaded, coordinates)
         hamiltonian.set_state(context, origin.components)
+        if settings.minimize_iterations:
+            openmm.LocalEnergyMinimizer.minimize(context, 10.0, int(settings.minimize_iterations))
         context.setVelocitiesToTemperature(
             temperature, as_openmm_seed(derive_build_seed(settings.seed,
                                                           f"alchemy/{window_id}/velocities")))

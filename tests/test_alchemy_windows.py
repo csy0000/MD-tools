@@ -478,3 +478,30 @@ def test_self_check_tolerance_follows_precision():
     for bad in ({"Precision": "mxed"}, {}):
         with pytest.raises(WindowError, match="Precision"):
             self_check_relative("CUDA", bad)
+
+
+# ---------------------------------------------------------------------- the vacuum-leg permission
+def test_a_vacuum_window_is_labelled_and_permitted_from_the_plan(model, tmp_path):
+    res = _run(model, "w000", SHORT, out=tmp_path / "vac", solvation="vacuum")
+    assert res["rows"] == 21
+    record = json.loads(window_paths(tmp_path / "vac", "w000")["record"].read_text())
+    assert record["solvation"] == "vacuum"
+
+
+def test_a_vacuum_leg_flag_that_disagrees_with_the_plan_is_refused(model, tmp_path):
+    for solvation, flag in (("explicit", True), ("vacuum", False), (None, True)):
+        with pytest.raises(WindowError, match="disagrees with the plan"):
+            _run(model, "w000", SHORT, out=tmp_path / "x", solvation=solvation, vacuum_leg=flag)
+    with pytest.raises(WindowError, match="not one of"):
+        _run(model, "w000", SHORT, out=tmp_path / "x", solvation="gas")
+    assert not (tmp_path / "x").exists()
+
+
+def test_vacuum_leg_is_passed_to_the_shared_preflight(model, tmp_path, monkeypatch):
+    from md_tools.run import preflight as pf
+    seen = []
+    real = pf.preflight_stage
+    monkeypatch.setattr(pf, "preflight_stage", lambda **kw: seen.append(kw["vacuum_leg"]) or real(**kw))
+    _run(model, "w000", SHORT, out=tmp_path / "a", solvation="vacuum", check=True)
+    _run(model, "w000", SHORT, out=tmp_path / "b", solvation="explicit", check=True)
+    assert seen == [True, False]

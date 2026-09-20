@@ -60,6 +60,11 @@ class Leg:
     alchemical_scheme: str = ""
     restraint_digest: str | None = None
     source: Mapping[str, Any] = field(default_factory=dict)
+    #: S2's digest of the LIGAND-side Hamiltonian of the plan this leg ran (packages, map, mode,
+    #: dummy terms, junctions, exclusions, constraint policy, applied 1-4 scales). Two legs of one
+    #: relative cycle must carry the same one, or the cycle would include the difference between
+    #: two ligand Hamiltonians -- e.g. a solvent model's 1-4 scale -- as if it were hydration.
+    ligand_hamiltonian_sha256: str | None = None
 
     def __post_init__(self):
         if self.environment not in ENVIRONMENTS:
@@ -67,17 +72,22 @@ class Leg:
                              f"{ENVIRONMENTS}")
         if not (math.isfinite(self.delta_g_kj_mol) and math.isfinite(self.sigma_kj_mol)
                 and self.sigma_kj_mol >= 0):
-            raise CycleError(f"leg {self.name}: {self.delta_g_kj_mol} +- {self.sigma_kj_mol}")
+            raise CycleError(
+                f"leg {self.name}: {self.delta_g_kj_mol} +- {self.sigma_kj_mol} kJ/mol. A leg "
+                f"needs a finite value AND a finite uncertainty; an estimator that could not form "
+                f"one (no overlap, too few samples) reports infinity, and a cycle built on it "
+                f"would carry a free energy nobody can bound")
 
     @classmethod
     def from_estimate(cls, name: str, environment: str, estimate: Mapping[str, Any], *,
                       path: Mapping[str, Any], temperature_k: float, alchemical_scheme: str = "",
-                      restraint_digest: str | None = None) -> "Leg":
+                      restraint_digest: str | None = None,
+                      ligand_hamiltonian_sha256: str | None = None) -> "Leg":
         """From one `estimators.analyze(...)['estimates'][X]` record and its path record."""
         return cls(name, environment, path["endpoint_a"], path["endpoint_b"],
                    float(estimate["delta_g_kJ_mol"]), float(estimate["sigma_kJ_mol"]),
                    temperature_k, estimate["estimator"], alchemical_scheme, restraint_digest,
-                   {"path": dict(path), "estimate": dict(estimate)})
+                   {"path": dict(path), "estimate": dict(estimate)}, ligand_hamiltonian_sha256)
 
     def to_record(self) -> dict[str, Any]:
         return {"name": self.name, "environment": self.environment,
@@ -85,7 +95,8 @@ class Leg:
                 "delta_g_kJ_mol": self.delta_g_kj_mol, "sigma_kJ_mol": self.sigma_kj_mol,
                 "temperature_k": self.temperature_k, "estimator": self.estimator,
                 "alchemical_scheme": self.alchemical_scheme,
-                "restraint_digest": self.restraint_digest}
+                "restraint_digest": self.restraint_digest,
+                "ligand_hamiltonian_sha256": self.ligand_hamiltonian_sha256}
 
 
 def _result(kind: str, terms: Sequence[tuple[float, Leg | Mapping[str, Any]]],
@@ -131,11 +142,26 @@ def _same_scheme(legs: Sequence[Leg]) -> None:
                          f"decoupled endpoints then differ and the cycle does not close")
 
 
+def _same_ligand_hamiltonian(legs: Sequence[Leg]) -> None:
+    digests = [leg.ligand_hamiltonian_sha256 for leg in legs]
+    if any(d is None for d in digests):
+        raise CycleError(
+            f"legs {[leg.name for leg in legs]} carry no ligand_hamiltonian_sha256 (S2's plan "
+            f"record): nothing shows the two legs share one ligand Hamiltonian, and a relative "
+            f"cycle over two different ones reports their difference as a free energy")
+    if len(set(digests)) != 1:
+        raise CycleError(
+            f"the legs' ligand Hamiltonians differ ({', '.join(d[:12] for d in digests)}): the "
+            f"packages, map, dummy terms, constraints or applied 1-4 scales are not the same in "
+            f"both environments. Run md_tools.alchemy.topology.matched_legs for the reason")
+
+
 def reversed_leg(leg: Leg) -> Leg:
     """The same path traversed B -> A: the free energy changes sign, the uncertainty does not."""
     return Leg(leg.name + " (reversed)", leg.environment, leg.endpoint_b, leg.endpoint_a,
                -leg.delta_g_kj_mol, leg.sigma_kj_mol, leg.temperature_k, leg.estimator,
-               leg.alchemical_scheme, leg.restraint_digest, {"reversed_from": leg.to_record()})
+               leg.alchemical_scheme, leg.restraint_digest, {"reversed_from": leg.to_record()},
+               leg.ligand_hamiltonian_sha256)
 
 
 # ---------------------------------------------------------------------- the four cycles
@@ -152,6 +178,7 @@ def relative_hydration(*, vacuum: Leg | None, solvent: Leg | None) -> dict[str, 
     s = _require(solvent, "solvent A -> B", environment="solvent",
                  a=v.endpoint_a, b=v.endpoint_b)
     _same_scheme([v, s])
+    _same_ligand_hamiltonian([v, s])
     return _result("relative_hydration", [(+1, s), (-1, v)], _same_temperature([v, s]),
                    {"quantity": f"ddG_hyd = dG_hyd({v.endpoint_b}) - dG_hyd({v.endpoint_a})"})
 
@@ -161,6 +188,7 @@ def relative_binding(*, solvent: Leg | None, complex: Leg | None) -> dict[str, A
     c = _require(complex, "complex A -> B", environment="complex",
                  a=s.endpoint_a, b=s.endpoint_b)
     _same_scheme([s, c])
+    _same_ligand_hamiltonian([s, c])
     return _result("relative_binding", [(+1, c), (-1, s)], _same_temperature([s, c]),
                    {"quantity": f"ddG_bind = dG_bind({s.endpoint_b}) - dG_bind({s.endpoint_a})"})
 
