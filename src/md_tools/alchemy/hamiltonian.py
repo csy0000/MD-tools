@@ -369,7 +369,8 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
                 "dummy end (contract section 4), and how they are switched along lambda is not "
                 "defined here yet; one unique group per side is supported")
     internal_pairs = {"A": _internal_pairs(a_set, A.exceptions), "B": _internal_pairs(b_set, B.exceptions)}
-    checked = _check_internal_force(system_a, system_b, A, B, a_set, b_set, internal_pairs)
+    internal_force_check = _check_internal_force(system_a, system_b, A, B, a_set, b_set,
+                                                 internal_pairs)
     # ONE exclusion set for every nonbonded force in the System. The CUDA platform refuses a
     # Context otherwise ("All Forces must have identical exceptions"); Reference and CPU do not
     # check, so a CPU-only suite passed with forces that differed (found by the first CUDA lane,
@@ -402,6 +403,12 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
     internal = _internal_force(A, B, a_set, b_set, internal_pairs, periodic, boundary_scaled)
     if internal is not None:
         system.addForce(internal)
+    if internal_force_check["force"] is not None:
+        # the symmetric convention: the plan's own force is lambda-independent, so it is added once
+        # exactly as written -- this Hamiltonian adds nothing of its own for those pairs
+        carried = mm.XmlSerializer.deserialize(_xml(internal_force_check["force"]))
+        carried.setForceGroup(FORCE_GROUPS["softcore_internal"])
+        system.addForce(carried)
 
     if periodic and settings_a["use_dispersion_correction"] and settings_a["use_switching_function"]:
         raise AlchemicalHamiltonianError(
@@ -415,7 +422,8 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
             system.addForce(force)
         record["nonbonded"]["dispersion_coefficients_kj_nm3_mol"] = coefficients
     record["bonded_mixed_forces"] = mixed_bonded
-    record["plan_internal_pairs_checked"] = checked
+    record["plan_internal_pairs_checked"] = internal_force_check["pairs"]
+    record["plan_internal_pairs_convention"] = internal_force_check["convention"]
     return AlchemicalHamiltonian(system=system, record=record)
 
 
@@ -547,11 +555,28 @@ def _connected_groups(region, system_a, system_b) -> list[set[int]]:
     return list(groups.values())
 
 
-def _check_internal_force(system_a, system_b, A, B, a_set, b_set, internal_pairs) -> int:
-    """S2's `UniqueGroupInternalNonbonded` force must be exactly the internal pairs this Hamiltonian
-    keeps unscaled: physical values at the group's dummy end, zero at its physical end. It is then
-    left out -- the Hamiltonian's own softcore-internal force carries those pairs at every lambda,
-    and adding the plan's force too would count them twice. Returns the number of pairs checked."""
+def _check_internal_force(system_a, system_b, A, B, a_set, b_set, internal_pairs) -> dict:
+    """Check the plan's `UniqueGroupInternalNonbonded` force, under either convention.
+
+    A unique group's internal non-excluded pairs are lambda-independent. The plan can express that
+    two ways, and this accepts both, because they are the same physics recorded differently:
+
+    "dummy-end" (plan schema <= /4): the pair is a real NonbondedForce pair at the physical end and
+        appears in the internal force only at the dummy end. The Hamiltonian then carries it in its
+        OWN softcore-internal force at every lambda, and the plan's force is left out so it is not
+        counted twice.
+    "carried" (the symmetric construction, plan schema /5): the pair is a ZERO carrier exception in
+        BOTH NonbondedForces -- so neither end computes it with a cutoff or a reciprocal share --
+        and the plan's force carries it with the SAME parameters at both ends. The plan's force is
+        then lambda-independent by construction and is added once, unchanged, and the Hamiltonian
+        adds nothing of its own for those pairs.
+
+    The second exists because the first is asymmetric: uncut at the dummy end, cut at the physical
+    end, which made those pairs lambda-DEPENDENT and broke the cancellation the decoupling
+    derivation assumes (S3 -> S2, 2026-09-20; -0.076 to -0.127 kJ/mol across the TYK2 ligands).
+
+    Returns {"pairs": n, "convention": ..., "force": the force to add once or None}.
+    """
     mm = _mm()
     forces = []
     for s in (system_a, system_b):
@@ -569,33 +594,62 @@ def _check_internal_force(system_a, system_b, A, B, a_set, b_set, internal_pairs
                 f"states carry no {INTERNAL_FORCE_NAME} force: by contract section 4 a group's "
                 "internal pairs stay physical at its dummy end, so the end states are not the "
                 "plan's")
-        return 0
+        return {"pairs": 0, "convention": None, "force": None}
     if fa is None or fb is None or not isinstance(fa, mm.CustomBondForce) \
             or fa.getNumBonds() != fb.getNumBonds():
         raise AlchemicalHamiltonianError(f"{INTERNAL_FORCE_NAME} is not the same CustomBondForce "
                                          "layout in both end states")
+    carried = _xml(fa) == _xml(fb)
     seen = set()
     for k in range(fa.getNumBonds()):
         i, j, pa = fa.getBondParameters(k)
         i2, j2, pb = fb.getBondParameters(k)
         key = _pair(i, j)
-        if key != _pair(i2, j2) or key not in expected:
+        if key != _pair(i2, j2):
+            raise AlchemicalHamiltonianError(f"{INTERNAL_FORCE_NAME} bond {k} names {key} in one "
+                                             f"end state and {_pair(i2, j2)} in the other")
+        region = "A" if {i, j} <= a_set else ("B" if {i, j} <= b_set else None)
+        if region is None:
             raise AlchemicalHamiltonianError(
-                f"{INTERNAL_FORCE_NAME} bond {k} on {key} is not an internal non-excluded pair of "
-                "one unique group")
-        dummy_end, state = expected[key]
+                f"{INTERNAL_FORCE_NAME} bond {k} on {key} is not a pair inside one unique group")
+        state = A if region == "A" else B          # the end state where that group is physical
         physical = (state.charge[i] * state.charge[j], 0.5 * (state.sigma[i] + state.sigma[j]),
                     math.sqrt(state.epsilon[i] * state.epsilon[j]))
-        at_dummy, at_physical = (pb, pa) if dummy_end == "B" else (pa, pb)
-        if not _same(at_dummy, physical) or at_physical[0] != 0.0 or at_physical[2] != 0.0:
-            raise AlchemicalHamiltonianError(
-                f"{INTERNAL_FORCE_NAME} pair {key} is {tuple(at_dummy)} at its dummy end and "
-                f"{tuple(at_physical)} at its physical end; expected {physical} and zero")
+        if carried:
+            # the symmetric convention: same parameters at both ends, and a zero carrier exception
+            # in BOTH NonbondedForces so the pair is counted exactly once, here
+            if not _same(pa, physical):
+                raise AlchemicalHamiltonianError(
+                    f"{INTERNAL_FORCE_NAME} carries {key} as {tuple(pa)} at both ends; expected "
+                    f"the physical value {physical}")
+            for label, state_in in (("A", A), ("B", B)):
+                carrier = state_in.exceptions.get(key)
+                if carrier is None or carrier[0] != 0.0 or carrier[2] != 0.0:
+                    raise AlchemicalHamiltonianError(
+                        f"{INTERNAL_FORCE_NAME} carries {key}, so System {label} must exclude it "
+                        f"with a zero carrier exception; found {carrier}")
+        else:
+            if key not in expected:
+                raise AlchemicalHamiltonianError(
+                    f"{INTERNAL_FORCE_NAME} bond {k} on {key} is not an internal non-excluded pair "
+                    "of one unique group")
+            dummy_end = expected[key][0]
+            at_dummy, at_physical = (pb, pa) if dummy_end == "B" else (pa, pb)
+            if not _same(at_dummy, physical) or at_physical[0] != 0.0 or at_physical[2] != 0.0:
+                raise AlchemicalHamiltonianError(
+                    f"{INTERNAL_FORCE_NAME} pair {key} is {tuple(at_dummy)} at its dummy end and "
+                    f"{tuple(at_physical)} at its physical end; expected {physical} and zero")
         seen.add(key)
-    if seen != set(expected):
+    if not carried and seen != set(expected):
         raise AlchemicalHamiltonianError(
             f"{INTERNAL_FORCE_NAME} omits internal pair(s) {sorted(set(expected) - seen)[:5]}")
-    return len(seen)
+    if carried and expected:
+        raise AlchemicalHamiltonianError(
+            f"{INTERNAL_FORCE_NAME} carries {len(seen)} pair(s) symmetrically, but "
+            f"{len(expected)} other internal pair(s) are still ordinary NonbondedForce pairs at a "
+            f"physical end: the construction is half converted, e.g. {sorted(expected)[:3]}")
+    return {"pairs": len(seen), "convention": "carried" if carried else "dummy-end",
+            "force": fa if carried else None}
 
 
 def _internal_pairs(region, exceptions) -> list[tuple[int, int]]:
