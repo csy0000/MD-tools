@@ -88,13 +88,28 @@ __all__ = [
     "scaled_table",
     "TopologyError",
     "TopologyPlan",
+    "PLAN_IDENTITY_FIELDS",
     "build_topology_plan",
+    "check_plan_digest",
     "ligand_hamiltonian",
     "load_plan",
     "matched_legs",
 ]
 
-PLAN_SCHEMA = "md-tools-topology-plan/1"
+#: The plan record's schema. BUMPED whenever a field is added or removed, because every stored
+#: plan_sha256 stops being reproducible when the record's shape changes -- which is how an
+#: in-flight campaign's legs came to name a digest nothing could produce. Adding fields is
+#: therefore batched and landed BEFORE a campaign starts (shared contracts, section 4).
+#:
+#: 1: the original record. 2: adds ligand_hamiltonian_sha256, environment.solvation,
+#:    nonbonded.unique_group_internal and the per-slot unique_group_internal flag.
+PLAN_SCHEMA = "md-tools-topology-plan/2"
+#: What a stored record's identity is compared on when its digest no longer matches: if these all
+#: agree, only the record's shape moved and the physics is the same.
+PLAN_IDENTITY_FIELDS = ("ligand_hamiltonian_sha256", "mode", "atom_map.sha256",
+                        "endpoints.A.reference", "endpoints.A.package_sha256",
+                        "endpoints.A.parameter_digest", "endpoints.B.reference",
+                        "endpoints.B.package_sha256", "endpoints.B.parameter_digest")
 PLAN_FILES = ("plan.json", "system_a.xml", "system_b.xml", "combined.pdb", "positions.npy")
 
 #: Force classes an environment may carry. Only the first four may touch the ligand.
@@ -564,6 +579,65 @@ class TopologyPlan:
         return directory
 
 
+def _at(record: dict, path: str):
+    value: Any = record
+    for key in path.split("."):
+        if not isinstance(value, dict) or key not in value:
+            return None
+        value = value[key]
+    return value
+
+
+def _first_difference(stored: Any, current: Any, path: str = "") -> Optional[str]:
+    """The first field whose value differs, as a dotted path. Depth-first, keys sorted."""
+    if isinstance(stored, dict) and isinstance(current, dict):
+        for key in sorted(set(stored) | set(current)):
+            if key in ("plan_sha256", "files"):
+                continue
+            where = f"{path}.{key}" if path else key
+            if key not in stored or key not in current:
+                return f"{where} (only in {'the stored plan' if key in stored else 'this plan'})"
+            deeper = _first_difference(stored[key], current[key], where)
+            if deeper:
+                return deeper
+        return None
+    return None if stored == current else (path or "the record")
+
+
+def check_plan_digest(stored_digest: str, stored_record: dict, current: "TopologyPlan") -> None:
+    """Refuse a stored plan digest that this plan does not reproduce, saying WHICH case it is.
+
+    A stored `plan_sha256` stops matching for two very different reasons, and a caller holding a
+    leg or a campaign row needs to be told which:
+
+    * the RECORD's schema changed and the plan's identity did not -- same ligand Hamiltonian, same
+      endpoints, same map -- so the physics is unchanged and the plan only needs rebuilding;
+    * anything else: this is a different plan, and the first differing field is named.
+    """
+    if stored_digest == current.sha256:
+        return
+    record = current.record
+    same_identity = all(_at(stored_record, field) == _at(record, field)
+                        for field in PLAN_IDENTITY_FIELDS)
+    stored_schema, schema = stored_record.get("schema"), record.get("schema")
+    if same_identity and stored_schema != schema:
+        raise TopologyError(
+            f"the plan record's schema changed from {stored_schema!r} to {schema!r}; the ligand "
+            f"Hamiltonian and endpoints are unchanged, so rebuild the plan and re-prepare -- the "
+            f"physics is the same. Stored plan_sha256 {stored_digest[:16]}..., this plan "
+            f"{current.sha256[:16]}...")
+    if same_identity:
+        raise TopologyError(
+            f"the stored plan_sha256 {stored_digest[:16]}... is not this plan's "
+            f"{current.sha256[:16]}..., though the ligand Hamiltonian, endpoints and map are the "
+            f"same: the environment or another recorded input differs. First field that differs: "
+            f"{_first_difference(stored_record, record) or 'none found'}.")
+    raise TopologyError(
+        f"the stored plan_sha256 {stored_digest[:16]}... is not this plan's "
+        f"{current.sha256[:16]}..., and they are different plans. First field that differs: "
+        f"{_first_difference(stored_record, record) or 'none found'}.")
+
+
 def _endpoint(endpoint: str) -> str:
     label = str(endpoint).upper()
     if label not in ("A", "B"):
@@ -594,8 +668,13 @@ def load_plan(directory: Path, *, package_roots: Iterable[Path] = ()) -> Topolog
         raise TopologyError(f"{directory}: unexpected files {extra}")
     record = json.loads((directory / "plan.json").read_text(encoding="utf-8"))
     if record.get("schema") != PLAN_SCHEMA:
-        raise TopologyError(f"{directory}: plan schema {record.get('schema')!r} is not "
-                            f"{PLAN_SCHEMA!r}")
+        raise TopologyError(
+            f"{directory}: plan schema {record.get('schema')!r} is not {PLAN_SCHEMA!r}. A record "
+            f"written under another schema cannot reproduce its own plan_sha256, so it is "
+            f"rebuilt rather than read: `combine-topology` again with the same configuration. "
+            f"Its identity is unchanged if ligand_hamiltonian_sha256 "
+            f"({_at(record, 'ligand_hamiltonian_sha256') or 'absent'}), the endpoints and the map "
+            f"digest match the rebuilt plan's; `check_plan_digest` says which case it is.")
     for name, digest in record["files"].items():
         actual = hashlib.sha256((directory / name).read_bytes()).hexdigest()
         if actual != digest:
