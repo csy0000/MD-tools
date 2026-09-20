@@ -328,3 +328,26 @@ def test_mbar_never_imports_jax(analysis):
     """pymbar's own switch, not a process-wide JAX platform; and the record says which ran."""
     assert "jax" not in sys.modules
     assert analysis["estimates"]["MBAR"]["diagnostics"]["pymbar_backend"] == "numpy/scipy"
+
+
+def test_an_unavailable_mbar_uncertainty_becomes_infinite_not_nan(frozen, monkeypatch):
+    """pymbar returns a non-finite uncertainty when it cannot form the covariance (no overlap,
+    too few samples) -- as the M2 smoke run hit. The value may be finite; the uncertainty must
+    not stay NaN, and every gate on it must then be INCONCLUSIVE."""
+    import pymbar
+
+    class _NoCovariance(pymbar.MBAR):
+        def compute_free_energy_differences(self, *a, **k):
+            out = super().compute_free_energy_differences(*a, **k)
+            out["dDelta_f"] = np.full_like(np.asarray(out["dDelta_f"], dtype=float), np.nan)
+            return out
+
+    monkeypatch.setattr(pymbar, "MBAR", _NoCovariance)
+    e = est.mbar_estimate(est.decorrelate(frozen)[0])
+    assert e.diagnostics["uncertainty_unavailable"] is True
+    assert math.isinf(e.sigma_kt) and math.isfinite(e.delta_f_kt)
+    assert est.agreement_gate(e.delta_g_kcal_mol, e.sigma_kcal_mol, 0.0)["verdict"] == \
+        "INCONCLUSIVE"
+    from md_tools.alchemy.cycles import CycleError, Leg
+    with pytest.raises(CycleError, match="finite uncertainty"):
+        Leg("x", "vacuum", "A", "B", 1.0, float("inf"), 300.0, "MBAR", "s")

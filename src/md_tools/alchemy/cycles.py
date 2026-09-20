@@ -72,7 +72,11 @@ class Leg:
                              f"{ENVIRONMENTS}")
         if not (math.isfinite(self.delta_g_kj_mol) and math.isfinite(self.sigma_kj_mol)
                 and self.sigma_kj_mol >= 0):
-            raise CycleError(f"leg {self.name}: {self.delta_g_kj_mol} +- {self.sigma_kj_mol}")
+            raise CycleError(
+                f"leg {self.name}: {self.delta_g_kj_mol} +- {self.sigma_kj_mol} kJ/mol. A leg "
+                f"needs a finite value AND a finite uncertainty; an estimator that could not form "
+                f"one (no overlap, too few samples) reports infinity, and a cycle built on it "
+                f"would carry a free energy nobody can bound")
 
     @classmethod
     def from_estimate(cls, name: str, environment: str, estimate: Mapping[str, Any], *,

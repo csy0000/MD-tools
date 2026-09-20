@@ -318,14 +318,23 @@ def mbar_estimate(samples: SampleSet) -> Estimate:
     res = mbar.compute_free_energy_differences(compute_uncertainty=True)
     overlap = np.asarray(mbar.compute_overlap()["matrix"])
     neighbour = [float(overlap[k, k + 1]) for k in range(len(ids) - 1)]
+    sigma = float(res["dDelta_f"][0, -1])
+    unavailable = not math.isfinite(sigma)
+    if unavailable:
+        # pymbar returns a non-finite uncertainty when the covariance cannot be formed -- states
+        # with no overlap at all, or too few samples. The VALUE may still be finite; reporting it
+        # with a NaN or absent sigma would let a number through with no uncertainty at all, and
+        # inconclusive uncertainty is not a pass. Infinity makes every gate INCONCLUSIVE.
+        sigma = math.inf
     return Estimate("MBAR", ids[0], ids[-1], float(res["Delta_f"][0, -1]),
-                    float(res["dDelta_f"][0, -1]), samples.kt,
+                    sigma, samples.kt,
                     {"states": ids, "samples_per_state": n_k.tolist(),
                      "delta_f_matrix_kT": np.asarray(res["Delta_f"]),
                      "d_delta_f_matrix_kT": np.asarray(res["dDelta_f"]),
                      "overlap_matrix": overlap, "neighbour_overlap": neighbour,
                      "min_neighbour_overlap": min(neighbour),
                      "poor_overlap": min(neighbour) < OVERLAP_WARNING,
+                     "uncertainty_unavailable": unavailable,
                      "pymbar_version": getattr(pymbar, "__version__", "unknown"),
                      "pymbar_backend": _pymbar_backend()})
 

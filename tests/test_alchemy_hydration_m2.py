@@ -133,8 +133,16 @@ def test_m2_analysis():
     root = _root()
     out: dict = {"rows": {}}
     per: dict = {}
+    unusable: list = []
     for leg in S_VALUES:
-        per[leg] = {r: analyze_leg(root / leg, repeat=r) for r in REPEATS}
+        per[leg] = {}
+        for r in REPEATS:
+            try:
+                per[leg][r] = analyze_leg(root / leg, repeat=r)
+            except Exception as exc:                     # a leg that cannot even be formed
+                unusable.append({"leg": leg, "repeat": r, "verdict": "INCONCLUSIVE",
+                                 "reason": f"{type(exc).__name__}: {exc}"})
+    out["unusable_legs"] = unusable
     # M2.1: overlap and decorrelated samples, every leg and repeat
     m21 = []
     for leg, reps in per.items():
@@ -156,10 +164,10 @@ def test_m2_analysis():
             m22.append({"leg": leg, "repeat": r, "TI": ti["delta_g_kcal_mol"],
                         "MBAR": m["delta_g_kcal_mol"], **g})
     out["rows"]["M2.2"] = m22
-    # M2.3: repeats agree pairwise
+    # M2.3: repeats agree pairwise (only repeats that produced a usable leg)
     m23 = []
     for leg, reps in per.items():
-        for x, y in itertools.combinations(REPEATS, 2):
+        for x, y in itertools.combinations(sorted(reps), 2):
             lx, ly = reps[x][0], reps[y][0]
             g = _gate(lx.delta_g_kj_mol / KJ_PER_KCAL, lx.sigma_kj_mol / KJ_PER_KCAL,
                       ly.delta_g_kj_mol / KJ_PER_KCAL, ref_sigma=ly.sigma_kj_mol / KJ_PER_KCAL)
@@ -167,17 +175,31 @@ def test_m2_analysis():
     out["rows"]["M2.3"] = m23
     # M2.4: vacuum closure A->B + B->A = 0
     from md_tools.alchemy.campaign import combine_repeats
-    ab = combine_repeats([per["vacuum"][r][0] for r in REPEATS])
-    ba = combine_repeats([per["vacuum_ba"][r][0] for r in REPEATS])
+    if not per["vacuum"] or not per["vacuum_ba"]:
+        out["rows"]["M2.4"] = {"verdict": "INCONCLUSIVE",
+                               "reason": "a vacuum leg produced no usable repeat"}
+        out["rows"]["M2.5"] = {"verdict": "INCONCLUSIVE", "reason": "M2.4 has no legs"}
+        (root / "m2_result.json").write_text(json.dumps(out, indent=1, sort_keys=True,
+                                                        default=str))
+        assert False, out["unusable_legs"] or "no usable vacuum repeats"
+    ab = combine_repeats([per["vacuum"][r][0] for r in sorted(per["vacuum"])])
+    ba = combine_repeats([per["vacuum_ba"][r][0] for r in sorted(per["vacuum_ba"])])
     closure = (ab.delta_g_kj_mol + ba.delta_g_kj_mol) / KJ_PER_KCAL
     out["rows"]["M2.4"] = {"A_to_B_kcal": ab.delta_g_kj_mol / KJ_PER_KCAL,
                            "B_to_A_kcal": ba.delta_g_kj_mol / KJ_PER_KCAL,
                            **_gate(closure, ab.sigma_kj_mol / KJ_PER_KCAL, 0.0,
                                    ref_sigma=ba.sigma_kj_mol / KJ_PER_KCAL)}
     # M2.5: the cycle, experiment reported
-    cycle = relative_hydration_from_legs(root / "vacuum", root / "solvent_v2", repeats=REPEATS)
+    usable = sorted(set(per["vacuum"]) & set(per["solvent_v2"]))
+    if not usable:
+        out["rows"]["M2.5"] = {"verdict": "INCONCLUSIVE",
+                               "reason": "no repeat produced a usable leg in BOTH environments"}
+        (root / "m2_result.json").write_text(json.dumps(out, indent=1, sort_keys=True,
+                                                        default=str))
+        assert False, out["unusable_legs"] or "no usable pair of legs"
+    cycle = relative_hydration_from_legs(root / "vacuum", root / "solvent_v2", repeats=usable)
     cycle.pop("analyses")
-    out["rows"]["M2.5"] = {"ddG_hyd_kcal": cycle["delta_g_kcal_mol"],
+    out["rows"]["M2.5"] = {"repeats_used": usable, "ddG_hyd_kcal": cycle["delta_g_kcal_mol"],
                            "sigma_kcal": cycle["sigma_kcal_mol"],
                            "experiment_kcal": EXPERIMENT_KCAL["chloroethane"]
                            - EXPERIMENT_KCAL["ethane"],
@@ -186,7 +208,7 @@ def test_m2_analysis():
     print("\nM2 result:", json.dumps({k: v for k, v in out["rows"].items() if k != "M2.5"},
                                      default=str)[:3000])
     print("M2.5:", {k: v for k, v in out["rows"]["M2.5"].items() if k != "cycle"})
-    failures = [r for r in m21 if not r["ok"]] + \
+    failures = unusable + [r for r in m21 if not r["ok"]] + \
                [r for r in m22 + m23 if r["verdict"] != "PASS"] + \
                ([out["rows"]["M2.4"]] if out["rows"]["M2.4"]["verdict"] != "PASS" else [])
     assert not failures, failures
