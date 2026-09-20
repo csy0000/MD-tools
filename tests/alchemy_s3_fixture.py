@@ -602,3 +602,87 @@ def decoupling_pair(system_a, ligand):
         s.addForce(f)
         pair.append(s)
     return pair[0], pair[1]
+
+
+#: A bonded integrand this large means stiff junction terms are riding on the lambda path. It is a
+#: threshold with a meaning, not a tolerance: a construction whose terms on a unique atom are
+#: identical at both ends contributes EXACTLY zero, so anything above round-off is that defect.
+BONDED_JUNCTION_WARNING_KJ = 1.0
+
+
+def bonded_derivative_split(system_a, system_b, unique, x, box=None):
+    """dU/dlambda_bonded at any coordinate, split by what the differing terms touch.
+
+    Computed here in numpy from the two Systems, independently of the Hamiltonian, so it can be
+    compared with `derivative_components(...)["lambda_bonded"]` rather than derived from it. The
+    derivative of a linearly mixed bonded term is E_B(x) - E_A(x), so a term identical at both ends
+    contributes exactly zero.
+
+    Returns {"unique_touching", "core", "total", "warning"}: `warning` is a sentence naming what a
+    large `unique_touching` implies, or None. dU/dlambda_bonded SHOULD be the core part alone; a
+    junction term switched between zero and full strength puts stiff bonded energy on the lambda
+    path, where it swamps the alchemical signal and destroys window overlap (S4's M2, 2026-09-20).
+    """
+    unique = set(int(i) for i in unique)
+    split = {"unique_touching": 0.0, "core": 0.0}
+    for fa, fb in zip(system_a.getForces(), system_b.getForces()):
+        kind = type(fa).__name__
+        if kind not in ("HarmonicBondForce", "HarmonicAngleForce", "PeriodicTorsionForce"):
+            continue
+        for atoms, pa, pb in _paired_terms(fa, fb):
+            if pa == pb:
+                continue
+            contribution = _bonded_term_energy(kind, atoms, pb, x, box) \
+                - _bonded_term_energy(kind, atoms, pa, x, box)
+            split["unique_touching" if set(atoms) & unique else "core"] += contribution
+    split["total"] = split["unique_touching"] + split["core"]
+    split["warning"] = None
+    if abs(split["unique_touching"]) > BONDED_JUNCTION_WARNING_KJ:
+        split["warning"] = (
+            f"dU/dlambda_bonded carries {split['unique_touching']:.2f} kJ/mol from terms that touch "
+            f"a unique atom: junction bonded terms are on the lambda path (present at one end, "
+            f"absent at the other). Stiff bonded energy in the integrand swamps the alchemical "
+            f"signal and destroys window overlap. Expected for such terms: exactly 0.")
+    return split
+
+
+def _paired_terms(fa, fb):
+    kind = type(fa).__name__
+    out = []
+    if kind == "HarmonicBondForce":
+        for k in range(fa.getNumBonds()):
+            i, j, r0, kk = fa.getBondParameters(k)
+            _i, _j, r1, k1 = fb.getBondParameters(k)
+            out.append(((i, j), (r0._value, kk._value), (r1._value, k1._value)))
+    elif kind == "HarmonicAngleForce":
+        for k in range(fa.getNumAngles()):
+            i, j, l, t0, kk = fa.getAngleParameters(k)
+            _i, _j, _l, t1, k1 = fb.getAngleParameters(k)
+            out.append(((i, j, l), (t0._value, kk._value), (t1._value, k1._value)))
+    else:
+        for k in range(fa.getNumTorsions()):
+            i, j, l, m, per, ph, kk = fa.getTorsionParameters(k)
+            _i, _j, _l, _m, per1, ph1, k1 = fb.getTorsionParameters(k)
+            out.append(((i, j, l, m), (float(per), ph._value, kk._value),
+                        (float(per1), ph1._value, k1._value)))
+    return out
+
+
+def _bonded_term_energy(kind, atoms, params, x, box=None):
+    def vec(i, j):
+        d = x[j] - x[i]
+        return d - box * np.round(d / box) if box else d
+    if kind == "HarmonicBondForce":
+        r0, k = params
+        return 0.5 * k * (float(np.linalg.norm(vec(atoms[0], atoms[1]))) - r0) ** 2
+    if kind == "HarmonicAngleForce":
+        t0, k = params
+        u, v = vec(atoms[1], atoms[0]), vec(atoms[1], atoms[2])
+        theta = math.acos(np.clip(u @ v / np.linalg.norm(u) / np.linalg.norm(v), -1, 1))
+        return 0.5 * k * (theta - t0) ** 2
+    per, ph, k = params
+    b1, b2, b3 = vec(atoms[0], atoms[1]), vec(atoms[1], atoms[2]), vec(atoms[2], atoms[3])
+    n1, n2 = np.cross(b1, b2), np.cross(b2, b3)
+    m = np.cross(n1, b2 / np.linalg.norm(b2))
+    phi = math.atan2(m @ n2, n1 @ n2)
+    return k * (1 + math.cos(per * phi - ph))
