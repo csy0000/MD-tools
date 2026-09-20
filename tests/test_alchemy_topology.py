@@ -1380,3 +1380,13 @@ def test_a_ligand_only_environment_needs_no_restraint_and_says_so(eta, water):
                   if c["check"] == "standard-state-restraint")
     assert detail["required"] is False and "no binding site to leave" in detail["why"]
     assert plan.record["restraints"] == []
+
+
+def test_a_decoupling_record_states_its_convention(eta, water, cle):
+    """"Decoupled" and "annihilated" differ in what the other leg cancels: the record says which."""
+    plan = _decoupling(eta, water)
+    block = plan.record["decoupling"]
+    assert block["intramolecular"] == "retained"
+    assert "refused in v1" in block["annihilation"]
+    # and the block exists only where it means something
+    assert "decoupling" not in _build(eta, cle, core_map(eta, cle), water, "hybrid").record

@@ -1461,6 +1461,17 @@ def build_topology_plan(package_a: LigandPackage, package_b: Optional[LigandPack
                                            "configurational free energy.",
                                  "core_mass_changes": mass_changes}},
         "dummy_groups": groups,
+        # STATED, not inferred. A reader of a decoupling record must be able to see WHICH
+        # convention produced it: "decoupled" and "annihilated" differ in what the other leg of
+        # the cycle has to cancel, and a record that only omits the word leaves that to guesswork.
+        **({"decoupling": {
+            "intramolecular": "retained",
+            "what_vanishes": "the ligand's interactions with the environment, and nothing else",
+            "annihilation": "refused in v1: removing the ligand's internal nonbonded terms too "
+                            "changes what the solvent leg must cancel and needs its own "
+                            "derivation",
+            "standard_state_correction": "the executor's, over the recorded restraint",
+        }} if absent_b else {}),
         "dummy_nonbonded": "annihilated: charge 0 and epsilon 0 on the particle, zero on every "
                            "exception touching it; bonded terms per the junction rule",
         "nonbonded": {
