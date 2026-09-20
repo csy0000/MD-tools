@@ -13,6 +13,16 @@ TOLERANCES, fixed from a calibration run BEFORE the Hamiltonian was compared (20
             -> Hamiltonian tolerance 1e-4 kJ/mol absolute, about 3.5x the calibrated error.
 
 A tolerance here is never widened after a failure; the implementation is fixed instead.
+
+PLATFORM_POLICY_EXEMPTION: this file compares single-point energies, forces and derivatives with an
+independent numpy implementation (explicit pairs, an explicit Ewald k-sum), and those comparisons
+hold to 1e-8 kJ/mol, which single precision cannot carry -- Reference is the right platform for
+them, not a substitute for CUDA. One test does propagate: the NPT check runs 40 steps with a
+MonteCarloBarostat to move the box, and its subject is that nothing box-dependent is cached (PME
+parameters, the dispersion coefficients), not the quality of any dynamics; it compares the running
+Context against a fresh one at the same box and coordinates. The device evidence for this
+Hamiltonian is test_alchemy_hamiltonian_cuda.py and test_alchemy_hamiltonian_cuda_dynamics.py, and
+NPT ON CUDA IS NOT YET COVERED THERE -- recorded as a gap in handoffs/S3.md, not claimed here.
 """
 from __future__ import annotations
 
