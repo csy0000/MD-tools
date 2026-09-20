@@ -64,3 +64,77 @@ evidence. Every PASS row names the command that produced it; the counts are in
 | X1 | `md-openmm md-run` / `build-md` entry to a window | the same refusals and records through the public command | W3–W6 | exact | CPU, CUDA | — | — | NOT STARTED: CLI and configuration schema are S0's |
 | X2 | window export and `$MD_DATA` registration | a registered window campaign re-analysed from the registry | the local analysis | exact | CPU | — | — | NOT RUN: needs a data-contract method entry (S0) |
 | X3 | installed wheel, outside the checkout | W-tests against the wheel | the checkout run | same verdicts | CPU, CUDA | — | — | NOT RUN |
+
+## TYK2: absolute (A5) and relative (A4) binding free energies
+
+Written 2026-09-20, **before any protein sampling**, at S0's instruction, for
+[the campaign](../../protein-ligand-campaign.md). Model system: TYK2 with `ejm_31`, `ejm_42`,
+`ejm_43`. Nothing below has run. M2 must pass first: these campaigns are GPU-days, and the
+machinery they exercise is proved on the cheap hydration fixture, not here.
+
+### Thresholds, fixed now
+
+Every threshold in "Fixed thresholds" above applies unchanged (gate, INCONCLUSIVE band, overlap
+≥ 0.03, ≥ 50 decorrelated samples per window, the cross-state self-check, 3 repeats).
+Two additions, for these rows only:
+
+| name | value | why |
+|---|---|---|
+| experimental comparison | **reported, never gated** | the force field was not fitted to these measurements, and ABFE carries systematic errors (protonation, buried water, sampling) that a 0.5 kcal/mol gate would attribute to the implementation. Expectation, recorded as an observation: \|error\| ≤ 1.0 kcal/mol for RBFE edges, ≤ 2.0 kcal/mol for ABFE |
+| restraint independence (ABFE) | two independent Boresch anchor sets, and one of them at half the force constants, must give the same ΔG° within the gate | ΔG° must not depend on the restraint; this is the one internal check of the ABFE cycle that does not need another engine |
+
+### Prerequisites — none of this is mine, and none exists yet
+
+| # | what | owner | state |
+|---|---|---|---|
+| P1 | the prepared TYK2 complex per ligand: `build-top` complex, one parameter package per ligand, with build records, as a versioned fixture | S2 (campaign page: prepared once) | NOT STARTED |
+| P2 | hybrid plans for the two RBFE edges in BOTH environments (complex and solvent), pairing under `matched_legs` | S2 | NOT STARTED |
+| P3 | **a decoupling construction for ABFE**: an end state where the ligand does not interact with its environment. S2's plans are A→B with both endpoints real, and S3's `build_hamiltonian` applies softcore only to unique particles, so a common-particle decoupling would be linear in λ and its integrand would diverge at the end point. This is new work for S2/S3, not a parameter of mine | S0 to assign | **BLOCKED — A5 cannot start without it** |
+| P4 | Boresch anchor selection inputs: an equilibrated complex trajectory (≥ 5 ns) per ligand, the ligand's heavy-atom names, and the pocket residue list | S2 prepares, S4 selects and records | NOT STARTED |
+| P5 | a measured throughput number (ns/day) for the solvated complex under the alchemical Hamiltonian, from one short window, before any grant request | S4 | NOT RUN |
+
+### Rows
+
+| id | fixture | expected quantity | independent reference | tolerance | platform | command | evidence | verdict |
+|---|---|---|---|---|---|---|---|---|
+| T1.0 | **protocol, registered before sampling.** Amber18 one-step diagonal path; 16 windows at s = k/15 for every RBFE leg, 20 for each ABFE decoupling leg, 8 for restraint attachment (λ_restraints 0 → 1, ligand coupled); 2 fs, LangevinMiddle 1/ps, 300 K, NPT 1.01325 bar (MC barostat every 25 steps); each window minimised at its own state, 500 ps equilibration discarded, **5 ns production**, reports every 2 ps; **3 independent repeats**; complex and solvent legs of one edge paired by `matched_legs`. The pilot rule of M2.0 applies unchanged: a short pilot may add windows only where neighbour overlap < 0.03 | — | — | — | — | — | — | the protocol for T1–T5 |
+| T1 | RBFE `ejm_31` → `ejm_42` (ΔΔG_exp = −0.24 kcal/mol), solvent and complex legs | ΔΔG_bind | experiment, **reported not gated**; gated: repeats, TI vs MBAR, overlap, `matched_legs` | gate | CUDA | `pytest tests/test_alchemy_tyk2.py -k rbfe_42` | — | NOT RUN (P1, P2) |
+| T2 | RBFE `ejm_31` → `ejm_43` (ΔΔG_exp = +1.28) | ΔΔG_bind | as T1 | gate | CUDA | `-k rbfe_43` | — | NOT RUN (P1, P2) |
+| T3 | **the third edge, `ejm_42` → `ejm_43`**, if approved: it makes the three edges a closed cycle | ΔΔG(31→42) + ΔΔG(42→43) + ΔΔG(43→31) = 0 | the cycle's own closure — the only self-contained accuracy check available without another engine | gate, on the summed σ | CUDA | `-k rbfe_closure` | — | NOT RUN, **and not in the user's two-edge target**: it costs one more edge (about 3.5 GPU-days) and is the only internal accuracy check. S4 recommends it; S0 and the user decide |
+| T4 | ABFE `ejm_31` in TYK2: restraint attachment, complex decoupling (restrained), solvent decoupling, analytic release to 1 M | ΔG°_bind | experiment (−9.54 kcal/mol) reported, not gated; gated: restraint independence (two anchor sets), repeats, TI vs MBAR, overlap | gate | CUDA | `-k abfe` | — | NOT RUN (**P3**, P1, P4) |
+| T5 | the Boresch restraint chosen for T4 | the release term by quadrature vs Boresch's closed form; anchors away from collinear | rows R3, R4 above, on the real anchors | as R3, R4 | CPU | `-k abfe_restraint` | — | NOT RUN (P4) |
+
+### Anchor selection for T4/T5, fixed now
+
+From a ≥ 5 ns equilibrated complex trajectory (P4): ligand anchors L1, L2, L3 are three heavy
+atoms of the ligand, mutually ≥ 0.25 nm apart and not collinear, with the lowest positional
+fluctuation; receptor anchors P1, P2, P3 are protein heavy atoms 0.8–1.2 nm from L1, each angle
+at least 30° from collinear over the whole trajectory. Equilibrium values are the trajectory
+means; force constants are 4184 kJ/mol/nm² and 41.84 kJ/mol/rad² (10 kcal/mol/Å² and
+10 kcal/mol/rad², Boresch's own values). Both the anchors and their fluctuations are recorded.
+The second anchor set for the restraint-independence check is chosen the same way from a
+disjoint set of candidates.
+
+### What it costs, before anyone approves it
+
+Assumptions, to be replaced by P5's measurement: solvated complex ≈ 40 000 particles; one RTX
+3080 ≈ 80 ns/day under the alchemical Hamiltonian (about 10 % below plain MD, from the
+cross-state reporting at 2 ps); ligand in water ≈ 3 000 particles ≈ 600 ns/day.
+
+| campaign | windows × repeats × ns | simulated time | one RTX 3080 |
+|---|---|---|---|
+| T1 complex leg | 16 × 3 × 5.5 | 264 ns | 3.3 days |
+| T1 solvent leg | 16 × 3 × 5.5 | 264 ns | 0.45 day |
+| T2 | as T1 | 528 ns | 3.75 days |
+| T3 (if approved) | as T1 | 528 ns | 3.75 days |
+| T4 complex decoupling | 20 × 3 × 5.5 | 330 ns | 4.1 days |
+| T4 restraint attachment | 8 × 3 × 2.5 | 60 ns | 0.75 day |
+| T4 solvent decoupling | 20 × 3 × 5.5 | 330 ns | 0.55 day |
+| T4 second anchor set (restraint independence) | complex decoupling + attachment again | 390 ns | 4.85 days |
+| **total, two edges + ABFE** | | ≈ 2 100 ns | **≈ 18 GPU-days**, or about 4.5 days on four cards |
+| with T3 | | ≈ 2 600 ns | ≈ 22 GPU-days |
+
+Levers, if that is too much: 2 repeats instead of 3 (−33 %), 3 ns production instead of 5
+(−40 %, at the cost of precision on the near-null `ejm_42` edge), or dropping the second anchor
+set (−4.85 days, at the cost of the only internal ABFE check). Each is a protocol decision to be
+recorded **before** sampling, not after.
