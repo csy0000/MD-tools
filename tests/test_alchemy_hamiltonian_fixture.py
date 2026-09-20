@@ -631,3 +631,55 @@ def test_the_decoupling_shape_an_abfe_leg_needs(dispersion, tail):
                for step in (1e-2, 1e-3, 1e-4)]
         best = min(abs(want - r) for r in _richardson(fds))
         assert best < 2e-5 * max(1.0, abs(want)), (name, want, fds)
+
+
+def _junction_removed(system, atoms):
+    """A copy of `system` with the angle on `atoms` at force constant 0. Passed the DUMMY end's
+    System, this is exactly a plan's `dummy-removed` junction term (the builder refuses the
+    removal at the physical end, which is how this test found its own first mistake)."""
+    s = openmm.XmlSerializer.deserialize(openmm.XmlSerializer.serialize(system))
+    for f in s.getForces():
+        if isinstance(f, openmm.HarmonicAngleForce):
+            for k in range(f.getNumAngles()):
+                i, j, l, t0, kk = f.getAngleParameters(k)
+                if (i, j, l) == atoms:
+                    f.setAngleParameters(k, i, j, l, t0, 0.0)
+                    return s
+    raise AssertionError(f"no angle on {atoms}")
+
+
+def test_the_bonded_integrand_has_an_expectation_and_warns():
+    """dU/dlambda_bonded SHOULD carry nothing from terms touching a unique atom.
+
+    This is the check that did not exist on 2026-09-19, when a probe printed 660.77 kJ/mol for S2's
+    chloroethane plan and it was read as "large but plausible". It was the whole bonded integrand
+    coming from junction terms switched between zero and full strength, and it took S4's M2 gates to
+    make the consequence visible. A diagnostic without an expectation cannot warn anybody.
+    """
+    sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
+    h = build_hamiltonian(sa, sb, a, b)
+    c = _context(h.system, x)
+    state = _state((0.0, 0.0, 0.0))
+
+    # this fixture's terms on a unique atom are identical at both ends, which is the expectation
+    split = fx.bonded_derivative_split(sa, sb, set(a) | set(b), x, box=BOX)
+    assert split["unique_touching"] == 0.0, split
+    assert split["warning"] is None
+    analytic = h.derivative_components(c, state)["lambda_bonded"]["bonded_mixed"]
+    assert analytic == pytest.approx(split["total"], abs=1e-9)
+    assert analytic == pytest.approx(split["core"], abs=1e-9)
+
+    # and a plan that removes a junction term at the dummy end puts that energy on the lambda path
+    # FB (particle 8) appears, so its dummy end is System A: that is where the plan would zero it
+    removed = _junction_removed(sa, (1, 0, 8))          # C1-C0-FB, the appearing atom's junction
+    split = fx.bonded_derivative_split(removed, sb, set(a) | set(b), x, box=BOX)
+    assert abs(split["unique_touching"]) > fx.BONDED_JUNCTION_WARNING_KJ
+    assert split["warning"] is not None and "on the lambda path" in split["warning"]
+    h2 = build_hamiltonian(removed, sb, a, b)
+    c2 = _context(h2.system, x)
+    moved = h2.derivative_components(c2, state)["lambda_bonded"]["bonded_mixed"]
+    assert moved == pytest.approx(split["total"], abs=1e-9)
+    assert abs(moved - analytic) == pytest.approx(abs(split["unique_touching"]), abs=1e-9)
+    print(f"\nbonded integrand: identical junctions {analytic:.3f} kJ/mol (core only); "
+          f"one dummy-removed junction angle {moved:.3f}, of which "
+          f"{split['unique_touching']:.3f} is the junction term")
