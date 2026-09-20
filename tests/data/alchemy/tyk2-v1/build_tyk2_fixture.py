@@ -80,7 +80,8 @@ def reference_of(ligand: str) -> str:
     return LIGANDS[ligand][1]
 
 
-#: ligand -> (residue name, catalog reference). The packages are committed; nothing is charged again.
+#: ligand -> (residue name, catalog reference). The packages are committed, so nothing is
+#: charged again.
 LIGANDS = {
     "ejm_31": ("L31", "LOCAL-DKNAYSZNMZIMIZ/param_bd1388e5fe3e"),
     "ejm_42": ("L42", "LOCAL-CEJFWHOOEUEYOE/param_c1d8d1147233"),
@@ -90,7 +91,10 @@ KINDS = ("complex", "solvated", "vacuum")
 
 
 def rename_caps(source: Path) -> str:
-    """The protein with its cap atoms renamed. Byte-identical to `prepared/protein_caps_renamed.pdb`."""
+    """The protein with its cap atoms renamed.
+
+    Byte-identical to `prepared/protein_caps_renamed.pdb`.
+    """
     out, renamed = [], 0
     for line in source.read_text().splitlines(keepends=True):
         if line.startswith(("ATOM", "HETATM")):
