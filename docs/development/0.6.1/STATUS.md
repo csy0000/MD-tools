@@ -39,11 +39,10 @@ VALIDATED, and neither is released.
 
 ## Blockers
 
-- Open for S0: the compact `L01: <path>` form (needs an instance name in the mapping record); the `--extend-from` log-before-refusal defect is fixed in released 0.6.0 and merged here (`62adec3`); S1's out-of-place extension test needs updating to it.
+- Open for S0: the compact `L01: <path>` form, which needs an instance name in `md-tools-ligand-mapping/1`. The `--extend-from` defect is fixed in released 0.6.0, merged here (`62adec3`), and S1's extension test now asserts the new behaviour.
 - Registration: BLOCKED (sandbox). The user has put `$MD_DATA` out of reach of every session
   (2026-09-19); the registration half of S1-G is reported BLOCKED, not passed.
-- S1-G: no GPU is available to this wave. Cards 0–4 are reserved by the user for the 0.6.0 gate
-  and 5–8 belong to hpREST2. Blocked is not passed; the deterministic CPU work continues.
+- S1-G: no card has been granted for the selective ladders. 0.6.0 is released, so its gate no longer holds cards; a grant is a request to the user, not a shortage. `tests/test_selective_rest2_cuda.py` (12 tests, one card, single process) is ready to run. Blocked is not passed.
 - Integration: done. Resume and export of a selective ladder work on `0.6.1`.
 
 ## Notes
