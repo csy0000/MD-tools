@@ -90,6 +90,8 @@ __all__ = [
     "TopologyError",
     "TopologyPlan",
     "PLAN_IDENTITY_FIELDS",
+    "JUNCTION_POLICIES",
+    "DEFAULT_JUNCTION_POLICY",
     "build_decoupling_plan",
     "build_topology_plan",
     "check_plan_digest",
@@ -107,10 +109,12 @@ __all__ = [
 #:    nonbonded.unique_group_internal and the per-slot unique_group_internal flag.
 #: 3: `restraint` becomes `restraints`, a list whose entries carry a ROLE, and no restraint is
 #:    part of ligand_hamiltonian_sha256 in any mode (S0 ruling, 2026-09-20).
-PLAN_SCHEMA = "md-tools-topology-plan/3"
+#: 4: adds `junction_policy`, so every result STATES which construction produced it. The two
+#:    policies are different physics, not a formatting difference, so it is an identity field.
+PLAN_SCHEMA = "md-tools-topology-plan/4"
 #: What a stored record's identity is compared on when its digest no longer matches: if these all
 #: agree, only the record's shape moved and the physics is the same.
-PLAN_IDENTITY_FIELDS = ("ligand_hamiltonian_sha256", "mode", "atom_map.sha256",
+PLAN_IDENTITY_FIELDS = ("ligand_hamiltonian_sha256", "mode", "junction_policy", "atom_map.sha256",
                         "endpoints.A.reference", "endpoints.A.package_sha256",
                         "endpoints.A.parameter_digest", "endpoints.B.reference",
                         "endpoints.B.package_sha256", "endpoints.B.parameter_digest")
@@ -484,6 +488,21 @@ def _junction(mol, component: dict[str, Any], core: set[int]) -> dict[str, Any]:
     return {"d1": d1, "p1": p1, "p2": p2, "p3": p3, "group": sorted(group)}
 
 
+#: How a dummy group's junction bonded terms are treated at the end where the group is a dummy.
+#:
+#: "retain-all" (the default, and the standard construction): every bonded term touching the group
+#: keeps its physical parameters at BOTH ends, so no bonded term is lambda-dependent, dU/dlambda
+#: has no bonded part, and the dummy stays in the geometry its own force field gives it.
+#: "separable": terms that couple the dummy to a physical internal coordinate are removed at the
+#: dummy end (Fleck, Wieder and Boresch's single-anchor rule), which makes the dummy's partition
+#: function separate exactly -- and makes those terms lambda-dependent, which is an endpoint
+#: catastrophe: once they are off, the dummy rotates into geometries they would have forbidden, so
+#: their energy -- which IS dU/dlambda_bonded -- grows without bound. Measured on
+#: ethane->chloroethane: one removed angle is worth 611 kJ/mol at the built coordinates.
+JUNCTION_POLICIES = ("retain-all", "separable")
+DEFAULT_JUNCTION_POLICY = "retain-all"
+
+
 def _retained(atoms: Sequence[int], kind: str, junction: dict[str, Any]) -> bool:
     """Whether a term over package-local *atoms*, touching the group, is kept at its dummy end."""
     allowed = set(junction["group"]) | {junction["p1"]}
@@ -850,7 +869,8 @@ def build_topology_plan(package_a: LigandPackage, package_b: Optional[LigandPack
                         atom_map: Optional[AtomMap], environment: Environment, *, mode: str,
                         dual_restraint_k: float = DEFAULT_DUAL_RESTRAINT_K,
                         b_positions_nm: Optional[np.ndarray] = None,
-                        restraint: Optional[dict] = None) -> TopologyPlan:
+                        restraint: Optional[dict] = None,
+                        junction_policy: str = DEFAULT_JUNCTION_POLICY) -> TopologyPlan:
     """Build and check the plan. Nothing is written; `TopologyPlan.write` writes it.
 
     *b_positions_nm* is endpoint B's pose in B package order (a docked pose, for example). Left
@@ -863,6 +883,9 @@ def build_topology_plan(package_a: LigandPackage, package_b: Optional[LigandPack
     from openmm import CustomBondForce, CustomCentroidBondForce, version
     from openmm.app import Element, Topology
 
+    if junction_policy not in JUNCTION_POLICIES:
+        raise TopologyError(f"junction_policy {junction_policy!r} is not one of "
+                            f"{JUNCTION_POLICIES}")
     absent_b = mode == "decoupling"
     if absent_b:
         if package_b is not None or atom_map is not None:
@@ -1191,7 +1214,7 @@ def build_topology_plan(package_a: LigandPackage, package_b: Optional[LigandPack
 
     def dummy_decision(atoms_hyb: Sequence[int], kind: str, source: str) -> bool:
         """Whether a term touching *source*'s unique atoms is kept where they are dummies."""
-        if whole_molecule_dummy:
+        if whole_molecule_dummy or junction_policy == "retain-all":
             return True     # a whole dummy ligand keeps every intramolecular bonded term
         local = local_a if source == "A" else local_b
         unique = set(a_only) if source == "A" else set(b_only)
@@ -1460,6 +1483,7 @@ def build_topology_plan(package_a: LigandPackage, package_b: Optional[LigandPack
                                            "appended particles. Masses do not enter the "
                                            "configurational free energy.",
                                  "core_mass_changes": mass_changes}},
+        "junction_policy": junction_policy,
         "dummy_groups": groups,
         # STATED, not inferred. A reader of a decoupling record must be able to see WHICH
         # convention produced it: "decoupled" and "annihilated" differ in what the other leg of

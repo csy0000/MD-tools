@@ -76,11 +76,20 @@ are dummies.
 - **Dual** adds one `CustomCentroidBondForce` (`0.5*k_restraint*distance(g1,g2)^2`, geometric
   centroids, default 1000 kJ/mol/nm^2), identical at both endpoints.
 
-### The dummy junction rule
+### The dummy junction: two policies, and why the default changed
 
-OpenFE's hybrid factory keeps every bonded term between the dummy region and the core, and
-documents that this can bias results because the dummy partition function need not separate.
-This construction uses the single-anchor rule of Fleck, Wieder and Boresch (JCTC 2021, 17, 4403):
+A dummy group's bonded terms to the core can be kept at the end where the group is a dummy, or
+removed there. Both choices are wrong in a way. `junction_policy` in the plan record says which
+one produced it, because they are different physics and a result has to state its construction.
+
+`retain-all` is the DEFAULT. Every bonded term touching the group keeps its physical parameters
+at BOTH ends. No bonded term is then lambda-dependent, `dU/dlambda` has no bonded part at all,
+and the dummy stays in the geometry its own force field gives it. This is also pmemd's default
+(`gti_bat_sc = 0`).
+
+`separable` is the single-anchor rule of Fleck, Wieder and Boresch (JCTC 2021, 17, 4403), which
+addresses the limitation OpenFE's hybrid factory documents -- that keeping every dummy-core term
+can bias results, because the dummy partition function then need not separate:
 
 - each unique group G hangs from ONE bond D1-P1 to the core (a group with two attachments --
   a ring growing or a partially mapped ring -- is refused by `validate_map`);
@@ -94,7 +103,48 @@ This construction uses the single-anchor rule of Fleck, Wieder and Boresch (JCTC
 Every retained term is then a function of G's coordinates in the (P1, P2, P3) frame only, so the
 dummy integral is independent of the physical coordinates. `factorization_check` demonstrates it
 at construction by arithmetic: for ethane -> chloroethane the retained dummy energy moves by
-~1e-13 kJ/mol when the physical atoms move, and the keep-everything set moves by 412 kJ/mol.
+~1e-13 kJ/mol when the physical atoms move, against [411.7, 471.5] kJ/mol for the keep-everything
+set.
+
+**The rule shipped first, and it was wrong on the lambda path.** It protected a real thing --
+measured below -- at a cost that had not been measured. Once a bonded term is removed at one end,
+its energy IS the bonded integrand; and with the term off, the dummy is free to explore exactly
+the geometries that term forbade, so the integrand grows without bound. That is not a subtlety in
+the third decimal. On the M2 campaign it was `dU/dlambda_bonded` = +611 kJ/mol at s=0 and -238 at
+s=1, 16 of 18 vacuum windows unable to resolve their endpoints, repeats scattering 0.80 kcal/mol
+against a claimed sigma of 0.09, and a cycle that did not close. The +611 was ONE term: the
+removed junction angle H4-C2-Cl_dummy, worth 610.585 kJ/mol at the built coordinates.
+
+**What retaining costs, quantified.** Under `retain-all` OpenFE's documented limitation returns,
+and the honest question is how large it is in a ddG rather than whether it exists. Those are
+different quantities:
+
+| measured | what it is |
+|---|---|
+| 1.757 kJ/mol | the SPREAD of `-kT ln Z_dummy` between two core conformations differing by an 8% C-H stretch and ~0.027 nm displacements -- a deliberately large distortion, chosen to put the dependence above noise |
+| 0.073 kJ/mol per degree | `dW/dq` for the H4-C2-C1 bend the retained junction angle couples to |
+| 0.146 kJ/mol per degree^2 | `d2W/dq2` for the same coordinate |
+
+A ddG bias is neither of the first two: it is the difference of the MEAN of `W = -kT ln Z_dummy`
+between the two legs of the cycle. That angle has k = 559 kJ/mol/rad^2, so its thermal sigma is
+3.8 degrees, and a difference in its mean between a solvated and a complexed core of a whole
+degree -- generous for an angle that stiff -- costs 0.07 kJ/mol. The convexity term, at a 5%
+difference in its variance between legs, costs 0.05 kJ/mol. The agreement gate is 0.5 kcal/mol =
+2.09 kJ/mol.
+
+**That is a sensitivity bound, not a measured ddG.** It assumes the core's internal distribution
+near the anchor is nearly environment-independent, which is what a stiff angle buys and not what
+has been sampled. What converts it into evidence is the two-policy comparison: the same edge and
+the same legs, ddG computed twice, so the construction is the only difference. If the two agree
+within their combined error the bound is confirmed; if they do not, the disagreement IS the bias,
+measured rather than bounded. Amber's manual reaches the same conclusion from the other
+direction, calling the alternative "not ... a significant effect in most cases".
+
+`factorization_check` therefore REFUSES above its tolerance under `separable`, and REPORTS the
+same number under `retain-all`. Separability is not lost for good either way: it can be recovered
+at the dummy end in post-processing, as `<W>` over the saved core frames by the same quadrature --
+no Hamiltonian change, no lambda component and no extra sampling. Not implemented in A1; recorded
+because `retain-all` does not close that door.
 
 ## The automatic map
 
