@@ -188,6 +188,49 @@ selection although N and CA are backbone atoms it does not heat. φ reaches into
 residue's C. Ordinary amide ω, aromatic ring and double-bond torsions, and every improper, stay
 unscaled whoever owns them. A proline-like ω is scaled when residue *i*'s backbone is selected.
 
+### Choosing the residues around a ligand
+
+The configuration always carries an explicit mask. To find out *which* residues line a site, ask,
+and paste the answer:
+
+```bash
+python -m md_tools.rest2.pocket build/built.pdb --ligand ":201" --cutoff-nm 0.5
+```
+
+It prints the criterion it used, the structure and its digest, a table (index, chain, author
+residue id, name, minimum distance) and a ready-to-paste mask. The criterion
+(`md-tools-pocket-selection/1`) is: **heavy atoms only** on both sides, the **minimum distance**
+over all pairs rather than a centroid distance, **strictly less than** the cutoff (a residue
+exactly at it is out — and the report lists what lies just beyond, with its distance, so a
+borderline residue is visible), the **minimum image** when the topology has a box, and **no
+solvent or ions** unless `--include-solvent` is given.
+
+It resolves nothing at run time. A pocket that were re-derived when a run started would mean the
+record said "whatever was within 5 Å on the day"; the mask you paste says which residues were hot.
+
+### Which sidechain bonds are scalable
+
+The amino acids are a small fixed set, so this is a table, not a perception problem:
+`md_tools.rest2.sidechains` (`md-tools-sidechain-rotatability/1`) lists, per residue, every
+central bond inside the sidechain — each chi with its torsion, each terminal rotation (methyl,
+hydroxyl, thiol, ammonium), and each bond that is never scaled with its class:
+
+| never scaled | where | class |
+|---|---|---|
+| the sidechain amide C–N | ASN, GLN | `amide_omega` |
+| the guanidinium, three bonds | ARG | `double_bond` |
+| the aromatic ring | PHE, TYR, TRP, HIS (HID/HIE/HIP) | `aromatic_ring` |
+
+A carboxylate (ASP, GLU) is not a central bond at all: both oxygens are terminal, so no torsion
+runs across it. CYX's chi2 exists only once its disulfide does, and the SG–SG bond itself is owned
+by both sidechains. `python -c "from md_tools.rest2.sidechains import describe_residue;
+print(describe_residue('TYR'))"` prints one residue.
+
+**The table and the torsion classifier must agree**, and a region resolution checks it: if they
+disagreed about a selected sidechain, the build is refused rather than scaling a region nobody
+predicted. A residue the table does not define — a modified or unsupported one — is refused by
+name.
+
 **Membership.** Backbone is N, H, H1–H3, CA, HA, HA2, HA3, C, O and OXT. Everything else in a
 supported protein residue is sidechain. So glycine has no sidechain, proline's ring (CB, CG, CD)
 is sidechain, a CYX's SG is sidechain, and a cap (ACE, NME, NHE, NMA) is backbone throughout.
