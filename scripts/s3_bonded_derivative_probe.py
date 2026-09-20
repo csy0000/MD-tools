@@ -36,6 +36,10 @@ def main():
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--lam", type=float, default=0.0)
+    ap.add_argument("--policy", default=None, choices=(None, "retain-all", "separable"),
+                    help="the plan's junction_policy, when the plan record does not carry one. It "
+                         "decides the EXPECTATION: retain-all requires exactly 0 from junction "
+                         "terms, separable requires a non-zero value (its known cost)")
     args = ap.parse_args()
 
     plans = {"ethane->chloroethane": af.CHLOROETHANE, "ethane->ethanol": af.ETHANOL,
@@ -52,9 +56,14 @@ def main():
         state = dict(zip(NAMES, (args.lam,) * 3))
         analytic = sum(h.derivative_components(context, state)["lambda_bonded"].values())
         box = plan.system_a.getDefaultPeriodicBoxVectors()[0][0]._value
+        policy = plan.record.get("terms", {}).get("junction_policy") if isinstance(
+            plan.record.get("terms"), dict) else None
+        policy = policy or args.policy
         split = fx.bonded_derivative_split(plan.system_a, plan.system_b,
-                                           set(plan.a_only) | set(plan.b_only), x, box=box)
-        print(f"\n{name}: dU/dlambda_bonded = {analytic:.2f} kJ/mol at lambda = {args.lam}")
+                                           set(plan.a_only) | set(plan.b_only), x, box=box,
+                                           policy=policy)
+        print(f"\n{name}: dU/dlambda_bonded = {analytic:.2f} kJ/mol at lambda = {args.lam}"
+              f"   [junction_policy = {policy or 'not stated'}]")
         print(f"    from terms touching a unique atom: {split['unique_touching']:.2f}")
         print(f"    from core parameter changes:       {split['core']:.2f}   <- the only part that "
               "should be here")
