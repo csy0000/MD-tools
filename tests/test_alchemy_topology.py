@@ -57,6 +57,17 @@ def hybrid(eta, cle, water):
     return _build(eta, cle, core_map(eta, cle), water, "hybrid")
 
 
+@pytest.fixture(scope="module")
+def separable(eta, cle, water):
+    """The same plan under the single-anchor rule, which is no longer the default.
+
+    `retain-all` ships because removing a junction term puts it ON the lambda path, where it is an
+    endpoint catastrophe. The rule itself still works and is still offered, so the tests that
+    establish what it does build it by name rather than inheriting it.
+    """
+    return _build(eta, cle, core_map(eta, cle), water, "hybrid", junction_policy="separable")
+
+
 def _accounting(plan, env, pkg, side, positions=None):
     from md_tools.alchemy.topology_recovery import endpoint_accounting
 
@@ -178,8 +189,8 @@ def test_dummies_interact_with_nothing(hybrid, side):
 # ------------------------------------------------------------------------------------------------
 # separability of the dummy groups
 # ------------------------------------------------------------------------------------------------
-def test_junction_rule_makes_every_dummy_group_separable(hybrid):
-    detail = next(c["detail"] for c in hybrid.record["checks"]
+def test_junction_rule_makes_every_dummy_group_separable(separable):
+    detail = next(c["detail"] for c in separable.record["checks"]
                   if c["check"] == "dummy-factorization")
     assert len(detail["groups"]) == 2
     for group in detail["groups"]:
@@ -190,14 +201,55 @@ def test_junction_rule_makes_every_dummy_group_separable(hybrid):
         assert group["terms_removed"] > 0
 
 
-def test_the_retained_frame_is_the_documented_one(hybrid, cle):
-    group = next(g for g in hybrid.record["dummy_groups"] if g["dummy_at"] == "A")
+def test_retain_all_leaves_no_bonded_term_on_the_lambda_path(request, eta, cle, eoh, water):
+    """The default construction's whole point: dU/dlambda has NO bonded part.
+
+    A bonded term is on the lambda path exactly when its two endpoint parameter sets differ. Under
+    `retain-all` every junction term keeps its physical parameters at both ends, so none of them
+    is, and the bonded integrand is identically zero -- which is why the endpoint singularity
+    disappears. S4 measured the other case: dU/dlambda_bonded was +611 kJ/mol at s=0 on this very
+    edge, and it was one removed angle, H4-C2-Cl_dummy, worth 610.585 kJ/mol at the built
+    coordinates.
+
+    Expectation EXACTLY zero, on both water plans, so a lambda-dependent bonded slot that ever
+    reappears fails here rather than becoming a number in a campaign nobody re-derives.
+    """
+    for name, b in (("chloroethane", cle), ("ethanol", eoh)):
+        plan = _build(eta, b, core_map(eta, b), water, "hybrid")
+        assert plan.record["junction_policy"] == "retain-all"
+        on_path = {family: [s["atoms"] for s in slots if s["a"] != s["b"]]
+                   for family, slots in plan.record["terms"].items()}
+        assert not any(on_path.values()), (name, on_path)
+        removed = [s["atoms"] for slots in plan.record["terms"].values() for s in slots
+                   if s["at_dummy_end"] == "dummy-removed"]
+        assert removed == [], (name, removed)
+
+
+def test_the_policy_that_produced_a_plan_is_in_its_record(hybrid, separable):
+    """Two constructions, different physics: a result has to say which one made it."""
+    from md_tools.alchemy.topology import (DEFAULT_JUNCTION_POLICY, JUNCTION_POLICIES,
+                                           PLAN_IDENTITY_FIELDS, TopologyError)
+
+    assert DEFAULT_JUNCTION_POLICY == "retain-all"
+    assert hybrid.record["junction_policy"] == "retain-all"
+    assert separable.record["junction_policy"] == "separable"
+    assert hybrid.sha256 != separable.sha256
+    # not a formatting difference: the digest comparison must call these different PLANS, not a
+    # record whose shape moved while the physics stayed
+    assert "junction_policy" in PLAN_IDENTITY_FIELDS
+    with pytest.raises(TopologyError, match="junction_policy 'single-anchor' is not one of"):
+        _build(None, None, None, None, "hybrid", junction_policy="single-anchor")
+    assert set(JUNCTION_POLICIES) == {"retain-all", "separable"}
+
+
+def test_the_retained_frame_is_the_documented_one(separable, cle):
+    group = next(g for g in separable.record["dummy_groups"] if g["dummy_at"] == "A")
     assert group["local_names"] == ["Cl1"]
     names = {h: n for n, h in zip(cle.atom_names,
-                                  hybrid.record["endpoints"]["B"]["hybrid_index_of_local_atom"])}
+                                  separable.record["endpoints"]["B"]["hybrid_index_of_local_atom"])}
     frame = [names[group["frame"][k]] for k in ("p1", "p2", "p3")]
     assert frame == ["C2", "C1", "H1"]      # heavy neighbour first, then lowest package index
-    kept = [(s["atoms"], s["kind"]) for family in hybrid.record["terms"].values() for s in family
+    kept = [(s["atoms"], s["kind"]) for family in separable.record["terms"].values() for s in family
             if s["at_dummy_end"] == "dummy-retained" and group["atoms"][0] in s["atoms"]]
     kept_names = sorted((tuple(names[a] for a in atoms), kind) for atoms, kind in kept)
     assert kept_names == sorted([
@@ -208,14 +260,14 @@ def test_the_retained_frame_is_the_documented_one(hybrid, cle):
             (("H1", "C1", "C2", "Cl1"), "proper"), (("H1", "C1", "C2", "Cl1"), "proper")])
 
 
-def test_a_group_that_would_not_separate_is_refused(hybrid, monkeypatch):
+def test_a_group_that_would_not_separate_is_refused(separable, monkeypatch):
     """Keep one removed coupling term, and the factorization check refuses the plan."""
     import copy
 
     from md_tools.alchemy import topology_recovery as recovery
     from md_tools.alchemy.topology import TopologyError
 
-    record = copy.deepcopy(hybrid.record)
+    record = copy.deepcopy(separable.record)
     for family in record["terms"].values():
         for slot in family:
             if slot["at_dummy_end"] == "dummy-removed":
@@ -226,8 +278,9 @@ def test_a_group_that_would_not_separate_is_refused(hybrid, monkeypatch):
         else:
             continue
         break
-    broken = type(hybrid)(record=record, system_a=hybrid.system_a, system_b=hybrid.system_b,
-                          topology=hybrid.topology, positions_nm=hybrid.positions_nm)
+    broken = type(separable)(record=record, system_a=separable.system_a,
+                             system_b=separable.system_b, topology=separable.topology,
+                             positions_nm=separable.positions_nm)
     with pytest.raises(TopologyError, match="partition\\s+function would not cancel"):
         recovery.factorization_check(broken)
 
@@ -639,7 +692,7 @@ def _dummy_free_energy(record, positions, group, frame, include_removed, kt):
     return energy.min() - kt * np.log(weights.sum())
 
 
-def test_openfe_dummy_group_limitation_is_addressed_as_a_free_energy(hybrid):
+def test_openfe_dummy_group_limitation_is_addressed_as_a_free_energy(separable):
     """OpenFE documents that keeping every dummy-core bonded term can bias the result, because the
     dummy partition function then depends on the physical conformation. Measured here as a free
     energy: -kT ln Z_dummy in two conformations of the physical core, differing only in core
@@ -648,11 +701,11 @@ def test_openfe_dummy_group_limitation_is_addressed_as_a_free_energy(hybrid):
     With the junction rule the dummy free energy is the same in both -- it cancels in any cycle.
     Keeping every term, as OpenFE does, it differs by a free energy a cycle would silently absorb.
     """
-    record = hybrid.record
+    record = separable.record
     group = next(g for g in record["dummy_groups"] if g["dummy_at"] == "A")   # Cl1 at endpoint A
     frame = group["frame"]
     kt = 2.494339  # kJ/mol at 300 K
-    x1 = np.array(hybrid.positions_nm, dtype=float)
+    x1 = np.array(separable.positions_nm, dtype=float)
     x2 = x1.copy()
     hyb_a = record["endpoints"]["A"]["hybrid_index_of_local_atom"]
     c2, h4 = hyb_a[1], hyb_a[5]            # ethane C2 and H4, a physical neighbour of the anchor
@@ -668,14 +721,64 @@ def test_openfe_dummy_group_limitation_is_addressed_as_a_free_energy(hybrid):
     assert abs(everything[1] - everything[0]) > 0.1, everything
 
 
+
+def test_the_retained_dummy_free_energy_moves_little_per_degree_of_the_anchor_angle(hybrid):
+    """What a retained junction term can bias a ddG BY, as opposed to that it can bias one.
+
+    The test above shows -kT ln Z_dummy depends on the core conformation when every term is kept,
+    over a deliberately large distortion (an 8% C-H stretch) chosen to put the dependence above
+    noise. A ddG bias is a different quantity: not the spread of W = -kT ln Z_dummy over
+    conformations, but the difference of its MEAN between the two legs of the cycle. So what
+    decides whether retention is acceptable is dW/dq for the core coordinates the dummy couples
+    to, against the shift in <q> an environment can produce.
+
+    Measured here for the H4-C2-C1 bend the retained junction angle couples to. That angle's force
+    constant is 559 kJ/mol/rad^2, so its thermal sigma is 3.8 degrees and the difference in its
+    MEAN between a solvated and a complexed core is well under a degree; the gate is 0.5 kcal/mol
+    = 2.09 kJ/mol. The bounds below are loose on purpose -- they pin the ORDER, which is the claim
+    the junction policy rests on, and they are a sensitivity, not a sampled free energy.
+    """
+    import math
+
+    record = hybrid.record
+    group = next(g for g in record["dummy_groups"] if g["dummy_at"] == "A")
+    frame = group["frame"]
+    kt = 2.494339  # kJ/mol at 300 K
+    x0 = np.array(hybrid.positions_nm, dtype=float)
+    hyb_a = record["endpoints"]["A"]["hybrid_index_of_local_atom"]
+    c1, c2, h4 = hyb_a[0], hyb_a[1], hyb_a[5]
+
+    def bent(degrees):
+        """H4 rotated about the axis through C2 normal to the C1-C2-H4 plane: the bend alone."""
+        x = x0.copy()
+        v, u = x[h4] - x[c2], x[c1] - x[c2]
+        n = np.cross(u, v)
+        n = n / np.linalg.norm(n)
+        t = math.radians(degrees)
+        x[h4] = x[c2] + (v * math.cos(t) + np.cross(n, v) * math.sin(t)
+                         + n * np.dot(n, v) * (1.0 - math.cos(t)))
+        return x
+
+    w = {d: _dummy_free_energy(record, bent(d), group, frame, True, kt) for d in (-1, 0, 1)}
+    slope = (w[1] - w[-1]) / 2.0                       # kJ/mol per degree
+    curvature = w[1] + w[-1] - 2.0 * w[0]              # kJ/mol per degree^2
+    print(f"dummy free energy vs the anchor bend: {w}; slope {slope:.4f} kJ/mol/deg, "
+          f"curvature {curvature:.4f} kJ/mol/deg^2")
+    # a degree of shift in the mean, and a whole thermal variance of shift in the width, both
+    # stay an order below the gate -- which is why retention is affordable at all
+    assert abs(slope) < 0.2, slope
+    assert abs(curvature) < 0.5, curvature
+    assert abs(slope) * 1.0 + 0.5 * abs(curvature) * 3.8 ** 2 < 2.09
+
 # ------------------------------------------------------------------------------------------------
 # a unique group's internal nonbonded interactions (S0 ruling: kept physical at the dummy end)
 # ------------------------------------------------------------------------------------------------
-def _pentane_plan(env):
+def _pentane_plan(env, junction_policy=None):
     from tests.alchemy_fixtures import PENTANE
 
     a, b = package(ETHANE), package(PENTANE)
-    return a, b, _build(a, b, core_map(a, b), env, "hybrid")
+    extra = {"junction_policy": junction_policy} if junction_policy else {}
+    return a, b, _build(a, b, core_map(a, b), env, "hybrid", **extra)
 
 
 def _internal_by_hand(pkg, hyb, group_hyb, x):
@@ -776,7 +879,8 @@ def test_pentane_recovers_both_endpoints_in_vacuum(side):
 
 
 def test_internal_terms_do_not_break_separability(water):
-    a, b, plan = _pentane_plan(water)
+    """The single-anchor rule, so built by name: it is no longer the default construction."""
+    a, b, plan = _pentane_plan(water, "separable")
     detail = next(c["detail"] for c in plan.record["checks"]
                   if c["check"] == "dummy-factorization")
     propyl = next(g for g in detail["groups"] if g["dummy_at"] == "A")

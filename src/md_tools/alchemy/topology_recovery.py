@@ -209,7 +209,23 @@ def _frame(x: np.ndarray, p1: int, p2: Optional[int], p3: Optional[int]):
 
 def factorization_check(plan, *, trials: int = 8, displacement_nm: float = 0.03,
                         seed: int = 20260919) -> dict[str, Any]:
-    """Refuse a plan whose retained dummy energy depends on physical coordinates."""
+    """How far each dummy group's retained energy depends on the PHYSICAL coordinates.
+
+    Zero means the group's partition function separates exactly and cancels between the legs of a
+    cycle. What happens when it is not zero depends on the junction policy, and the difference is
+    a trade between two errors, not between right and wrong:
+
+    * `separable` -- the terms that couple are removed at the dummy end, so this must be zero and
+      a non-zero value is REFUSED. The cost is that those terms are then lambda-dependent, and
+      once they are off the dummy rotates into geometries they would have forbidden: their energy
+      IS dU/dlambda_bonded, and it grows without bound. That is the endpoint catastrophe S4
+      measured (+611 / -238 kJ/mol, 16 of 18 windows unable to resolve the endpoints).
+    * `retain-all` -- every junction term keeps its physical parameters at both ends, so nothing
+      bonded is lambda-dependent and the catastrophe cannot occur. The residual coupling is then
+      REPORTED here rather than refused: it is the known limitation of the standard construction,
+      it is second-order in a cycle (the same function of the core's geometry in both legs), and
+      a number a reader can see beats a limitation a reader has to remember.
+    """
     from .topology import TopologyError
 
     record = plan.record
@@ -217,6 +233,9 @@ def factorization_check(plan, *, trials: int = 8, displacement_nm: float = 0.03,
         return {"groups": [], "note": "dual topology: a dummy ligand has no bonded contact with "
                                       "the physical one; the centroid restraint separates "
                                       "analytically (see record.restraint)"}
+    # absent only in a record predating plan schema /4, and every one of those was built
+    # under the single-anchor rule -- so that, not the current default, is what it meant
+    policy = record.get("junction_policy", "separable")
     rng = np.random.default_rng(seed)
     x0 = np.array(plan.positions_nm, dtype=float)
     ligand = sorted(set(record["particles"]["common"]) | set(record["particles"]["a_only"])
@@ -242,7 +261,7 @@ def factorization_check(plan, *, trials: int = 8, displacement_nm: float = 0.03,
                 record, endpoint, x, atoms=members).values()) - base_kept))
             worst_all = max(worst_all, abs(sum(dummy_energy(
                 record, endpoint, x, atoms=members, include_removed=True).values()) - base_all))
-        if worst_kept > FACTORIZATION_TOL_KJ:
+        if worst_kept > FACTORIZATION_TOL_KJ and policy == "separable":
             raise TopologyError(
                 f"dummy group {group['local_names']} (dummy at {endpoint}): its retained energy "
                 f"changes by {worst_kept:.3e} kJ/mol when only physical atoms move; its partition "
@@ -252,7 +271,12 @@ def factorization_check(plan, *, trials: int = 8, displacement_nm: float = 0.03,
                         "all_terms_max_variation_kj_mol": worst_all,
                         "terms_removed": group["terms_removed"]})
     return {"groups": results, "tolerance_kj_mol": FACTORIZATION_TOL_KJ, "trials": trials,
-            "displacement_nm": displacement_nm, "seed": seed}
+            "displacement_nm": displacement_nm, "seed": seed, "junction_policy": policy,
+            "meaning": ("refused above the tolerance: the terms that couple are removed at the "
+                        "dummy end" if policy == "separable" else
+                        "reported, not refused: every junction term is retained at both ends, so "
+                        "nothing bonded is lambda-dependent; this is the residual coupling of the "
+                        "standard construction")}
 
 
 # ------------------------------------------------------------------------------------------------
