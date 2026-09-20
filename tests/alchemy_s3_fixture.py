@@ -610,21 +610,29 @@ def decoupling_pair(system_a, ligand):
 BONDED_JUNCTION_WARNING_KJ = 1.0
 
 
-def bonded_derivative_split(system_a, system_b, unique, x, box=None):
-    """dU/dlambda_bonded at any coordinate, split by what the differing terms touch.
+def bonded_derivative_split(system_a, system_b, unique, x, box=None, policy=None):
+    """dU/dlambda_bonded at any coordinate, split by what the differing terms touch, judged against
+    the plan's junction policy.
 
     Computed here in numpy from the two Systems, independently of the Hamiltonian, so it can be
     compared with `derivative_components(...)["lambda_bonded"]` rather than derived from it. The
     derivative of a linearly mixed bonded term is E_B(x) - E_A(x), so a term identical at both ends
     contributes exactly zero.
 
-    Returns {"unique_touching", "core", "total", "warning"}: `warning` is a sentence naming what a
-    large `unique_touching` implies, or None. dU/dlambda_bonded SHOULD be the core part alone; a
-    junction term switched between zero and full strength puts stiff bonded energy on the lambda
-    path, where it swamps the alchemical signal and destroys window overlap (S4's M2, 2026-09-20).
+    `policy` is the plan's `junction_policy` and decides what the expectation IS:
+
+      "retain-all"  every junction term is at its physical value at both ends, so the junction part
+                    must be EXACTLY 0. Anything else is a defect.
+      "separable"   the single-anchor rule removes some junction terms at the dummy end, so the
+                    junction part is EXPECTED to be non-zero -- that is the known cost of the
+                    policy (S4's M2: 660.77 kJ/mol swamped the alchemical signal). A ZERO value
+                    then means the removal is not in effect, which is its own defect.
+      None          the policy is not stated; the warning says so and gives both readings.
+
+    Returns {"unique_touching", "core", "total", "policy", "warning"}.
     """
     unique = set(int(i) for i in unique)
-    split = {"unique_touching": 0.0, "core": 0.0}
+    split = {"unique_touching": 0.0, "core": 0.0, "policy": policy}
     for fa, fb in zip(system_a.getForces(), system_b.getForces()):
         kind = type(fa).__name__
         if kind not in ("HarmonicBondForce", "HarmonicAngleForce", "PeriodicTorsionForce"):
@@ -636,14 +644,35 @@ def bonded_derivative_split(system_a, system_b, unique, x, box=None):
                 - _bonded_term_energy(kind, atoms, pa, x, box)
             split["unique_touching" if set(atoms) & unique else "core"] += contribution
     split["total"] = split["unique_touching"] + split["core"]
-    split["warning"] = None
-    if abs(split["unique_touching"]) > BONDED_JUNCTION_WARNING_KJ:
-        split["warning"] = (
-            f"dU/dlambda_bonded carries {split['unique_touching']:.2f} kJ/mol from terms that touch "
-            f"a unique atom: junction bonded terms are on the lambda path (present at one end, "
-            f"absent at the other). Stiff bonded energy in the integrand swamps the alchemical "
-            f"signal and destroys window overlap. Expected for such terms: exactly 0.")
+    split["warning"] = _junction_warning(split["unique_touching"], policy)
     return split
+
+
+def _junction_warning(junction, policy):
+    """What a junction contribution of this size MEANS under this policy, or None if expected."""
+    large = abs(junction) > BONDED_JUNCTION_WARNING_KJ
+    carries = (f"dU/dlambda_bonded carries {junction:.2f} kJ/mol from terms that touch a unique "
+               f"atom: junction bonded terms are on the lambda path (present at one end, absent at "
+               f"the other). Stiff bonded energy in the integrand swamps the alchemical signal and "
+               f"destroys window overlap.")
+    if policy == "retain-all":
+        if not large:
+            return None
+        return carries + (" Under junction_policy = retain-all every junction term is at its "
+                          "physical value at both ends, so this must be exactly 0: it is a DEFECT.")
+    if policy == "separable":
+        if large:
+            return (carries + " This is EXPECTED under junction_policy = separable and is that "
+                    "policy's known cost; retain-all removes it (S0's ruling, 2026-09-20).")
+        return ("dU/dlambda_bonded carries nothing from terms touching a unique atom, but "
+                "junction_policy = separable should be switching some off at the dummy end: the "
+                "removal is NOT IN EFFECT, so the dummy's separability is not what the record "
+                "claims.")
+    if not large:
+        return None
+    return carries + (" The plan's junction_policy is not stated here: under retain-all this is a "
+                      "defect, under separable it is that policy's known cost. Expected under "
+                      "retain-all: exactly 0.")
 
 
 def _paired_terms(fa, fb):

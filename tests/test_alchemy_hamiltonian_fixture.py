@@ -649,7 +649,8 @@ def _junction_removed(system, atoms):
 
 
 def test_the_bonded_integrand_has_an_expectation_and_warns():
-    """dU/dlambda_bonded SHOULD carry nothing from terms touching a unique atom.
+    """What dU/dlambda_bonded SHOULD carry from terms touching a unique atom depends on the plan's
+    junction policy, and the check says which policy it is judging.
 
     This is the check that did not exist on 2026-09-19, when a probe printed 660.77 kJ/mol for S2's
     chloroethane plan and it was read as "large but plausible". It was the whole bonded integrand
@@ -661,10 +662,13 @@ def test_the_bonded_integrand_has_an_expectation_and_warns():
     c = _context(h.system, x)
     state = _state((0.0, 0.0, 0.0))
 
-    # this fixture's terms on a unique atom are identical at both ends, which is the expectation
-    split = fx.bonded_derivative_split(sa, sb, set(a) | set(b), x, box=BOX)
+    # this fixture's terms on a unique atom are identical at both ends: retain-all's expectation
+    split = fx.bonded_derivative_split(sa, sb, set(a) | set(b), x, box=BOX, policy="retain-all")
     assert split["unique_touching"] == 0.0, split
     assert split["warning"] is None
+    # ...and under `separable` the same zero means the removal is not in effect, its own defect
+    other = fx.bonded_derivative_split(sa, sb, set(a) | set(b), x, box=BOX, policy="separable")
+    assert "NOT IN EFFECT" in other["warning"]
     analytic = h.derivative_components(c, state)["lambda_bonded"]["bonded_mixed"]
     assert analytic == pytest.approx(split["total"], abs=1e-9)
     assert analytic == pytest.approx(split["core"], abs=1e-9)
@@ -672,9 +676,14 @@ def test_the_bonded_integrand_has_an_expectation_and_warns():
     # and a plan that removes a junction term at the dummy end puts that energy on the lambda path
     # FB (particle 8) appears, so its dummy end is System A: that is where the plan would zero it
     removed = _junction_removed(sa, (1, 0, 8))          # C1-C0-FB, the appearing atom's junction
-    split = fx.bonded_derivative_split(removed, sb, set(a) | set(b), x, box=BOX)
+    split = fx.bonded_derivative_split(removed, sb, set(a) | set(b), x, box=BOX, policy="retain-all")
     assert abs(split["unique_touching"]) > fx.BONDED_JUNCTION_WARNING_KJ
-    assert split["warning"] is not None and "on the lambda path" in split["warning"]
+    assert "DEFECT" in split["warning"]                      # retain-all: must be exactly 0
+    expected = fx.bonded_derivative_split(removed, sb, set(a) | set(b), x, box=BOX,
+                                          policy="separable")
+    assert "EXPECTED" in expected["warning"]                 # separable: its known cost
+    unstated = fx.bonded_derivative_split(removed, sb, set(a) | set(b), x, box=BOX)
+    assert "not stated" in unstated["warning"]
     h2 = build_hamiltonian(removed, sb, a, b)
     c2 = _context(h2.system, x)
     moved = h2.derivative_components(c2, state)["lambda_bonded"]["bonded_mixed"]
