@@ -22,7 +22,7 @@ in [`handoffs/`](handoffs/) and never edit it.
 | S1-D | ligand instances and exclusion files | IMPLEMENTED against a synthetic mapping record; the registered-package row is BLOCKED (sandbox) | rows 2, 19 |
 | S1-E | versioned CMAP rule | IMPLEMENTED | rows 2, 9 |
 | S1-F | identity, resume and refusal | IMPLEMENTED | rows 11–15: a ladder run by 0.6.0 code extends; selective states refused by name; exports verify; each integration patch reverted fails its tests |
-| S1-G | CUDA explicit-solvent ladders | RUNNING 2026-09-20 on card 5 (user-granted, in a window hpREST2 freed): `tests/test_selective_rest2_cuda.py`, 12 tests, one card, single process. 12 passed is the only pass; a skip voids the lane | row 18 |
+| S1-G | CUDA explicit-solvent ladders | **VALIDATED** 2026-09-20, card 5 (user-granted, in a window hpREST2 freed): `tests/test_selective_rest2_cuda.py` 12 passed, 0 skipped, `--error-on-skip`, 73 s. All four ladders (backbone, sidechain, ligand, combined) completed on CUDA/mixed, `selection_mode: explicit`, fingerprint `md-tools-hamiltonian-identity/v3`, read from `restart.json`. Exchange energies recomputed on CUDA at stored coordinates: worst |u| 0.00582 kT, worst cross 0.00901 kT, against a 0.05 kT tolerance calibrated beforehand — 3–5× the CPU figures, which is what mixed precision costs. Each test also re-checked that the whole-solute Hamiltonian at the same taus is REJECTED, so no pass is vacuous | [S1](handoffs/S1.md) row 18 |
 
 State values are NOT STARTED, IN PROGRESS, IMPLEMENTED (code and deterministic tests), VALIDATED
 (evidence on the required platform), or BLOCKED (with the blocker named). IMPLEMENTED is not
@@ -42,7 +42,7 @@ VALIDATED, and neither is released.
 - Open for S0: the compact `L01: <path>` form, which needs an instance name in `md-tools-ligand-mapping/1`. The `--extend-from` defect is fixed in released 0.6.0, merged here (`62adec3`), and S1's extension test now asserts the new behaviour.
 - Registration: BLOCKED (sandbox). The user has put `$MD_DATA` out of reach of every session
   (2026-09-19); the registration half of S1-G is reported BLOCKED, not passed.
-- S1-G: no card has been granted for the selective ladders. 0.6.0 is released, so its gate no longer holds cards; a grant is a request to the user, not a shortage. `tests/test_selective_rest2_cuda.py` (12 tests, one card, single process) is ready to run. Blocked is not passed.
+- S1-G: DONE, validated on CUDA (see the milestone row). What remains BLOCKED is the registered-package ligand row and dataset registration (the `$MD_DATA` sandbox rule), and the two TYK2 ladders, which need S2's prepared complex and 4 cards.
 - Integration: done. Resume and export of a selective ladder work on `0.6.1`.
 
 ## Notes
