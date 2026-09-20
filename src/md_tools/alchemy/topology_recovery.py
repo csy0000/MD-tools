@@ -353,6 +353,12 @@ def audit_plan(plan, package_a, package_b, env_system) -> dict[str, Any]:
     counts = {}
     for side, package, system in (("A", package_a, system_a), ("B", package_b, system_b)):
         to_hyb = record["endpoints"][side]["hybrid_index_of_local_atom"]
+        if record["endpoints"][side].get("absent"):
+            # Decoupling: endpoint B has no ligand at all, so there is no table to reproduce.
+            # What must hold there -- every ligand particle inert, its own terms untouched -- is
+            # checked as the dummy side of endpoint A below.
+            counts[side] = {"absent": True}
+            continue
         to_local = {h: i for i, h in enumerate(to_hyb)}
         bonds_local = _bonds(package.mol)
         got = _nonzero_terms(system, to_local, bonds_local)

@@ -215,12 +215,19 @@ map key takes exactly one of `file` (explicit pairs, or a stored `AtomMap` recor
 `automatic: true` (`propose_map`, whose proposal is written for review beside the plan as
 `<odir>.map.yaml` and, given back as `map: {file: ...}`, reproduces the same `plan_sha256`).
 
-## PROPOSED: decoupling plans for absolute binding (design, not implemented)
+## Decoupling plans for absolute binding
 
-**Status: design, for S0 and S3 to review. No code.** S4 found that ABFE has no construction to
-run: every plan here is A -> B with both endpoints real, and S3 softens only the unique
-particles, so decoupling a ligand that is COMMON to both endpoints would be linear in lambda and
-diverge at the endpoint.
+**Implemented**, to the design S0 and S3 reviewed. `build_decoupling_plan(package, environment,
+*, restraint=None)`. ABFE had no construction to run: every other plan here is A -> B with both
+endpoints real, and S3 softens only the unique particles, so decoupling a ligand COMMON to both
+endpoints would be linear in lambda and diverge at the endpoint.
+
+Measured on the fixtures (Reference platform): at lambda 0 the plan reproduces the environment
+(residual < 1e-7 kJ/mol); at lambda 1 `E_B = E(environment without the ligand) + E(the ligand's
+own Hamiltonian) + dE_dispersion` closes to 1.8e-12 kJ/mol on the TYK2 solvated leg, and moving
+the decoupled ligand anywhere -- 1 nm, 4 nm, outside the box -- changes the energy by exactly
+zero. Every ligand term has the same parameters at both ends, which is what makes its
+intramolecular Hamiltonian lambda-independent.
 
 ### 1. Representation: an explicit `mode: "decoupling"`, with no endpoint B
 

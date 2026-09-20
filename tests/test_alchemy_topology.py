@@ -1276,3 +1276,106 @@ def test_a_standard_state_restraint_may_differ_between_legs_and_is_reported(eta,
                               positions_nm=solvent_leg.positions_nm)
     with pytest.raises(TopologyError, match="both legs carry a standard-state restraint"):
         matched_legs(restrained, other)
+
+
+# ------------------------------------------------------------------------------------------------
+# decoupling: endpoint B is the ligand ABSENT (absolute binding)
+# ------------------------------------------------------------------------------------------------
+def _decoupling(package, env, **kwargs):
+    from md_tools.alchemy.topology import build_decoupling_plan
+
+    return build_decoupling_plan(package, env, **kwargs)
+
+
+def test_a_decoupling_plan_makes_the_whole_ligand_the_vanishing_region(eta, water):
+    plan = _decoupling(eta, water)
+    assert plan.record["mode"] == "decoupling"
+    assert plan.common == frozenset() and plan.b_only == frozenset()
+    assert plan.a_only == frozenset(range(len(eta.atom_names)))
+    assert plan.record["endpoints"]["B"]["absent"] is True
+    assert plan.record["endpoints"]["B"]["reference"] is None
+    # its own nonbonded terms are carried, as at any other dummy end. Ethane is small enough that
+    # every internal pair is already a 1-2/1-3/1-4 exception, so the carried terms are those; a
+    # bigger ligand also has non-excluded internal pairs.
+    internal = [s for s in plan.record["nonbonded"]["exceptions"] if s["unique_group_internal"]]
+    assert len(internal) == len(plan.record["nonbonded"]["exceptions"])
+    assert all(slot["a"] == slot["b"] for slot in internal)
+    from tests.alchemy_fixtures import PENTANE
+
+    pentane = _decoupling(package(PENTANE), vacuum_environment(package(PENTANE)))
+    assert pentane.record["nonbonded"]["unique_group_internal"]["pairs"]
+
+
+def test_lambda_zero_is_the_environment_and_lambda_one_is_the_ligand_absent(eta, water):
+    """Both endpoints measured, the second against an environment built without the ligand."""
+    from md_tools.alchemy.topology_recovery import (_dispersion, _energies_by_class, dummy_energy,
+                                                    endpoint_accounting)
+    from tests.alchemy_fixtures import ENERGY_TOL_KJ, environment_without_ligand
+
+    plan = _decoupling(eta, water)
+    x = plan.positions_nm
+
+    # lambda 0: the environment as built, with the ligand fully present
+    accounting = endpoint_accounting(plan, "A", water.system, list(range(water.system.getNumParticles())))
+    assert max(abs(v) for v in accounting["residual"].values()) < ENERGY_TOL_KJ, accounting
+
+    # lambda 1: environment-without-ligand + the ligand's own Hamiltonian + the dispersion shift
+    reference, kept = environment_without_ligand(water)
+    total = sum(_energies_by_class(plan.system_b, x).values())
+    without = sum(_energies_by_class(reference, x[kept]).values())
+    ligand = sum(dummy_energy(plan.record, "B", x).values())
+    shift = _dispersion(plan.system_b, x) - _dispersion(reference, x[kept])
+    assert abs(total - (without + ligand + shift)) < ENERGY_TOL_KJ
+    assert abs(ligand) > 1.0                      # not a vacuous decomposition
+
+
+def test_the_decoupled_ligand_interacts_with_nothing(eta, water):
+    """Put it anywhere -- inside the solvent, outside the box -- and the energy does not move."""
+    from md_tools.alchemy.topology_recovery import _energies_by_class
+
+    plan = _decoupling(eta, water)
+    x = plan.positions_nm
+    base = sum(_energies_by_class(plan.system_b, x).values())
+    ligand = sorted(plan.a_only)
+    for shift in ([1.0, 0.0, 0.0], [0.0, 2.5, -3.0], [7.0, 7.0, 7.0]):
+        moved = x.copy()
+        moved[ligand] += np.array(shift)
+        assert abs(sum(_energies_by_class(plan.system_b, moved).values()) - base) < 1e-9
+
+
+def test_the_ligands_own_hamiltonian_is_the_same_at_both_ends(eta, water):
+    """Nothing of the ligand's own terms changes: that is what "decoupled" means here."""
+    from md_tools.alchemy.topology_recovery import dummy_energy
+
+    plan = _decoupling(eta, water)
+    for family, slots in plan.record["terms"].items():
+        for slot in slots:
+            assert slot["a"] == slot["b"], (family, slot)
+            assert slot["at_dummy_end"] == "dummy-retained"
+    at_b = dummy_energy(plan.record, "B", plan.positions_nm)
+    assert at_b["internal_exceptions"] or at_b["internal_pairs"]
+
+
+def test_a_charged_ligand_is_refused_with_the_correction_named():
+    from md_tools.alchemy.topology import TopologyError
+    from tests.alchemy_fixtures import ACETATE, acetate_environment
+
+    with pytest.raises(TopologyError, match="finite-size correction .*not implement"):
+        _decoupling(package(ACETATE), acetate_environment())
+
+
+def test_a_standard_state_restraint_is_refused_outside_decoupling(eta, cle, water):
+    from md_tools.alchemy.topology import TopologyError, build_topology_plan
+
+    with pytest.raises(TopologyError, match="belongs to a decoupling plan"):
+        build_topology_plan(eta, cle, core_map(eta, cle), water, mode="hybrid",
+                            restraint={"kind": "boresch", "ligand_atoms": [0],
+                                       "environment_atoms": [10]})
+
+
+def test_a_ligand_only_environment_needs_no_restraint_and_says_so(eta, water):
+    plan = _decoupling(eta, water)
+    detail = next(c["detail"] for c in plan.record["checks"]
+                  if c["check"] == "standard-state-restraint")
+    assert detail["required"] is False and "no binding site to leave" in detail["why"]
+    assert plan.record["restraints"] == []

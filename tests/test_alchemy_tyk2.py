@@ -203,3 +203,39 @@ def test_the_complex_builds_and_its_plan_recovers_both_endpoints(tmp_path):
         accounting = endpoint_accounting(plan, side, reference, index)
         assert abs(accounting["raw_total_difference"]) > 1e-2
         assert max(abs(v) for v in accounting["residual"].values()) < ENERGY_TOL_KJ, accounting
+
+
+@pytest.mark.slow
+def test_an_abfe_decoupling_leg_in_the_complex_needs_a_restraint_and_records_it(tmp_path):
+    """The ABFE construction on the real system: refused without a restraint, recorded with one."""
+    from md_tools.alchemy.topology import TopologyError, build_decoupling_plan, matched_legs
+
+    _script(tmp_path, "--ligand", "ejm_31", "--kind", "complex", "--kind", "solvated")
+    complex_env = _environment(tmp_path / "ejm_31" / "complex" / "build", "ejm_31", "complex")
+    solvent_env = _environment(tmp_path / "ejm_31" / "solvated" / "build", "ejm_31", "solvated")
+    package = _package("ejm_31")
+
+    with pytest.raises(TopologyError, match="needs a standard-state restraint"):
+        build_decoupling_plan(package, complex_env)
+
+    ligand_atoms = sorted(a.index for a in complex_env.topology.atoms()
+                          if a.residue.name == "L31")[:3]
+    protein_atoms = sorted(a.index for a in complex_env.topology.atoms()
+                           if a.residue.name not in ("HOH", "NA", "CL", "L31")
+                           and a.name in ("CA", "C", "N"))[:3]
+    complex_leg = build_decoupling_plan(
+        package, complex_env,
+        restraint={"kind": "boresch", "ligand_atoms": ligand_atoms,
+                   "environment_atoms": protein_atoms})
+    [recorded] = complex_leg.record["restraints"]
+    assert recorded["role"] == "standard-state" and recorded["kind"] == "boresch"
+    assert recorded["ligand_atoms"] == ligand_atoms
+    assert len(recorded["environment_atom_labels"]) == 3 and ":" in recorded["environment_atom_labels"][0]
+    assert "the plan records it, and does not build it" in recorded["built_by"]
+
+    # the two legs of the ABFE cycle: the same ligand Hamiltonian, one restraint between them
+    solvent_leg = build_decoupling_plan(package, solvent_env)
+    report = matched_legs(complex_leg, solvent_leg)
+    assert report["ligand_hamiltonian_sha256"] == complex_leg.record["ligand_hamiltonian_sha256"]
+    assert report["restraints"]["standard_state"][0][0]["kind"] == "boresch"
+    assert report["restraints"]["standard_state"][1] == []
