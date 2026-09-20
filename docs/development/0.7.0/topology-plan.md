@@ -215,6 +215,121 @@ map key takes exactly one of `file` (explicit pairs, or a stored `AtomMap` recor
 `automatic: true` (`propose_map`, whose proposal is written for review beside the plan as
 `<odir>.map.yaml` and, given back as `map: {file: ...}`, reproduces the same `plan_sha256`).
 
+## PROPOSED: decoupling plans for absolute binding (design, not implemented)
+
+**Status: design, for S0 and S3 to review. No code.** S4 found that ABFE has no construction to
+run: every plan here is A -> B with both endpoints real, and S3 softens only the unique
+particles, so decoupling a ligand that is COMMON to both endpoints would be linear in lambda and
+diverge at the endpoint.
+
+### 1. Representation: an explicit `mode: "decoupling"`, with no endpoint B
+
+The alternative -- the whole ligand as an A-only unique group of an otherwise empty map -- does
+not work and should not be made to. An atom map with no pairs is refused (`AtomMap.from_pairs`:
+"the map is empty"), a unique group must hang from exactly ONE bond to the core, and here there
+is no core to hang from. Forcing it would mean special cases in the map validator, the junction
+rule and the term layout, each of which exists to describe a transformation between two real
+molecules.
+
+So: `mode: "decoupling"`, and the record says what it is rather than encoding it as a degenerate
+map. One package, not two. Proposed callable:
+
+```python
+plan = build_decoupling_plan(package, environment, *, restraint=None)
+```
+
+The particle sets stay exactly what S3 already consumes: `common` empty, `a_only` the ligand's
+particles, `b_only` empty. System A is the environment System unchanged. In System B every ligand
+particle carries charge 0 and epsilon 0 and every exception to the environment is zero, which is
+the same "dummy" treatment as everywhere else -- so S3 softens `a_only` over the whole path with
+no new rule, and `U(0)`/`U(1)` must equal System A / System B as for every other mode.
+
+`endpoints.B` in the record becomes `{"absent": true, "reference": null}`; `mode` and the schema
+version say why, and nothing else in the record changes shape.
+
+### 2. "Decoupled" means the ligand keeps its own Hamiltonian
+
+Its intramolecular terms stay PHYSICAL at both endpoints: every bonded term, and its own internal
+nonbonded pairs and exceptions, exactly as S0 ruled for a unique group's internal terms. Only the
+ligand-environment interactions vanish. That is the standard choice, and the standard-state
+correction assumes it: at lambda 1 the ligand is the same molecule it is in the gas phase, so the
+cycle's other leg cancels it. Annihilation (removing the intramolecular nonbonded too) is
+REFUSED by name in v1, because it changes what the solvent leg must cancel and needs its own
+derivation; it goes to the backlog.
+
+The junction rule does not apply: there is no anchor and no physical neighbour, so no bonded term
+couples the ligand to the environment at all. Nothing is dropped, and the whole ligand's
+configurational integral separates -- as the dual-topology dummy ligand's already does.
+
+### 3. Endpoint checks, both measurable
+
+- **lambda 0 is the complex, exactly.** System A restricted to the environment's particles is
+  the environment System, term for term, and the ligand carries its package's parameters -- the
+  existing audit, unchanged.
+- **lambda 1 is the ligand absent, and that is a measurement, not a claim.** Two independent
+  checks, both against Systems built by OpenMM's force field rather than from the plan:
+
+  ```text
+  E_B(x) = E_environment_without_ligand(x_env) + E_ligand_in_vacuum(x_ligand) + dE_dispersion
+  ```
+
+  where the first is the environment built with the ligand residue deleted and the second is the
+  ligand alone from its package; and, separately, **E_B is invariant under any rigid displacement
+  of the ligand** -- translate it into the protein, into the solvent, out of the box, and the
+  energy does not move. The second is what "non-interacting with the environment" means, stated
+  so it can fail.
+- **Net charge.** A charged ligand changes the box's net charge between the endpoints, which PME
+  handles with a neutralising background whose free-energy contribution needs a finite-size
+  correction this release does not implement. A decoupling plan for a ligand with non-zero net
+  formal charge is REFUSED by name (the campaign's three TYK2 ligands are neutral).
+
+### 4. Pairing the legs of the cycle
+
+`matched_legs` pairs a complex decoupling leg with a solvent decoupling leg, and must require:
+the same package (reference, package sha256, parameter digest), the same mode, the same applied
+1-4 scales, the same constraint policy, and the same ligand-side terms -- every bonded term, the
+internal pairs and exceptions -- in package-local identities. That is `ligand_hamiltonian_sha256`
+as it already is, with one change I want reviewed:
+
+**The restraint must be excluded from that digest for decoupling legs.** In dual topology the
+centroid restraint is part of the digest because it MUST be identical in both legs to cancel. In
+ABFE it is the opposite: the complex leg carries a Boresch restraint to the protein and the
+solvent leg carries none (or a different one), and the restraint's free energy is computed and
+subtracted separately. Keeping it in the digest would make the two legs of a correct cycle refuse
+each other. Proposal: the digest covers the restraint for `dual`, not for `decoupling`;
+`matched_legs` reports both legs' restraint records side by side so S4 checks them against its own
+convention rather than against a digest that cannot know it. **S0/S3: this is the one design
+decision here I am least sure of.**
+
+### 5. Restraints are S4's, and the plan records that they exist
+
+The plan does not build a Boresch force -- that, its free energy and the standard-state
+correction are S4's. What the plan records, because a decoupled ligand with no restraint wanders
+off and the free energy diverges:
+
+```yaml
+decoupling:
+  intramolecular: retained          # annihilation refused in v1
+  restraint:
+    required: true                  # an environment holding a protein requires one
+    kind: boresch
+    ligand_atoms: [...]             # plan indices, and their package-local identities
+    environment_atoms: [...]        # plan indices, with chain/resid/name for review
+    built_by: md_tools.alchemy.restraints
+```
+
+A decoupling plan in an environment that holds a protein and names no restraint atoms is
+REFUSED: the construction cannot supply the restraint, but it can refuse to pretend the leg is
+complete without one. In a ligand-only solvated or vacuum environment `required` is false, with
+the reason recorded ("no binding site to leave").
+
+### 6. What this does not change
+
+Single, dual and hybrid are untouched. The refusals, the junction rule, the internal-nonbonded
+convention, the applied 1-4 scales, `plan_sha256` and `ligand_hamiltonian_sha256` all keep their
+current meaning; `mode: "decoupling"` adds a fourth value and the schema version moves with the
+`decoupling` block, batched before a campaign as the contract requires.
+
 ## Fixtures
 
 `tests/data/alchemy/v1/` (see its README): ethane, chloroethane and ethanol packages (AM1-BCC,
