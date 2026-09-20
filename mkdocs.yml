@@ -116,6 +116,8 @@ nav:
       - AIS:
           - Alanine dipeptide: tutorial/AIS/alanine.md
           - Paracetamol: tutorial/AIS/paracetamol.md
+      - Protein-ligand complex:
+          - REST2 (ligand + pocket): tutorial/protein-ligand-complex/REST2/README.md
       - Archived:
           - tutorial/archived/README.md
           - 0.5.3 cMD paracetamol: tutorial/archived/0.5.3/cMD/paracetamol.md

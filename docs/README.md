@@ -63,7 +63,8 @@ Each method page carries a minimal, runnable `example.config` beside it.
 
 | page | |
 |---|---|
-| [v0.6.0](release-notes/v0.6.0.md) | the current cycle, **under the user's testing and not released**: reusable ligand parameter packages, protonation as a stated choice, assemblies and missing atoms, placement measured on real cards |
+| [v0.6.1](release-notes/v0.6.1.md) | **unreleased, and not validated on CUDA**: selective explicit-solvent REST2 — residue masks for backbone and sidechains, individually chosen ligand instances, and the two helpers that make a pocket selectable |
+| [v0.6.0](release-notes/v0.6.0.md) | released 2026-09-19: reusable ligand parameter packages, protonation as a stated choice, assemblies and missing atoms, placement measured on real cards |
 | [v0.5.4](release-notes/v0.5.4.md) | one shape of generated run, the whole chain checked before it is written, and AIS as a transformation between two topologies |
 | [v0.5.3](release-notes/v0.5.3.md) | the run directory layout, an extension that can run its own group file, and the output work |
 | [v0.5.2](release-notes/v0.5.2.md) | a finished run can leave this package behind: `export-reference` for cMD and REST2, and the correction that is the reason to trust it |
