@@ -550,3 +550,55 @@ def defective_system(h, group_name, r0, kind, size):
                 raise ValueError(kind)
             f.setEnergyFunction(f"{head};{tail}")
     return s
+
+
+def decoupling_pair(system_a, ligand):
+    """(System A, System B) in the shape an ABFE decoupling plan has: `ligand` is the whole unique
+    region, there is no mapped core and nothing appears.
+
+    System A is the solvated System untouched. In System B every ligand particle has charge 0 and
+    epsilon 0 and every ligand-environment exception is zero, while the ligand's OWN exceptions keep
+    their physical values and its non-excluded internal pairs move into the
+    `UniqueGroupInternalNonbonded` force (contract section 4). The ligand's bonded terms are
+    identical in both. So at the decoupled end the ligand is a physical molecule in vacuum inside
+    the box, and only its interactions with the environment have been switched off.
+    """
+    import openmm
+    from md_tools.alchemy.topology import COULOMB_CONSTANT, INTERNAL_FORCE_NAME
+    ligand = set(int(i) for i in ligand)
+    pair = []
+    for decoupled in (False, True):
+        s = openmm.XmlSerializer.deserialize(openmm.XmlSerializer.serialize(system_a))
+        for k in reversed(range(s.getNumForces())):       # the pair's own internal force replaces
+            if s.getForce(k).getName() == INTERNAL_FORCE_NAME:   # any the fixture already wrote
+                s.removeForce(k)
+        nb = next(f for f in s.getForces() if isinstance(f, openmm.NonbondedForce))
+        physical = [nb.getParticleParameters(i) for i in range(nb.getNumParticles())]
+        excepted = set()
+        for k in range(nb.getNumExceptions()):
+            i, j, qq, sg, ep = nb.getExceptionParameters(k)
+            excepted.add((min(i, j), max(i, j)))
+            if decoupled and ((i in ligand) != (j in ligand)):
+                nb.setExceptionParameters(k, i, j, 0.0, sg, 0.0)     # ligand-environment: off
+        if decoupled:
+            for i in sorted(ligand):
+                nb.setParticleParameters(i, 0.0, physical[i][1], 0.0)
+        f = openmm.CustomBondForce(
+            f"{COULOMB_CONSTANT!r}*chargeprod/r + 4*epsilon*((sigma/r)^12 - (sigma/r)^6)")
+        for name in ("chargeprod", "sigma", "epsilon"):
+            f.addPerBondParameter(name)
+        f.setName(INTERNAL_FORCE_NAME)
+        f.setUsesPeriodicBoundaryConditions(True)
+        members = sorted(ligand)
+        for x, i in enumerate(members):
+            for j in members[x + 1:]:
+                if (i, j) in excepted:
+                    continue
+                qi, si, ei = (v._value for v in physical[i])
+                qj, sj, ej = (v._value for v in physical[j])
+                params = [qi * qj, 0.5 * (si + sj), math.sqrt(ei * ej)] if decoupled else \
+                    [0.0, 0.5 * (si + sj), 0.0]
+                f.addBond(i, j, params)
+        s.addForce(f)
+        pair.append(s)
+    return pair[0], pair[1]
