@@ -224,6 +224,13 @@ CUDA_SITES = {
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
 #: named exemption rather than an omission -- and the reason is checkable by reading the callsite.
 NON_CUDA_CONTEXT_SITES = {
+    "rest2/pocket.py::pocket_residues":
+        "matched as `derive` by `topology.getPeriodicBoxVectors()`, which is the Topology's own "
+        "box, not `State.getPeriodicBoxVectors()`. It measures heavy-atom distances between a "
+        "ligand residue and the rest of a structure, on the host, from coordinates a PDB reader "
+        "handed it, so that `python -m md_tools.rest2.pocket` can PRINT the residues lining a "
+        "site. It creates no Context, runs before any simulation exists, and resolves nothing at "
+        "run time.",
     "rest2/regions.py::explicit_selection":
         "matched as `derive` by `system.getForces()`, which is the System's own list of Force "
         "objects, not `State.getForces()`. It reads PeriodicTorsionForce and CMAPTorsionForce "
