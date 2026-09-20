@@ -603,6 +603,7 @@ def explicit_selection(topology, system, region: Mapping[str, Any],
             labels.append({"bond": list(pair), "residues": None,
                            "reason": "proline-like: SCALED, no amide hydrogen to protect"})
 
+    check_sidechain_table(topology, region, selected=selected, excluded=excluded)
     decisions = cmap_decisions(system, selected)
     details = (
         ("policy", SELECTION_POLICY),
@@ -623,6 +624,65 @@ def explicit_selection(topology, system, region: Mapping[str, Any],
         cmap_terms=tuple(d["term"] for d in decisions if d["scaled"]),
         unscaled_impropers=True, detector_version=classified.get("detector_version"),
         details=details)
+
+
+def check_sidechain_table(topology, region: Mapping[str, Any], *, selected, excluded) -> None:
+    """THE SIDECHAIN TABLE IS THE AUTHORITY, and this is where it binds.
+
+    `md_tools.rest2.sidechains` says, per amino acid, which sidechain central bonds turn a chi (or
+    a terminal group) and which never scale. The torsion classifier decides the same thing from
+    residue names and bond graphs. They must agree: a disagreement means one of them is wrong about
+    this residue, and a Hamiltonian nobody predicted is worse than a refusal. Only the sidechains
+    this region actually selected are checked, because only those are what the table governs here.
+    """
+    from .sidechains import SIDECHAIN_TABLE_VERSION, SidechainTableError, sidechain_entry
+
+    selected = {frozenset(bond) for bond in selected}
+    excluded = {frozenset(bond) for bond in excluded}
+    atoms = list(topology.atoms())
+    residues = list(topology.residues())
+    wanted = {int(number) for number, entry in (region["residue_map"] or {}).items()
+              if "sidechain" in (entry.get("categories") or ())}
+    for number in sorted(wanted):
+        residue = residues[number - 1]
+        try:
+            table = sidechain_entry(residue.name)
+        except SidechainTableError as refusal:
+            raise SelectionError(str(refusal)) from None
+        expected = {tuple(sorted(entry["bond"])): entry for entry in table["bonds"]}
+        members = {a.index: a.name.strip().upper() for a in residue.atoms()}
+        problems = []
+        seen = set()
+        for bond in selected | excluded:
+            first, second = sorted(bond)
+            if first not in members or second not in members:
+                continue          # inter-residue (a disulfide, a peptide bond): owned jointly
+            if central_bond_owner(atoms[first], atoms[second]) != ((residue.index, "sidechain"),):
+                continue
+            pair = tuple(sorted((members[first], members[second])))
+            seen.add(pair)
+            entry = expected.get(pair)
+            if entry is None:
+                problems.append(f"{pair[0]}-{pair[1]} is a scaled/protected sidechain central bond "
+                                f"the table does not list")
+            elif (entry["kind"] == "fixed") != (bond in excluded):
+                was = "unscaled" if bond in excluded else "scaled"
+                problems.append(f"{pair[0]}-{pair[1]} ({entry['label']}) is {was} here, and the "
+                                f"table says it is "
+                                f"{'never scaled' if entry['kind'] == 'fixed' else 'scalable'}")
+        missing = [pair for pair, entry in expected.items()
+                   if pair not in seen and not entry.get("needs_partner")
+                   and all(name in members.values() for name in pair)]
+        if missing:
+            problems.append("the table lists " + ", ".join(f"{a}-{b}" for a, b in sorted(missing))
+                            + ", which this residue's atoms have but no torsion crosses here")
+        if problems:
+            raise SelectionError(
+                f"residue {number} {residue.name}: the torsion classifier and the sidechain "
+                f"rotatability table ({SIDECHAIN_TABLE_VERSION}) disagree:\n  - "
+                + "\n  - ".join(problems)
+                + "\n  One of them is wrong about this residue; refusing rather than scaling a "
+                  "region nobody predicted.")
 
 
 def print_residue_map(selection, echo=print) -> None:
