@@ -566,16 +566,25 @@ def test_a_barostat_moving_the_box_leaves_nothing_stale():
     live.setPositions(x)
     h.set_state(live, _state((0.5, 0.5, 0.5)))
     openmm.LocalEnergyMinimizer.minimize(live, 10.0, 100)
+    start = live.getState(getEnergy=True).getPotentialEnergy()._value
     v0 = live.getState().getPeriodicBoxVolume()._value
     live.getIntegrator().step(40)
-    st = live.getState(getPositions=True)
+    st = live.getState(getPositions=True, getEnergy=True)
+    energy = st.getPotentialEnergy()._value
+    assert np.isfinite(energy) and abs(energy) < abs(start) + 5000.0, (start, energy)
     assert st.getPeriodicBoxVolume()._value != v0, "the barostat never moved the box"
     box = st.getPeriodicBoxVectors()
     pos = st.getPositions(asNumpy=True)._value
-    fresh = _context(h.system, pos)
-    fresh.setPeriodicBoxVectors(*box)
+
+    def fresh_energy(t, vectors):
+        fresh = _context(h.system, pos)
+        fresh.setPeriodicBoxVectors(*vectors)
+        return h.energy(fresh, _state(t))
+    stale = [v._value for v in sa.getDefaultPeriodicBoxVectors()]
     for t in DIAGONAL + OFF_DIAGONAL:
-        assert h.energy(live, _state(t)) == pytest.approx(h.energy(fresh, _state(t)), abs=1e-8), t
+        assert h.energy(live, _state(t)) == pytest.approx(fresh_energy(t, box), abs=1e-8), t
+        # the check can fail: the same comparison against a Context left at the ORIGINAL box
+        assert abs(h.energy(live, _state(t)) - fresh_energy(t, stale)) > 1e-4, t
 
 
 @pytest.mark.parametrize("dispersion", [False, True], ids=["no-lrc", "lrc"])

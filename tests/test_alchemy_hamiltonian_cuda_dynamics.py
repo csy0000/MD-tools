@@ -106,23 +106,42 @@ def test_npt_on_cuda_leaves_nothing_stale(precision):
     CUDA evidence, and NPT on CUDA was an uncovered row until this test. What only the device can
     show: the PME grid, the dispersion coefficients and the softcore delta's kappa are fixed at
     build, and CUDA rebuilds none of them when the barostat rescales the box.
+
+    THE FIXTURE IS THE ONE WITHOUT THE CLASH, and the first run of this test is why. With the tail
+    fixture -- an appearing atom 0.22 nm from the Cl- -- 500 steps at 0.5 fs under a barostat blew
+    up to 1e15 kJ/mol, and the comparison then "passed" in mixed precision only because an absolute
+    tolerance is meaningless at that magnitude. The subject here is whether anything box-dependent
+    goes stale, not whether an overlapped start survives; the clash geometry is covered by the
+    energy, force and derivative rows, which evaluate it rather than integrate it. So: no clash, a
+    sanity gate on the energy before any comparison, and a relative tolerance.
     """
-    sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
+    sa, sb, a, b, x = fx.build(True, dispersion=True)
     for s in (sa, sb):
         s.addForce(openmm.MonteCarloBarostat(1.0, 300.0, 5))
     h = build_hamiltonian(sa, sb, a, b)
     live = _cuda_context(h.system, x, openmm.LangevinMiddleIntegrator(300.0, 1.0, 0.0005), precision)
     state = dict(zip(NAMES, (0.5, 0.5, 0.5)))
     h.set_state(live, state)
-    openmm.LocalEnergyMinimizer.minimize(live, 10.0, 200)
+    openmm.LocalEnergyMinimizer.minimize(live, 1.0, 2000)
+    start = live.getState(getEnergy=True).getPotentialEnergy()._value
     v0 = live.getState().getPeriodicBoxVolume()._value
     live.getIntegrator().step(500)
-    st = live.getState(getPositions=True)
+    st = live.getState(getPositions=True, getEnergy=True)
+    energy = st.getPotentialEnergy()._value
+    assert np.isfinite(energy) and abs(energy) < abs(start) + 5000.0, (precision, start, energy)
     assert st.getPeriodicBoxVolume()._value != v0, "the barostat never moved the box"
     box, pos = st.getPeriodicBoxVectors(), st.getPositions(asNumpy=True)._value
-    tol = {"mixed": 5e-3, "double": 1e-6}[precision]
-    for t in ((0.0, 0.0, 0.0), (0.25, 0.5, 0.75), (1.0, 1.0, 1.0)):
+    rel = {"mixed": 1e-6, "double": 1e-10}[precision]
+
+    def fresh_energy(t, vectors):
         fresh = _cuda_context(h.system, pos, openmm.VerletIntegrator(0.001), precision)
-        fresh.setPeriodicBoxVectors(*box)
-        moved, again = h.energy(live, dict(zip(NAMES, t))), h.energy(fresh, dict(zip(NAMES, t)))
-        assert moved == pytest.approx(again, abs=tol), (precision, t, moved, again)
+        fresh.setPeriodicBoxVectors(*vectors)
+        return h.energy(fresh, dict(zip(NAMES, t)))
+    stale = [v._value for v in sa.getDefaultPeriodicBoxVectors()]
+    for t in ((0.0, 0.0, 0.0), (0.25, 0.5, 0.75), (1.0, 1.0, 1.0)):
+        moved = h.energy(live, dict(zip(NAMES, t)))
+        again = fresh_energy(t, box)
+        tol = rel * max(1.0, abs(again)) + 1e-6
+        assert moved == pytest.approx(again, abs=tol), (precision, t, moved, again, tol)
+        # the check can fail: the same comparison against a Context left at the ORIGINAL box
+        assert abs(moved - fresh_energy(t, stale)) > 100 * tol, (precision, t)
