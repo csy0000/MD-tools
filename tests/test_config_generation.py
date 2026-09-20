@@ -771,3 +771,29 @@ def test_the_implicit_stages_are_renamed_not_silently_run_as_nvt(tmp_path):
     from md_tools.build.md import resolve_md_config, stage_plan
     plan = stage_plan(resolve_md_config(None) | {"solvent": "implicit"})
     assert {s["ensemble"] for s in plan} == {"NVT"}, "an implicit stage claims NPT"
+
+
+def test_the_examples_come_from_the_tree_the_package_came_from():
+    """Examples document the CODE THAT IS RUNNING, so they must be the running tree's.
+
+    The failure this prevents: a checkout imported into an environment holding a DIFFERENT
+    md-tools once read that other version's examples through the distribution metadata, so the
+    example test compared 0.5.4's shipped file against this branch's model and failed on every
+    branch for weeks. It was recorded as "environmental" because the alternative -- reinstalling a
+    shared environment used by every session -- is worse than the failure.
+    """
+    from pathlib import Path
+
+    import md_tools
+    from md_tools.configs import example_root
+
+    package = Path(md_tools.__file__).resolve()
+    checkout = package.parents[2]          # <repo>/src/md_tools/__init__.py
+    if not (checkout / "configs").is_dir():
+        import pytest
+
+        pytest.skip("not running from a source checkout; the distribution's data files are right")
+    assert example_root() == (checkout / "configs").resolve(), (
+        f"md_tools was imported from {package}, but its examples resolved to {example_root()}. "
+        f"Examples document the code that is running; reading another installation's is how two "
+        f"versions end up in one process.")
