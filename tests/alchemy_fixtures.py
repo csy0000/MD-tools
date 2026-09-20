@@ -110,6 +110,31 @@ def vacuum_environment(pkg, *, constraints=None):
                        solvation="vacuum")
 
 
+def environment_without_ligand(environment, forcefield_files=("amber14/tip3p.xml",)):
+    """The environment with its ligand residue deleted, built independently by the force field.
+
+    The reference a decoupled endpoint is measured against: at lambda 1 the plan's System must be
+    this, plus the ligand's own Hamiltonian, plus the dispersion shift.
+    """
+    from openmm import NonbondedForce, app, unit
+
+    ligand = environment.ligand.residues(environment.topology)[0].name
+    modeller = app.Modeller(environment.topology, environment.positions_nm * unit.nanometer)
+    modeller.delete([r for r in environment.topology.residues() if r.name == ligand])
+    kept = [a.index for a in environment.topology.atoms() if a.residue.name != ligand]
+    forcefield = app.ForceField(*forcefield_files)
+    source = next(f for f in environment.system.getForces() if isinstance(f, NonbondedForce))
+    constrained = environment.system.getNumConstraints() > 0
+    system = forcefield.createSystem(
+        modeller.topology, nonbondedMethod=app.PME,
+        nonbondedCutoff=source.getCutoffDistance(),
+        ewaldErrorTolerance=source.getEwaldErrorTolerance(),
+        constraints=app.HBonds if constrained else None, rigidWater=True, removeCMMotion=False)
+    next(f for f in system.getForces() if isinstance(f, NonbondedForce)).setUseDispersionCorrection(
+        source.getUseDispersionCorrection())
+    return system, kept
+
+
 def core_map(a, b, extra=None):
     from md_tools.alchemy.topology_mapping import AtomMap
 
@@ -164,7 +189,8 @@ def independent_reference(plan, environment, pkg, side: str,
 
     The environment minus its ligand, plus *pkg* as a fresh residue at the plan's coordinates,
     parameterised by `ForceField(*forcefield_files)` -- the files the environment's build record
-    names -- with the package's ffxml loaded through the ligand module's own loader, under the environment's recorded nonbonded settings. Returns the
+    names -- with the package's ffxml loaded through the ligand module's own loader, under the
+    environment's recorded nonbonded settings. Returns the
     System and, for each of its particles, the plan particle it is.
     """
     from openmm import NonbondedForce, app, unit

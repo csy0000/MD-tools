@@ -4,8 +4,10 @@ Real AM1-BCC packages -- ethane, chloroethane, ethanol -- in TIP3P under PME wit
 correction on, combined by `md_tools.alchemy.topology.build_topology_plan` (hybrid). What only a
 real plan can show:
 
-* the plan's dummy-removed junction terms are accepted, and nothing else about a unique atom's
-  bonded terms differs;
+* the plan's dummy-removed junction terms are accepted (these fixtures are built with
+  `junction_policy="separable"` on purpose; the default retain-all leaves nothing differing, which
+  `test_retain_all_leaves_no_bonded_term_on_the_lambda_path` covers), and nothing else about a
+  unique atom's bonded terms differs;
 * under the default boundary rule the Hamiltonian's end states ARE the plan's end-state Systems,
   energy for energy, dispersion correction included -- for pentane too, whose appearing propyl
   group has internal 1-4s and 1-5 pairs that the plan keeps physical at its dummy end;
@@ -22,6 +24,7 @@ import pytest
 openmm = pytest.importorskip("openmm")
 
 from tests import alchemy_fixtures as af  # noqa: E402
+from tests import alchemy_s3_fixture as fx3  # noqa: E402
 from md_tools.alchemy.hamiltonian import build_hamiltonian, from_plan  # noqa: E402
 from md_tools.alchemy.softcore import SoftcoreSettings  # noqa: E402
 
@@ -60,7 +63,12 @@ def plan(request):
     b = af.package({"chloroethane": af.CHLOROETHANE, "ethanol": af.ETHANOL,
                     "pentane": af.PENTANE, "complex-cmap": af.CHLOROETHANE}[name])
     env = af.complex_environment(af.CMAP_ROOT) if name == "complex-cmap" else af.water_environment()
-    return build_topology_plan(a, b, af.core_map(a, b), env, mode="hybrid")
+    # `separable` DELIBERATELY: under the default retain-all no bonded term differs between the end
+    # states, which is the point of that policy, and these tests are what covers the mixed-force
+    # machinery on terms that DO differ. The mirror case is
+    # `test_retain_all_leaves_no_bonded_term_on_the_lambda_path`.
+    return build_topology_plan(a, b, af.core_map(a, b), env, mode="hybrid",
+                               junction_policy="separable")
 
 
 def test_the_end_states_are_the_plans_systems(plan):
@@ -71,6 +79,30 @@ def test_the_end_states_are_the_plans_systems(plan):
     c = _context(h.system, x)
     assert any(f["differing_terms"] for f in h.record["bonded_mixed_forces"])   # dummy-removed
     assert h.record["nonbonded"]["use_dispersion_correction"] is True
+    assert h.energy(c, _state((0, 0, 0))) == pytest.approx(_energy(plan.system_a, x), abs=ENDPOINT_TOL)
+    assert h.energy(c, _state((1, 1, 1))) == pytest.approx(_energy(plan.system_b, x), abs=ENDPOINT_TOL)
+
+
+def test_retain_all_leaves_no_bonded_term_on_the_lambda_path():
+    """The default policy's mirror of the fixture above: with every junction term retained at both
+    ends, NO bonded term differs, so the mixed bonded force carries nothing that moves with lambda
+    and dU/dlambda_bonded is exactly zero. Together the two cover both policies, and neither can
+    silently stop testing its own."""
+    from md_tools.alchemy.topology import build_topology_plan
+    a, b = af.package(af.ETHANE), af.package(af.CHLOROETHANE)
+    plan = build_topology_plan(a, b, af.core_map(a, b), af.water_environment(), mode="hybrid",
+                               junction_policy="retain-all")
+    assert plan.record["junction_policy"] == "retain-all"
+    h = from_plan(plan)
+    assert not any(f["differing_terms"] for f in h.record["bonded_mixed_forces"])
+    x = plan.positions_nm
+    c = _context(h.system, x)
+    parts = h.derivative_components(c, _state((0.5, 0.5, 0.5)))["lambda_bonded"]
+    assert sum(parts.values()) == 0.0, parts
+    box = plan.system_a.getDefaultPeriodicBoxVectors()[0][0]._value
+    split = fx3.bonded_derivative_split(plan.system_a, plan.system_b, set(plan.a_only) | set(plan.b_only),
+                                        x, box=box, policy="retain-all")
+    assert split["unique_touching"] == 0.0 and split["warning"] is None, split
     assert h.energy(c, _state((0, 0, 0))) == pytest.approx(_energy(plan.system_a, x), abs=ENDPOINT_TOL)
     assert h.energy(c, _state((1, 1, 1))) == pytest.approx(_energy(plan.system_b, x), abs=ENDPOINT_TOL)
 
@@ -173,3 +205,67 @@ def test_the_window_layer_accepts_it_for_a_three_component_path(plan):
     path = AlchemicalPath(knots=(Knot(0.0, _state((0, 0, 0))), Knot(1.0, _state((1, 1, 1)))),
                           endpoint_a="ethane", endpoint_b="the substituted molecule")
     check_hamiltonian_matches_path(h, path)
+
+
+# ------------------------------------------------------------------------------------------------
+# the real ABFE leg: TYK2's ejm_31 decoupled from water
+# ------------------------------------------------------------------------------------------------
+TYK2 = __import__("pathlib").Path(__file__).resolve().parent / "data" / "alchemy" / "tyk2-v1"
+
+
+@pytest.mark.slow
+@pytest.mark.xfail(strict=True, reason=(
+    "OPEN RULING (S3 -> S2/S0, 2026-09-20): the plan treats a unique group's internal non-excluded "
+    "pairs asymmetrically. At the dummy end they are in UniqueGroupInternalNonbonded, a "
+    "CustomBondForce with NO cutoff; at the physical end they are in the NonbondedForce, which "
+    "CUTS them. This Hamiltonian is uniform (uncut at every lambda, Amber's gti_cut = 1), so U(1) "
+    "equals System B exactly and U(0) misses System A by the intra-ligand energy beyond the "
+    "cutoff: -0.076484 kJ/mol here, from 74 pairs of a 32-atom ligand (-0.0685 of it LJ). Every "
+    "earlier fixture's ligand fits inside 0.9 nm, which is why nothing caught it. strict=True: "
+    "this flips to a failure the moment the construction is symmetric."))
+def test_the_tyk2_solvated_decoupling_leg(tmp_path):
+    """The campaign's own ABFE solvent leg, built by the fixture's script: ejm_31 decoupled from
+    water, 32 ligand atoms as one unique region, nothing appearing, no mapped core.
+
+    The Reference twin of what a GPU window would integrate. It checks what the measurement rests
+    on: the end states ARE the plan's Systems, the ligand's intramolecular Hamiltonian does not
+    move along lambda (so the decoupled end is the ligand intact in vacuum inside the box), and no
+    junction term rides on the lambda path.
+    """
+    import subprocess
+    import sys
+
+    import md_tools
+    from md_tools.alchemy.topology import Environment, build_decoupling_plan
+    from md_tools.ligands import load_package
+    from md_tools.ligands.mapping import LigandSelector
+
+    root = str(__import__("pathlib").Path(md_tools.__file__).resolve().parents[1])
+    subprocess.run([sys.executable, str(TYK2 / "build_tyk2_fixture.py"), "--out", str(tmp_path),
+                    "--ligand", "ejm_31", "--kind", "solvated"], check=True, timeout=3600, cwd=root)
+    build = tmp_path / "ejm_31" / "solvated" / "build"
+    env = Environment.from_files(build / "built.xml", build / "built.pdb",
+                                 LigandSelector(resname="L31"), record=build / "built.log")
+    package = load_package(TYK2 / "packages" / "LOCAL-DKNAYSZNMZIMIZ" / "param_bd1388e5fe3e")
+    plan = build_decoupling_plan(package, env)
+    x = plan.positions_nm
+    h = from_plan(plan)
+    assert len(plan.a_only) == 32 and not plan.b_only
+    assert h.record["plan_internal_pairs_checked"] == len(
+        plan.record["nonbonded"]["unique_group_internal"]["pairs"])
+
+    c = _context(h.system, x)
+    assert h.energy(c, _state((0, 0, 0))) == pytest.approx(_energy(plan.system_a, x), abs=1e-7)
+    assert h.energy(c, _state((1, 1, 1))) == pytest.approx(_energy(plan.system_b, x), abs=1e-7)
+
+    internal = {v: h.energy_components(c, _state((v, v, v)))["softcore_internal"]
+                for v in (0.0, 0.5, 1.0)}
+    assert len(set(round(e, 9) for e in internal.values())) == 1, internal
+
+    box = plan.system_a.getDefaultPeriodicBoxVectors()[0][0]._value
+    policy = (plan.record.get("terms", {}) or {}).get("junction_policy")
+    split = fx3.bonded_derivative_split(plan.system_a, plan.system_b, plan.a_only, x, box=box,
+                                        policy=policy)
+    assert split["unique_touching"] == 0.0, split      # a decoupling leg has no junction at all
+    assert h.derivative_components(c, _state((0.5, 0.5, 0.5)))["lambda_bonded"] == {} \
+        or sum(h.derivative_components(c, _state((0.5, 0.5, 0.5)))["lambda_bonded"].values()) == 0.0

@@ -550,3 +550,168 @@ def defective_system(h, group_name, r0, kind, size):
                 raise ValueError(kind)
             f.setEnergyFunction(f"{head};{tail}")
     return s
+
+
+def decoupling_pair(system_a, ligand):
+    """(System A, System B) in the shape an ABFE decoupling plan has: `ligand` is the whole unique
+    region, there is no mapped core and nothing appears.
+
+    System A is the solvated System untouched. In System B every ligand particle has charge 0 and
+    epsilon 0 and every ligand-environment exception is zero, while the ligand's OWN exceptions keep
+    their physical values and its non-excluded internal pairs move into the
+    `UniqueGroupInternalNonbonded` force (contract section 4). The ligand's bonded terms are
+    identical in both. So at the decoupled end the ligand is a physical molecule in vacuum inside
+    the box, and only its interactions with the environment have been switched off.
+    """
+    import openmm
+    from md_tools.alchemy.topology import COULOMB_CONSTANT, INTERNAL_FORCE_NAME
+    ligand = set(int(i) for i in ligand)
+    pair = []
+    for decoupled in (False, True):
+        s = openmm.XmlSerializer.deserialize(openmm.XmlSerializer.serialize(system_a))
+        for k in reversed(range(s.getNumForces())):       # the pair's own internal force replaces
+            if s.getForce(k).getName() == INTERNAL_FORCE_NAME:   # any the fixture already wrote
+                s.removeForce(k)
+        nb = next(f for f in s.getForces() if isinstance(f, openmm.NonbondedForce))
+        physical = [nb.getParticleParameters(i) for i in range(nb.getNumParticles())]
+        excepted = set()
+        for k in range(nb.getNumExceptions()):
+            i, j, qq, sg, ep = nb.getExceptionParameters(k)
+            excepted.add((min(i, j), max(i, j)))
+            if decoupled and ((i in ligand) != (j in ligand)):
+                nb.setExceptionParameters(k, i, j, 0.0, sg, 0.0)     # ligand-environment: off
+        if decoupled:
+            for i in sorted(ligand):
+                nb.setParticleParameters(i, 0.0, physical[i][1], 0.0)
+        f = openmm.CustomBondForce(
+            f"{COULOMB_CONSTANT!r}*chargeprod/r + 4*epsilon*((sigma/r)^12 - (sigma/r)^6)")
+        for name in ("chargeprod", "sigma", "epsilon"):
+            f.addPerBondParameter(name)
+        f.setName(INTERNAL_FORCE_NAME)
+        f.setUsesPeriodicBoundaryConditions(True)
+        members = sorted(ligand)
+        for x, i in enumerate(members):
+            for j in members[x + 1:]:
+                if (i, j) in excepted:
+                    continue
+                qi, si, ei = (v._value for v in physical[i])
+                qj, sj, ej = (v._value for v in physical[j])
+                params = [qi * qj, 0.5 * (si + sj), math.sqrt(ei * ej)] if decoupled else \
+                    [0.0, 0.5 * (si + sj), 0.0]
+                f.addBond(i, j, params)
+        s.addForce(f)
+        pair.append(s)
+    return pair[0], pair[1]
+
+
+#: A bonded integrand this large means stiff junction terms are riding on the lambda path. It is a
+#: threshold with a meaning, not a tolerance: a construction whose terms on a unique atom are
+#: identical at both ends contributes EXACTLY zero, so anything above round-off is that defect.
+BONDED_JUNCTION_WARNING_KJ = 1.0
+
+
+def bonded_derivative_split(system_a, system_b, unique, x, box=None, policy=None):
+    """dU/dlambda_bonded at any coordinate, split by what the differing terms touch, judged against
+    the plan's junction policy.
+
+    Computed here in numpy from the two Systems, independently of the Hamiltonian, so it can be
+    compared with `derivative_components(...)["lambda_bonded"]` rather than derived from it. The
+    derivative of a linearly mixed bonded term is E_B(x) - E_A(x), so a term identical at both ends
+    contributes exactly zero.
+
+    `policy` is the plan's `junction_policy` and decides what the expectation IS:
+
+      "retain-all"  every junction term is at its physical value at both ends, so the junction part
+                    must be EXACTLY 0. Anything else is a defect.
+      "separable"   the single-anchor rule removes some junction terms at the dummy end, so the
+                    junction part is EXPECTED to be non-zero -- that is the known cost of the
+                    policy (S4's M2: 660.77 kJ/mol swamped the alchemical signal). A ZERO value
+                    then means the removal is not in effect, which is its own defect.
+      None          the policy is not stated; the warning says so and gives both readings.
+
+    Returns {"unique_touching", "core", "total", "policy", "warning"}.
+    """
+    unique = set(int(i) for i in unique)
+    split = {"unique_touching": 0.0, "core": 0.0, "policy": policy}
+    for fa, fb in zip(system_a.getForces(), system_b.getForces()):
+        kind = type(fa).__name__
+        if kind not in ("HarmonicBondForce", "HarmonicAngleForce", "PeriodicTorsionForce"):
+            continue
+        for atoms, pa, pb in _paired_terms(fa, fb):
+            if pa == pb:
+                continue
+            contribution = _bonded_term_energy(kind, atoms, pb, x, box) \
+                - _bonded_term_energy(kind, atoms, pa, x, box)
+            split["unique_touching" if set(atoms) & unique else "core"] += contribution
+    split["total"] = split["unique_touching"] + split["core"]
+    split["warning"] = _junction_warning(split["unique_touching"], policy)
+    return split
+
+
+def _junction_warning(junction, policy):
+    """What a junction contribution of this size MEANS under this policy, or None if expected."""
+    large = abs(junction) > BONDED_JUNCTION_WARNING_KJ
+    carries = (f"dU/dlambda_bonded carries {junction:.2f} kJ/mol from terms that touch a unique "
+               f"atom: junction bonded terms are on the lambda path (present at one end, absent at "
+               f"the other). Stiff bonded energy in the integrand swamps the alchemical signal and "
+               f"destroys window overlap.")
+    if policy == "retain-all":
+        if not large:
+            return None
+        return carries + (" Under junction_policy = retain-all every junction term is at its "
+                          "physical value at both ends, so this must be exactly 0: it is a DEFECT.")
+    if policy == "separable":
+        if large:
+            return (carries + " This is EXPECTED under junction_policy = separable and is that "
+                    "policy's known cost; retain-all removes it (S0's ruling, 2026-09-20).")
+        return ("dU/dlambda_bonded carries nothing from terms touching a unique atom, but "
+                "junction_policy = separable should be switching some off at the dummy end: the "
+                "removal is NOT IN EFFECT, so the dummy's separability is not what the record "
+                "claims.")
+    if not large:
+        return None
+    return carries + (" The plan's junction_policy is not stated here: under retain-all this is a "
+                      "defect, under separable it is that policy's known cost. Expected under "
+                      "retain-all: exactly 0.")
+
+
+def _paired_terms(fa, fb):
+    kind = type(fa).__name__
+    out = []
+    if kind == "HarmonicBondForce":
+        for k in range(fa.getNumBonds()):
+            i, j, r0, kk = fa.getBondParameters(k)
+            _i, _j, r1, k1 = fb.getBondParameters(k)
+            out.append(((i, j), (r0._value, kk._value), (r1._value, k1._value)))
+    elif kind == "HarmonicAngleForce":
+        for k in range(fa.getNumAngles()):
+            i, j, l, t0, kk = fa.getAngleParameters(k)
+            _i, _j, _l, t1, k1 = fb.getAngleParameters(k)
+            out.append(((i, j, l), (t0._value, kk._value), (t1._value, k1._value)))
+    else:
+        for k in range(fa.getNumTorsions()):
+            i, j, l, m, per, ph, kk = fa.getTorsionParameters(k)
+            _i, _j, _l, _m, per1, ph1, k1 = fb.getTorsionParameters(k)
+            out.append(((i, j, l, m), (float(per), ph._value, kk._value),
+                        (float(per1), ph1._value, k1._value)))
+    return out
+
+
+def _bonded_term_energy(kind, atoms, params, x, box=None):
+    def vec(i, j):
+        d = x[j] - x[i]
+        return d - box * np.round(d / box) if box else d
+    if kind == "HarmonicBondForce":
+        r0, k = params
+        return 0.5 * k * (float(np.linalg.norm(vec(atoms[0], atoms[1]))) - r0) ** 2
+    if kind == "HarmonicAngleForce":
+        t0, k = params
+        u, v = vec(atoms[1], atoms[0]), vec(atoms[1], atoms[2])
+        theta = math.acos(np.clip(u @ v / np.linalg.norm(u) / np.linalg.norm(v), -1, 1))
+        return 0.5 * k * (theta - t0) ** 2
+    per, ph, k = params
+    b1, b2, b3 = vec(atoms[0], atoms[1]), vec(atoms[1], atoms[2]), vec(atoms[2], atoms[3])
+    n1, n2 = np.cross(b1, b2), np.cross(b2, b3)
+    m = np.cross(n1, b2 / np.linalg.norm(b2))
+    phi = math.atan2(m @ n2, n1 @ n2)
+    return k * (1 + math.cos(per * phi - ph))

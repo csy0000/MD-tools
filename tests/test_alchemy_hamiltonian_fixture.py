@@ -13,6 +13,16 @@ TOLERANCES, fixed from a calibration run BEFORE the Hamiltonian was compared (20
             -> Hamiltonian tolerance 1e-4 kJ/mol absolute, about 3.5x the calibrated error.
 
 A tolerance here is never widened after a failure; the implementation is fixed instead.
+
+PLATFORM_POLICY_EXEMPTION: this file compares single-point energies, forces and derivatives with an
+independent numpy implementation (explicit pairs, an explicit Ewald k-sum), and those comparisons
+hold to 1e-8 kJ/mol, which single precision cannot carry -- Reference is the right platform for
+them, not a substitute for CUDA. One test does propagate: the NPT check runs 40 steps with a
+MonteCarloBarostat to move the box, and its subject is that nothing box-dependent is cached (PME
+parameters, the dispersion coefficients), not the quality of any dynamics; it compares the running
+Context against a fresh one at the same box and coordinates. The device evidence for this
+Hamiltonian is test_alchemy_hamiltonian_cuda.py and test_alchemy_hamiltonian_cuda_dynamics.py, and
+NPT ON CUDA IS NOT YET COVERED THERE -- recorded as a gap in handoffs/S3.md, not claimed here.
 """
 from __future__ import annotations
 
@@ -540,3 +550,145 @@ def test_environment_virtual_sites_are_carried_and_softcore_ones_refused():
         s.setVirtualSite(sites[0], openmm.TwoParticleAverageSite(7, 0, 0.5, 0.5))
     with pytest.raises(AlchemicalHamiltonianError, match="softcore particle"):
         build_hamiltonian(sa, sb, a, b)
+
+
+def test_a_barostat_moving_the_box_leaves_nothing_stale():
+    """NPT: with a MonteCarloBarostat in both end states (copied once, as an identical force), a
+    run whose box moves gives, at every lambda, the energy a fresh Context reports at that box and
+    those coordinates. Nothing box-dependent is cached: PME alpha and grid are fixed at build, the
+    softcore delta's kappa is a constant, both dispersion pieces are C/V at the current volume."""
+    sa, sb, a, b, x = fx.build(True, dispersion=True)
+    for s in (sa, sb):
+        s.addForce(openmm.MonteCarloBarostat(1.0, 300.0, 1))
+    h = build_hamiltonian(sa, sb, a, b)
+    live = openmm.Context(h.system, openmm.LangevinMiddleIntegrator(300.0, 1.0, 0.0005),
+                          openmm.Platform.getPlatformByName("Reference"))
+    live.setPositions(x)
+    h.set_state(live, _state((0.5, 0.5, 0.5)))
+    openmm.LocalEnergyMinimizer.minimize(live, 10.0, 100)
+    start = live.getState(getEnergy=True).getPotentialEnergy()._value
+    v0 = live.getState().getPeriodicBoxVolume()._value
+    live.getIntegrator().step(40)
+    st = live.getState(getPositions=True, getEnergy=True)
+    energy = st.getPotentialEnergy()._value
+    assert np.isfinite(energy) and abs(energy) < abs(start) + 5000.0, (start, energy)
+    assert st.getPeriodicBoxVolume()._value != v0, "the barostat never moved the box"
+    box = st.getPeriodicBoxVectors()
+    pos = st.getPositions(asNumpy=True)._value
+
+    def fresh_energy(t, vectors):
+        fresh = _context(h.system, pos)
+        fresh.setPeriodicBoxVectors(*vectors)
+        return h.energy(fresh, _state(t))
+    stale = [v._value for v in sa.getDefaultPeriodicBoxVectors()]
+    for t in DIAGONAL + OFF_DIAGONAL:
+        assert h.energy(live, _state(t)) == pytest.approx(fresh_energy(t, box), abs=1e-8), t
+        # the check can fail: the same comparison against a Context left at the ORIGINAL box
+        assert abs(h.energy(live, _state(t)) - fresh_energy(t, stale)) > 1e-4, t
+
+
+@pytest.mark.parametrize("dispersion", [False, True], ids=["no-lrc", "lrc"])
+@pytest.mark.parametrize("tail", [False, True], ids=["no-internal-pairs", "internal-pairs"])
+def test_the_decoupling_shape_an_abfe_leg_needs(dispersion, tail):
+    """S2's proposed ABFE `decoupling` mode, measured rather than assumed: the whole ligand is the
+    unique region, nothing appears, and there is no mapped core.
+
+    The questions it answers: a unique group bonded to nothing in the environment (no junction);
+    the ligand's internal terms physical at BOTH ends, so the decoupled end is a physical molecule
+    in vacuum inside the box; and the end states still reproduced, dispersion correction included.
+    """
+    sa, _sb, _a, _b, x = fx.build(True, dispersion=dispersion, tail=tail)
+    # the whole ligand: the molecule, and the five-atom chain when the fixture carries it. A small
+    # ligand has NO non-excluded internal pair (everything is within three bonds); the tail gives
+    # it 1-5 pairs. Both are legitimate ABFE shapes, so both are tested.
+    ligand = sorted(set(range(9)) | (set(range(12, 16)) if tail else set()))
+    da, db = fx.decoupling_pair(sa, ligand)
+    h = build_hamiltonian(da, db, ligand, set())
+    assert h.record["particles"]["b_only"] == []
+    assert (h.record["plan_internal_pairs_checked"] > 0) is tail
+    c = _context(h.system, x)
+    e_a = _context(da, x).getState(getEnergy=True).getPotentialEnergy()._value
+    e_b = _context(db, x).getState(getEnergy=True).getPotentialEnergy()._value
+    assert abs(e_a - e_b) > 1.0                        # decoupling is a real change (~10 kJ/mol
+    #                                                    here: a small, mostly non-polar ligand)
+    assert h.energy(c, _state((0, 0, 0))) == pytest.approx(e_a, abs=1e-8)
+    assert h.energy(c, _state((1, 1, 1))) == pytest.approx(e_b, abs=1e-8)
+    # the ligand's intramolecular energy is lambda-independent: the unscaled group
+    internal = FORCE_GROUPS["softcore_internal"]
+    energies = {v: h.energy_components(c, _state((v, v, v)))["softcore_internal"]
+                for v in (0.0, 0.5, 1.0)}
+    assert len(set(round(e, 9) for e in energies.values())) == 1, energies
+    # and the derivative is still the finite-difference limit at the decoupled end
+    parts = h.derivative_components(c, _state((1.0, 1.0, 1.0)))
+    groups = set(FORCE_GROUPS.values()) - {FORCE_GROUPS["dispersion"]}
+
+    def energy(t):
+        h.set_state(c, _state(t))
+        return c.getState(getEnergy=True, groups=groups).getPotentialEnergy()._value
+    for k, name in enumerate(NAMES):
+        want = sum(v for g, v in parts[name].items() if g != "dispersion")
+        fds = [_fd(lambda v, k=k: energy([1.0 if i != k else v for i in range(3)]), 1.0, step)
+               for step in (1e-2, 1e-3, 1e-4)]
+        best = min(abs(want - r) for r in _richardson(fds))
+        assert best < 2e-5 * max(1.0, abs(want)), (name, want, fds)
+
+
+def _junction_removed(system, atoms):
+    """A copy of `system` with the angle on `atoms` at force constant 0. Passed the DUMMY end's
+    System, this is exactly a plan's `dummy-removed` junction term (the builder refuses the
+    removal at the physical end, which is how this test found its own first mistake)."""
+    s = openmm.XmlSerializer.deserialize(openmm.XmlSerializer.serialize(system))
+    for f in s.getForces():
+        if isinstance(f, openmm.HarmonicAngleForce):
+            for k in range(f.getNumAngles()):
+                i, j, l, t0, kk = f.getAngleParameters(k)
+                if (i, j, l) == atoms:
+                    f.setAngleParameters(k, i, j, l, t0, 0.0)
+                    return s
+    raise AssertionError(f"no angle on {atoms}")
+
+
+def test_the_bonded_integrand_has_an_expectation_and_warns():
+    """What dU/dlambda_bonded SHOULD carry from terms touching a unique atom depends on the plan's
+    junction policy, and the check says which policy it is judging.
+
+    This is the check that did not exist on 2026-09-19, when a probe printed 660.77 kJ/mol for S2's
+    chloroethane plan and it was read as "large but plausible". It was the whole bonded integrand
+    coming from junction terms switched between zero and full strength, and it took S4's M2 gates to
+    make the consequence visible. A diagnostic without an expectation cannot warn anybody.
+    """
+    sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
+    h = build_hamiltonian(sa, sb, a, b)
+    c = _context(h.system, x)
+    state = _state((0.0, 0.0, 0.0))
+
+    # this fixture's terms on a unique atom are identical at both ends: retain-all's expectation
+    split = fx.bonded_derivative_split(sa, sb, set(a) | set(b), x, box=BOX, policy="retain-all")
+    assert split["unique_touching"] == 0.0, split
+    assert split["warning"] is None
+    # ...and under `separable` the same zero means the removal is not in effect, its own defect
+    other = fx.bonded_derivative_split(sa, sb, set(a) | set(b), x, box=BOX, policy="separable")
+    assert "NOT IN EFFECT" in other["warning"]
+    analytic = h.derivative_components(c, state)["lambda_bonded"]["bonded_mixed"]
+    assert analytic == pytest.approx(split["total"], abs=1e-9)
+    assert analytic == pytest.approx(split["core"], abs=1e-9)
+
+    # and a plan that removes a junction term at the dummy end puts that energy on the lambda path
+    # FB (particle 8) appears, so its dummy end is System A: that is where the plan would zero it
+    removed = _junction_removed(sa, (1, 0, 8))          # C1-C0-FB, the appearing atom's junction
+    split = fx.bonded_derivative_split(removed, sb, set(a) | set(b), x, box=BOX, policy="retain-all")
+    assert abs(split["unique_touching"]) > fx.BONDED_JUNCTION_WARNING_KJ
+    assert "DEFECT" in split["warning"]                      # retain-all: must be exactly 0
+    expected = fx.bonded_derivative_split(removed, sb, set(a) | set(b), x, box=BOX,
+                                          policy="separable")
+    assert "EXPECTED" in expected["warning"]                 # separable: its known cost
+    unstated = fx.bonded_derivative_split(removed, sb, set(a) | set(b), x, box=BOX)
+    assert "not stated" in unstated["warning"]
+    h2 = build_hamiltonian(removed, sb, a, b)
+    c2 = _context(h2.system, x)
+    moved = h2.derivative_components(c2, state)["lambda_bonded"]["bonded_mixed"]
+    assert moved == pytest.approx(split["total"], abs=1e-9)
+    assert abs(moved - analytic) == pytest.approx(abs(split["unique_touching"]), abs=1e-9)
+    print(f"\nbonded integrand: identical junctions {analytic:.3f} kJ/mol (core only); "
+          f"one dummy-removed junction angle {moved:.3f}, of which "
+          f"{split['unique_touching']:.3f} is the junction term")

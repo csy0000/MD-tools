@@ -33,6 +33,11 @@ Two partners on purpose: `ejm_42` is a near-null edge that tests precision, `ejm
 signal that tests accuracy. Three ligands is also the minimum for EDS/RE-EDS to be a multi-state
 method rather than a two-state one in disguise.
 
+**Force field: ff14SB + TIP3P**, decided 2026-09-20. Not taste: `matched_legs` refuses to pair an
+OPC-solvated leg with a vacuum leg, because OPC applies `0.833333` to a ligand's 1-4 pairs while a
+vacuum build applies 5/6, and ABFE and RBFE both need exactly that pairing. ff19SB + OPC is a later
+variant, unblocked by the backlog item that lets a vacuum leg apply the solvent leg's stated scale.
+
 **Preparation is done ONCE, by one session, and every method reuses it.** One
 `build-top` complex per ligand, one parameter package per ligand (created once, reused in every
 environment, as 0.6.0 guarantees), and the prepared inputs kept as a versioned fixture with their
