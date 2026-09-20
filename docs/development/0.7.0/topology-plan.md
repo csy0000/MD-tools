@@ -115,6 +115,32 @@ and a report, method `rdkit-fmcs-heavy/1`:
 Single topology is explicit-map only. An automatic map is as reviewable as an explicit one: it
 is an ordinary `AtomMap`, stored in the plan's `atom_map` record with both directions.
 
+## Two legs of one cycle
+
+`record.ligand_hamiltonian_sha256` digests everything a plan says about the ligands'
+Hamiltonian, in package-local atom identities so it does not depend on the environment's
+numbering: packages, map, mode, applied 1-4 scales, constraint policy, dummy groups and frames,
+every ligand term and exception with both parameter sets, the internal pairs, the exclusions and
+the dual restraint. `matched_legs(plan_1, plan_2)` refuses two plans whose digests differ and
+names what differs; S4's cycles refuse legs whose digests differ or are missing. A vacuum leg and a
+TIP3P leg built from the same packages, map and mode (and the same constraints) match.
+
+The vacuum leg comes from `build-top` with `solvent.model: vacuum` (ligand only, NoCutoff, no
+box, constraints as configured, the usual record), so it goes through `Environment.from_files`
+exactly as a solvated leg does; `tests/data/alchemy/vacuum-v1/` is the ethane one, and it is the
+matched vacuum leg of the ethane TIP3P cycle.
+
+`record.environment.solvation` ("explicit", "implicit" or "vacuum") comes from the build
+record's `solvent.treatment`, or is stated for an in-memory environment; it is never inferred
+from periodicity, and a stated value that contradicts the System's periodicity is refused. It is
+part of `plan_sha256` (a vacuum leg and a solvent leg are different plans) and not of
+`ligand_hamiltonian_sha256` (they are legs of one cycle). The window runner derives
+`vacuum_leg` from it.
+
+Hydration cycles with OPC water are refused until the vacuum leg can apply the solvent leg's
+scale: an OPC leg applies 0.833333 to the ligand's 1-4 pairs and a vacuum leg the package's 5/6,
+which makes the ligand's intramolecular Hamiltonian a different function in the two legs.
+
 ## Constraints and masses
 
 The environment's constraint policy is read from its ligand (HBonds, AllBonds or None) and
@@ -189,4 +215,5 @@ openff-2.2.1) and ethane in TIP3P built by `build-top`. `tests/data/alchemy/inte
 n-pentane, whose unmapped propyl group has internal 1-4 and 1-5 pairs. `xh-only-v1/`: methane.
 `complex-v1/`: capped alanine and ethane in TIP3P (ff14SB). `complex-cmap-v1/`: the same with
 ff19SB + OPC (CMAP; OPC's 0.833333 applied to every 1-4 pair).
-`charged-v1/`: acetate and propanoate (both -1) and acetate + Na+ in TIP3P. Loaders in `tests/alchemy_fixtures.py`.
+`charged-v1/`: acetate and propanoate (both -1) and acetate + Na+ in TIP3P. `vacuum-v1/`: ethane
+built by `build-top` with `solvent.model: vacuum`. Loaders in `tests/alchemy_fixtures.py`.

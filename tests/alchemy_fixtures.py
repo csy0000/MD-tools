@@ -67,6 +67,22 @@ def water_environment():
                                   record=FIXTURE_ROOT / "ethane-tip3p" / "built.log")
 
 
+#: `tests/data/alchemy/ethane-tip3p-v2/`: v1's ethane in TIP3P with a 2.7 nm cube, so an NPT
+#: window's box fluctuations stay clear of twice the 0.9 nm cutoff.
+WATER_V2_ROOT = FIXTURE_ROOT.parent / "ethane-tip3p-v2"
+#: The margin a periodic fixture keeps above twice its cutoff (nm).
+NPT_BOX_MARGIN_NM = 0.8
+
+
+def water_environment_v2():
+    from md_tools.alchemy.topology import Environment
+    from md_tools.ligands.mapping import LigandSelector
+
+    return Environment.from_files(WATER_V2_ROOT / "built.xml", WATER_V2_ROOT / "built.pdb",
+                                  LigandSelector(resname="ETA"),
+                                  record=WATER_V2_ROOT / "built.log")
+
+
 def vacuum_environment(pkg, *, constraints=None):
     """The package molecule alone, NoCutoff, built by OpenMM from the package's own ffxml."""
     from openmm import app
@@ -90,7 +106,8 @@ def vacuum_environment(pkg, *, constraints=None):
                        ligand=LigandSelector(resname=pkg.residue_name),
                        nonbonded_compatibility={"packages": [
                            {"reference": pkg.reference, **own, "applied": own}]},
-                       compatibility_source="stated: System built from the package ffxml alone")
+                       compatibility_source="stated: System built from the package ffxml alone",
+                       solvation="vacuum")
 
 
 def core_map(a, b, extra=None):

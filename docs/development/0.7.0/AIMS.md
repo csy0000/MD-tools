@@ -4,7 +4,7 @@
 installed package. 0.6.0 is still under the user's testing; 0.7.0 is released only after 0.6.1 is
 released and integrated.
 
-Baseline: `dev-0.6.0` at `e524e0e`.
+Baseline: `e524e0e` on the 0.6.0 development line (released as `v0.6.0` at `3927105`; the `dev-0.6.0` branch has since been deleted).
 
 ## Purpose
 

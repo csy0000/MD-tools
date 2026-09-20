@@ -74,6 +74,7 @@ def _legacy_cfg(resolved: dict[str, Any]) -> dict[str, Any]:
     forcefield = resolved.get("forcefield") or {}
     constraints = resolved.get("constraints") or {}
     implicit = resolved["solvation"] == "implicit"
+    vacuum = resolved["solvation"] == "vacuum"
 
     cfg["forcefield"]["protein"] = forcefield.get("protein")
     cfg["forcefield"]["water"] = _water_xml(forcefield.get("water"))
@@ -100,7 +101,7 @@ def _legacy_cfg(resolved: dict[str, Any]) -> dict[str, Any]:
     cfg["system_build"]["hmr_scope"] = (
         "solute" if constraints.get("hydrogen_mass_amu") is not None else "none")
 
-    if implicit:
+    if implicit or vacuum:
         cfg["system_build"]["nonbonded_method"] = "NoCutoff"
         cfg["system_build"]["nonbonded_cutoff_nm"] = None
         cfg["system_build"]["ewald_error_tolerance"] = None
@@ -317,6 +318,52 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
             "water_packing_model": solvated.get("water_packing_model"),
             "water_packing_substituted": solvated.get("water_packing_substituted"),
             "water_model_reconciled": solvated.get("water_model_reconciled")}
+
+def _build_vacuum(input_path: Path, cfg: dict, staging: Path, *, route: str, log: Log) -> dict:
+    """The ligand alone: prepared, packaged and protonated as the explicit route does, NoCutoff.
+
+    Exactly the explicit ligand route without solvation, so a hydration cycle's vacuum leg and
+    its solvent leg differ only in the environment. `build-top` refuses anything but
+    `solute.kind: ligand` here, before this runs.
+    """
+    from openmm import XmlSerializer, app
+
+    from .system import build_system, protonate
+
+    if route != "ligand":
+        raise ConfigError(f"a vacuum build is a ligand-only build; route {route!r} is refused")
+    prepared = _prepare_molecule(input_path, staging / "structure", cfg)
+    source = Path(prepared["solute_pdb"])
+    ligand_sdf = Path(prepared["solute_sdf"])
+    log(f"ligand       : {prepared.get('smiles', '')[:60]}")
+    from ..ligands.build import attach_for_build
+
+    package_record = attach_for_build(cfg, staging, solute_sdf=ligand_sdf, solute_pdb=source)
+    if package_record is not None:
+        log(f"parameters   : {package_record.get('reference', package_record['how'])} "
+            f"({package_record['how']})")
+    protonated = protonate(source, staging, cfg, ligand_sdf=ligand_sdf,
+                           input_route=molecule_input_route(input_path))
+    log(f"protonation  : pH {protonated.get('ph')}, "
+        f"{protonated.get('n_hydrogens_before')} -> {protonated.get('n_hydrogens_after')} hydrogens")
+    _log_protonation(protonated.get("protonation"), log)
+    log("solvation    : none (vacuum: no water, no ions, no box)")
+    pdb = app.PDBFile(str(protonated["output_pdb"]))
+    n_atoms = pdb.topology.getNumAtoms()
+    built = build_system(Path(protonated["output_pdb"]), staging, cfg, n_atoms,
+                         ligand_sdf=ligand_sdf, route=route)
+    nonbonded = built.get("nonbonded") or {}
+    log(f"system       : {nonbonded.get('method')}, no cutoff, no box, "
+        f"{cfg['system_build']['constraints']}")
+    system = XmlSerializer.deserialize(Path(built["system_xml"]).read_text())
+    state_path = _write_initial_state(system, pdb, staging)
+    return {"system_xml": built["system_xml"], "topology_pdb": protonated["output_pdb"],
+            "initial_state": state_path, "n_solute_atoms": n_atoms,
+            "ligand_sdf": ligand_sdf, "omega": built, "ligand_package": package_record,
+            "protonation": protonated, "n_waters": 0, "ions": None, "box_shape": None,
+            "box_volume_nm3": None, "box_vectors_nm": None, "box_geometry": None,
+            "salt": None, "water_model": None}
+
 
 def _log_protonation(record, log) -> None:
     """The method, every flagged assignment and every warning, in the build log a person reads."""

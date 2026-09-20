@@ -43,6 +43,7 @@ def build_forcefield_record(*, resolved: dict[str, Any], route: str, record: dic
     from .provenance_min import environment_versions, sha256_file
 
     implicit = resolved.get("solvation") == "implicit"
+    vacuum = resolved.get("solvation") == "vacuum"
     requested = resolved.get("forcefield") or {}
     solute = resolved.get("solute") or {}
     build = dict((builder or {}).get("system_build") or {})
@@ -80,8 +81,10 @@ def build_forcefield_record(*, resolved: dict[str, Any], route: str, record: dic
                               requested=requested, implicit_report=implicit_report)
     ligand = _ligand_record(is_ligand=is_ligand, reported=reported, requested=solute,
                             checksums=checksums)
-    water = _water_record(implicit=implicit, reported=reported, solvent=solvent,
-                          constraints=constraints)
+    water = (_water_record(implicit=implicit, reported=reported, solvent=solvent,
+                           constraints=constraints) if not vacuum else
+             {"model": None, "openmm_resource": None, "requested_label": None, "rigid": None,
+              "note": "a vacuum build has no solvent"})
 
     # Implicit surfaces it at the top level; explicit leaves it inside the `build_system` record
     # that `record["omega"]` carries. Looking in only one place published a null HMR block for a
@@ -92,14 +95,14 @@ def build_forcefield_record(*, resolved: dict[str, Any], route: str, record: dic
     return {
         "format": FORMAT,
         "route": route,
-        "solvation": "implicit" if implicit else "explicit",
+        "solvation": "implicit" if implicit else "vacuum" if vacuum else "explicit",
         "source": "builder report (resources actually loaded), with requested values labelled",
 
         "protein": protein,
         "ligand": ligand,
         "water": water,
 
-        "explicit_solvent": None if implicit else {
+        "explicit_solvent": None if implicit or vacuum else {
             "box_shape": record.get("box_shape", solvent.get("box_shape")),
             "padding_nm": solvent.get("padding_nm"),
             "ionic_strength_molar": solvent.get("ionic_strength_molar"),
