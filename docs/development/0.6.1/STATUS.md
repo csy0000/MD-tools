@@ -22,7 +22,7 @@ in [`handoffs/`](handoffs/) and never edit it.
 | S1-D | ligand instances and exclusion files | IMPLEMENTED against a synthetic mapping record; the registered-package row is BLOCKED (sandbox) | rows 2, 19 |
 | S1-E | versioned CMAP rule | IMPLEMENTED | rows 2, 9 |
 | S1-F | identity, resume and refusal | IMPLEMENTED | rows 11–15: a ladder run by 0.6.0 code extends; selective states refused by name; exports verify; each integration patch reverted fails its tests |
-| S1-G | CUDA explicit-solvent ladders | BLOCKED — no card granted; `tests/test_selective_rest2_cuda.py` (12 tests, one card) is ready. A CPU run of that harness is not CUDA evidence | row 18 |
+| S1-G | CUDA explicit-solvent ladders | RUNNING 2026-09-20 on card 5 (user-granted, in a window hpREST2 freed): `tests/test_selective_rest2_cuda.py`, 12 tests, one card, single process. 12 passed is the only pass; a skip voids the lane | row 18 |
 
 State values are NOT STARTED, IN PROGRESS, IMPLEMENTED (code and deterministic tests), VALIDATED
 (evidence on the required platform), or BLOCKED (with the blocker named). IMPLEMENTED is not
