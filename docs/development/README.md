@@ -15,6 +15,11 @@ That instruction is the shared roadmap; the aims pages below specialize it per b
 | [0.7.1](0.7.1/AIMS.md) | FEP–REST2, EDS, RE-EDS, ATM | **planning only** — aims and references, no implementation |
 | [0.7.2](0.7.2/AIMS.md) | grand-canonical and nonequilibrium water sampling | **planning only** — aims and references, no implementation |
 
+[The protein–ligand campaign](protein-ligand-campaign.md) is the shared target of all four
+branches: one prepared TYK2 system with three congeneric ligands, on which 0.6.1 demonstrates
+selective REST2, 0.7.0 ABFE and RBFE, 0.7.1 their combination, and 0.7.2 multi-state EDS/RE-EDS.
+It also fixes the tutorial layout.
+
 [Shared contracts](shared-contracts.md) holds the records 0.6.1 and 0.7.0 must agree on before
 their code diverges: selection identity, the alchemical topology plan, and the naming of
 Hamiltonian state coordinates. A change to a contract is one commit that updates the document and
