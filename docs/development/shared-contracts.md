@@ -313,6 +313,28 @@ it as a softcore engine.
   (`UniqueGroupInternalNonbonded`: vacuum Coulomb plus LJ, no cutoff, no PME), identical in every
   leg of a cycle, which is what lets them cancel; its internal exceptions stay in the
   `NonbondedForce`. S2's plan is the definition, and S3's Hamiltonian reproduces it.
+- **Junction bonded terms are retained at both ends: `junction_policy: retain-all` is the default**
+  (decided 2026-09-20, jointly by S2 and S3, after the M2 campaign failed its gates). A dummy's
+  junction bonded terms stay at full physical strength in BOTH end states, as pmemd
+  (`gti_bat_sc = 0`) and OpenFE do, so they contribute exactly nothing to `dU/dλ` and cancel
+  between the legs of a cycle.
+  Why it changed: removing them at the dummy end put their stiff energy ON the λ path — measured
+  `dU/dλ_bonded` of +611 kJ/mol at one end and −238 at the other, 100% of it junction terms and
+  0.00 from the core, of which +611 was ONE angle at 610.585 kJ/mol. Sixteen of eighteen windows
+  could not resolve it, and four of nine legs fell below the overlap floor. With the terms retained,
+  every λ-dependent bonded slot goes to zero (verified independently by both sessions; endpoints
+  still recover to 2e-10 kJ/mol).
+  What it costs: OpenFE's documented dummy-group limitation returns — `Z_dummy` depends on the core
+  conformation, a spread of 1.757 kJ/mol between two deliberately distant conformations. That
+  spread is NOT a ΔΔG bias: the bias is the difference of the MEAN of `W = −kT ln Z_dummy` between
+  two legs. From `dW/dq = 0.073 kJ/mol` per degree on an angle whose thermal σ is 3.8°, it bounds
+  at 0.02–0.05 kJ/mol against a 2.09 kJ/mol gate. **That is a sensitivity bound from a curvature
+  measurement, not a sampled ΔΔG**, and it is confirmed or refuted by running the same edge and
+  legs under both policies — the test that must pass before the next campaign.
+  `separable` (the old behaviour) stays available and the policy is RECORDED in the plan, so every
+  result states which construction produced it. Separability, if it is ever needed, is recovered by
+  correcting the dummy end in post-processing from saved core frames — never by switching a term
+  along λ, because present-at-one-end-and-absent-at-the-other IS the λ path.
 - **Exceptions across the softcore/core boundary: `sc_boundary_14: scaled` is the default,
   confirmed by the user.** It is pmemd 20+ `gti_add_sc=1` behaviour and is consistent with the
   plan's dummy factorization. `unscaled` — the literal Amber18 manual 21.1.5 rule
