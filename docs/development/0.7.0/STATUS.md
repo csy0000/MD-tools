@@ -60,6 +60,7 @@ A2 — individual development does not.
 
 ## Blockers
 
+- **M3 is RUNNING** since 2026-09-20 15:00 (S4, `a34ba88`, cores 39–47 agreed with hpREST2, 9 single-threaded processes, no GPU, 312 windows, ETA ~12 h): the same edge and legs under both junction policies, gating the two ΔΔG against each other. Pre-launch check: retain-all has zero λ-dependent bonded terms and `dU/dλ_bonded` = 0.00 at both ends; separable has 10 terms and 660.77 kJ/mol, S3's figure to the decimal.
 - **TYK2 is stopped.** Its gate was M2 passing, and M2 failed. No protein campaign starts until the cause is fixed and M2 re-run.
 - A pilot that is too short to ESTIMATE overlap must not be allowed to choose window placement: M2.0's rule let a 40-sample pilot do it, and its overlap estimates were optimistic. The rule is being rewritten before the next campaign.
 
