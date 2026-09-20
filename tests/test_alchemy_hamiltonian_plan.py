@@ -4,8 +4,10 @@ Real AM1-BCC packages -- ethane, chloroethane, ethanol -- in TIP3P under PME wit
 correction on, combined by `md_tools.alchemy.topology.build_topology_plan` (hybrid). What only a
 real plan can show:
 
-* the plan's dummy-removed junction terms are accepted, and nothing else about a unique atom's
-  bonded terms differs;
+* the plan's dummy-removed junction terms are accepted (these fixtures are built with
+  `junction_policy="separable"` on purpose; the default retain-all leaves nothing differing, which
+  `test_retain_all_leaves_no_bonded_term_on_the_lambda_path` covers), and nothing else about a
+  unique atom's bonded terms differs;
 * under the default boundary rule the Hamiltonian's end states ARE the plan's end-state Systems,
   energy for energy, dispersion correction included -- for pentane too, whose appearing propyl
   group has internal 1-4s and 1-5 pairs that the plan keeps physical at its dummy end;
@@ -61,7 +63,12 @@ def plan(request):
     b = af.package({"chloroethane": af.CHLOROETHANE, "ethanol": af.ETHANOL,
                     "pentane": af.PENTANE, "complex-cmap": af.CHLOROETHANE}[name])
     env = af.complex_environment(af.CMAP_ROOT) if name == "complex-cmap" else af.water_environment()
-    return build_topology_plan(a, b, af.core_map(a, b), env, mode="hybrid")
+    # `separable` DELIBERATELY: under the default retain-all no bonded term differs between the end
+    # states, which is the point of that policy, and these tests are what covers the mixed-force
+    # machinery on terms that DO differ. The mirror case is
+    # `test_retain_all_leaves_no_bonded_term_on_the_lambda_path`.
+    return build_topology_plan(a, b, af.core_map(a, b), env, mode="hybrid",
+                               junction_policy="separable")
 
 
 def test_the_end_states_are_the_plans_systems(plan):
@@ -72,6 +79,30 @@ def test_the_end_states_are_the_plans_systems(plan):
     c = _context(h.system, x)
     assert any(f["differing_terms"] for f in h.record["bonded_mixed_forces"])   # dummy-removed
     assert h.record["nonbonded"]["use_dispersion_correction"] is True
+    assert h.energy(c, _state((0, 0, 0))) == pytest.approx(_energy(plan.system_a, x), abs=ENDPOINT_TOL)
+    assert h.energy(c, _state((1, 1, 1))) == pytest.approx(_energy(plan.system_b, x), abs=ENDPOINT_TOL)
+
+
+def test_retain_all_leaves_no_bonded_term_on_the_lambda_path():
+    """The default policy's mirror of the fixture above: with every junction term retained at both
+    ends, NO bonded term differs, so the mixed bonded force carries nothing that moves with lambda
+    and dU/dlambda_bonded is exactly zero. Together the two cover both policies, and neither can
+    silently stop testing its own."""
+    from md_tools.alchemy.topology import build_topology_plan
+    a, b = af.package(af.ETHANE), af.package(af.CHLOROETHANE)
+    plan = build_topology_plan(a, b, af.core_map(a, b), af.water_environment(), mode="hybrid",
+                               junction_policy="retain-all")
+    assert plan.record["junction_policy"] == "retain-all"
+    h = from_plan(plan)
+    assert not any(f["differing_terms"] for f in h.record["bonded_mixed_forces"])
+    x = plan.positions_nm
+    c = _context(h.system, x)
+    parts = h.derivative_components(c, _state((0.5, 0.5, 0.5)))["lambda_bonded"]
+    assert sum(parts.values()) == 0.0, parts
+    box = plan.system_a.getDefaultPeriodicBoxVectors()[0][0]._value
+    split = fx3.bonded_derivative_split(plan.system_a, plan.system_b, set(plan.a_only) | set(plan.b_only),
+                                        x, box=box, policy="retain-all")
+    assert split["unique_touching"] == 0.0 and split["warning"] is None, split
     assert h.energy(c, _state((0, 0, 0))) == pytest.approx(_energy(plan.system_a, x), abs=ENDPOINT_TOL)
     assert h.energy(c, _state((1, 1, 1))) == pytest.approx(_energy(plan.system_b, x), abs=ENDPOINT_TOL)
 
