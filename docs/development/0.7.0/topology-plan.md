@@ -130,6 +130,13 @@ box, constraints as configured, the usual record), so it goes through `Environme
 exactly as a solvated leg does; `tests/data/alchemy/vacuum-v1/` is the ethane one, and it is the
 matched vacuum leg of the ethane TIP3P cycle.
 
+The record carries its schema, `md-tools-topology-plan/<n>`, and it moves whenever a field is
+added or removed — because `plan_sha256` covers the whole record, so a field addition changes the
+digest of plans already written. `check_plan_digest(stored_digest, stored_record, plan)` tells a
+caller which case a mismatch is: the schema moved and the plan's identity (ligand Hamiltonian,
+endpoints, map) did not, so rebuilding changes no physics; or it is a different plan, and the
+first differing field is named. `load_plan` refuses another schema with the same explanation.
+
 `record.environment.solvation` ("explicit", "implicit" or "vacuum") comes from the build
 record's `solvent.treatment`, or is stated for an in-memory environment; it is never inferred
 from periodicity, and a stated value that contradicts the System's periodicity is refused. It is

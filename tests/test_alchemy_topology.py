@@ -1151,3 +1151,64 @@ def test_the_v2_solvent_leg_and_the_vacuum_leg_are_matched(eta, cle):
     solvent = _build(eta, cle, core_map(eta, cle), water_environment_v2(), "hybrid")
     report = matched_legs(solvent, _build(eta, cle, core_map(eta, cle), vacuum, "hybrid"))
     assert report["ligand_hamiltonian_sha256"] == solvent.record["ligand_hamiltonian_sha256"]
+
+
+# ------------------------------------------------------------------------------------------------
+# a stored plan digest that no longer matches: which case is it? (S0, after S4 lost an hour)
+# ------------------------------------------------------------------------------------------------
+def test_a_stored_digest_that_matches_is_accepted(hybrid):
+    from md_tools.alchemy.topology import check_plan_digest
+
+    check_plan_digest(hybrid.sha256, hybrid.record, hybrid)     # no refusal
+
+
+def test_only_the_record_schema_moved_says_the_physics_is_the_same(hybrid):
+    """What actually happened to S4: fields were added, so every stored plan digest moved."""
+    import copy
+
+    from md_tools.alchemy.topology import TopologyError, check_plan_digest
+
+    stored = copy.deepcopy(hybrid.record)
+    stored["schema"] = "md-tools-topology-plan/1"
+    stored.pop("ligand_hamiltonian_sha256")                     # the field that was added
+    stored["ligand_hamiltonian_sha256"] = hybrid.record["ligand_hamiltonian_sha256"]
+    stored["plan_sha256"] = "0" * 64
+    with pytest.raises(TopologyError, match="schema changed from .*the physics is the same"):
+        check_plan_digest(stored["plan_sha256"], stored, hybrid)
+
+
+def test_a_genuinely_different_plan_names_the_first_field_that_differs(eta, cle, eoh, water):
+    from md_tools.alchemy.topology import TopologyError, check_plan_digest
+
+    one = _build(eta, cle, core_map(eta, cle), water, "hybrid")
+    other = _build(eta, eoh, core_map(eta, eoh), water, "hybrid")
+    with pytest.raises(TopologyError, match="different plans. First field that differs: atom_map"):
+        check_plan_digest(other.sha256, other.record, one)
+
+
+def test_the_same_schema_and_ligand_but_another_environment_is_named_as_such(eta, cle, water):
+    """Same physics of the ligands, different environment: not a schema change, and it says so."""
+    from openmm import app
+
+    from md_tools.alchemy.topology import TopologyError, check_plan_digest
+
+    solvent = _build(eta, cle, core_map(eta, cle), water, "hybrid")
+    vacuum = _build(eta, cle, core_map(eta, cle), vacuum_environment(eta, constraints=app.HBonds),
+                    "hybrid")
+    assert solvent.record["ligand_hamiltonian_sha256"] == \
+        vacuum.record["ligand_hamiltonian_sha256"]
+    with pytest.raises(TopologyError, match="the environment or another recorded input differs"):
+        check_plan_digest(vacuum.sha256, vacuum.record, solvent)
+
+
+def test_a_plan_written_under_another_schema_is_refused_with_what_to_do(hybrid, tmp_path):
+    import json
+
+    from md_tools.alchemy.topology import TopologyError, load_plan
+
+    written = hybrid.write(tmp_path / "plan")
+    document = json.loads((written / "plan.json").read_text())
+    document["schema"] = "md-tools-topology-plan/1"
+    (written / "plan.json").write_text(json.dumps(document))
+    with pytest.raises(TopologyError, match="is rebuilt rather than read"):
+        load_plan(written)
