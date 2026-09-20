@@ -7,7 +7,7 @@ any sampling, with the one pilot change M2.0p allows (vacuum windows at s = 1/60
     each window minimised at its own state, 20 ps equilibration discarded, 1 ns production,
     1 ps reports; 3 independent repeats of every leg.
 
-Legs: `solvent` (ethane-tip3p, recorded build), `vacuum` (vacuum-v1, recorded build), and
+Legs: `solvent_v2` (ethane-tip3p v2, 2.7 nm, recorded build; M2.0f replaced v1), `vacuum` (vacuum-v1, recorded build), and
 `vacuum_ba` (chloroethane -> ethane in vacuum, an independently built plan, for the M2.4 closure;
 its extra windows mirror the A->B ones, s = 1 - 1/60 and 1 - 1/30, because the stiff end is the
 one where chlorine is the dummy, which is s = 1 in that orientation).
@@ -41,7 +41,9 @@ pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 NAMES = ["lambda_bonded", "lambda_electrostatics", "lambda_sterics"]
 BASE = [k / 15 for k in range(16)]
-S_VALUES = {"solvent": BASE, "vacuum": sorted(BASE + [1 / 60, 1 / 30]),
+#: the water leg is `solvent_v2` since M2.0f: ethane-tip3p v2 (2.7 nm). The v1 leg directory,
+#: `solvent`, holds the void windows of the stopped run and is never read.
+S_VALUES = {"solvent_v2": BASE, "vacuum": sorted(BASE + [1 / 60, 1 / 30]),
             "vacuum_ba": sorted(BASE + [1 - 1 / 60, 1 - 1 / 30])}
 REPEATS = ("r1", "r2", "r3")
 SEEDS = {"r1": 101, "r2": 202, "r3": 303}
@@ -68,8 +70,8 @@ def _plan(leg: str):
     from md_tools.alchemy.topology import Environment, build_topology_plan
     from md_tools.ligands.mapping import LigandSelector
     eth, cle = af.package(af.ETHANE), af.package(af.CHLOROETHANE)
-    if leg == "solvent":
-        a, b, env = eth, cle, af.water_environment()
+    if leg == "solvent_v2":
+        a, b, env = eth, cle, af.water_environment_v2()
     elif leg == "vacuum":
         v = af.FIXTURE_ROOT.parent / "vacuum-v1"
         a, b = eth, cle
@@ -81,9 +83,9 @@ def _plan(leg: str):
     return plan, from_plan(plan)
 
 
-ENDPOINTS = {"solvent": ("ethane", "chloroethane"), "vacuum": ("ethane", "chloroethane"),
+ENDPOINTS = {"solvent_v2": ("ethane", "chloroethane"), "vacuum": ("ethane", "chloroethane"),
              "vacuum_ba": ("chloroethane", "ethane")}
-ENVIRONMENT = {"solvent": "solvent", "vacuum": "vacuum", "vacuum_ba": "vacuum"}
+ENVIRONMENT = {"solvent_v2": "solvent", "vacuum": "vacuum", "vacuum_ba": "vacuum"}
 
 
 def _settings(repeat: str) -> WindowSettings:
@@ -106,10 +108,10 @@ def test_m2_prepare():
                     path=linear_path(NAMES, endpoint_a=a, endpoint_b=b,
                                      description="Amber18 one-step diagonal"),
                     s_values=S_VALUES[leg], temperature_k=300.0,
-                    pressure_bar=1.01325 if leg == "solvent" else None,
+                    pressure_bar=1.01325 if leg == "solvent_v2" else None,
                     environment=ENVIRONMENT[leg], endpoint_a=a, endpoint_b=b,
                     scheme="amber18-hybrid")
-    report = matched_leg_report(root / "vacuum", root / "solvent")
+    report = matched_leg_report(root / "vacuum", root / "solvent_v2")
     print(f"\nM2 matched_legs: {report['ligand_hamiltonian_sha256']}")
 
 
@@ -173,7 +175,7 @@ def test_m2_analysis():
                            **_gate(closure, ab.sigma_kj_mol / KJ_PER_KCAL, 0.0,
                                    ref_sigma=ba.sigma_kj_mol / KJ_PER_KCAL)}
     # M2.5: the cycle, experiment reported
-    cycle = relative_hydration_from_legs(root / "vacuum", root / "solvent", repeats=REPEATS)
+    cycle = relative_hydration_from_legs(root / "vacuum", root / "solvent_v2", repeats=REPEATS)
     cycle.pop("analyses")
     out["rows"]["M2.5"] = {"ddG_hyd_kcal": cycle["delta_g_kcal_mol"],
                            "sigma_kcal": cycle["sigma_kcal_mol"],
