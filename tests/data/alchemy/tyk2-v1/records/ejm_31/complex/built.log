@@ -1,0 +1,1460 @@
+md-openmm build-top
+====================================================================
+
+Command
+-------
+  input                       input/complex.pdb
+  config                      build/build.config
+  system out                  build/built.xml
+  topology out                build/built.pdb
+
+Resolved configuration
+----------------------
+  solute.kind                 complex   (set)
+  solute.peptide              None   (default)
+  solute.ligand_forcefield    sage-2.2.1   (default)
+  solute.ligand_charge_method am1bcc   (default)
+  solute.compound_id          None   (default)
+  solute.aliases              []   (default)
+  solute.parameters           search   (default)
+  solute.residue_name         None   (default)
+  forcefield.protein          ff14SB   (set)
+  solvent.model               TIP3P   (set)
+  solvent.padding_nm          1.2   (set)
+  solvent.box_shape           cube   (set)
+  solvent.ionic_strength_molar0.15   (default)
+  solvent.positive_ion        Na+   (default)
+  solvent.negative_ion        Cl-   (default)
+  solvent.cutoff_nm           0.9   (set)
+  constraints.type            HBonds   (set)
+  constraints.rigid_water     True   (set)
+
+Input interpretation
+--------------------
+  interpreted as              protein-ligand complex (.pdb), 1 ligand instance(s) mapped to parameter packages
+  ligand L31                  chain 'B' resid '1' icode '' -> LOCAL-DKNAYSZNMZIMIZ/param_bd1388e5fe3e
+  coordinates                 the deposited pose; ligand hydrogens from each package
+  small-molecule FF           not run: parameters loaded from the packages
+  solvent treatment           explicit TIP3P, periodic
+  protein FF                  amber14-all.xml
+  water FF                    amber14/tip3p.xml
+
+Preparation
+-----------
+  ligand       : L31 chain 'B' resid '1' icode '' -> LOCAL-DKNAYSZNMZIMIZ/param_bd1388e5fe3e
+  protonation  : pH 7.0, 2329 -> 2328 hydrogens; 1 ligand instance(s) kept as packaged
+  protonation  : method openmm
+  solvation    : 16079 waters, ions {'NA': 48, 'CL': 44}, box cube (559.1 nm^3)
+  system       : PME, cutoff 0.9 nm, HBonds
+
+Validation
+----------
+  particle agreement          53030 atoms == 53030 particles  OK
+  periodicity                 periodic  OK (explicit)
+  box vectors (nm)            (8.238 0.000 0.000); (0.000 8.238 0.000); (0.000 0.000 8.238)
+  HMR                         NOT applied; masses are the force field's own, recommend 2.0 fs
+  distinct H masses           [1.0079, 1.008]
+
+Counts
+------
+  atoms                       53030
+  residues                    16462
+  solute atoms                4701
+  waters                      16079
+  ions                        {'NA': 48, 'CL': 44}
+  forcefield                  amber14-all.xml
+
+Outputs
+-------
+  built.xml                   build/built.xml
+  built.pdb                   build/built.pdb
+  built.solute.pdb            build/built.solute.pdb
+  ligand_mapping.json         build/ligand_mapping.json
+  re-read check               53030 atoms == 53030 particles  OK
+  ligand packages             LOCAL-DKNAYSZNMZIMIZ/param_bd1388e5fe3e (written)
+
+Summary
+-------
+  built 53030 particles, 16462 residues, explicit TIP3P
+  status: completed
+
+# ===== BEGIN md-tools machine record =====
+# schema_version: md-tools-record/2.0
+# record_type: build-top
+# status: completed
+# started_utc: '2026-09-20T09:50:43+00:00'
+# finished_utc: '2026-09-20T09:51:09+00:00'
+# command:
+# - <redacted>/md_tools/cli/md_openmm.py
+# - build-top
+# - -i
+# - input/complex.pdb
+# - --config
+# - build/build.config
+# - -os
+# - build/built.xml
+# - -op
+# - build/built.pdb
+# - -log
+# - build/built.log
+# environment:
+#   hostname: <redacted>
+#   platform: Linux-6.8.0-124-generic-x86_64-with-glibc2.39
+#   machine: x86_64
+#   user: <redacted>
+#   packages:
+#     python: 3.12.14
+#     md-tools: 0.5.4
+#     openmm: '8.6'
+#     openff-toolkit: 0.19.0
+#     openmmforcefields: 0.16.0
+#     parmed: 4.3.1
+#     rdkit: 2026.3.1
+#     ambertools: null
+#     numpy: 2.4.6
+#     pyyaml: 6.0.3
+#     openmm_build: 8.6.0.dev-c6173db
+#   md_tools_commit: 7e4f1a576df357dd07833715becbcc93f7e5a32a
+# input:
+#   path: complex.pdb
+#   bytes: 379937
+#   sha256: b0b36ccec11b792b4ae768b8e0570d1c899a14e6634f1fdafb49167379bac358
+# resolved_config:
+#   constraints:
+#     hydrogen_mass_amu: null
+#     rigid_water: true
+#     type: HBonds
+#   engine: openmm
+#   engine_version: 8.6.0
+#   forcefield: &id002
+#     protein: amber14-all.xml
+#     water: amber14/tip3p.xml
+#   protonation:
+#     histidine_proximity_angstrom: 5.0
+#     method: openmm
+#     near_ph_window: 1.0
+#     overrides: []
+#     ph: 7.0
+#   schema_version: 1
+#   solute:
+#     kind: complex
+#     ligand_charge_method: am1bcc
+#     ligand_forcefield: sage-2.2.1
+#     peptide: true
+#   solvent:
+#     box_shape: cube
+#     cutoff_nm: 0.9
+#     ionic_strength_molar: 0.15
+#     model: TIP3P
+#     negative_ion: Cl-
+#     padding_nm: 1.2
+#     positive_ion: Na+
+#   solvation: explicit
+# warnings: []
+# stated_keys:
+#   solute:
+#   - kind
+#   ligand_catalog:
+#   - path
+#   forcefield:
+#   - protein
+#   solvent:
+#   - model
+#   - padding_nm
+#   - box_shape
+#   - cutoff_nm
+#   constraints:
+#   - type
+#   - rigid_water
+# interpretation:
+#   route: complex
+#   smiles: null
+#   residue_name: null
+#   input_format: pdb
+# forcefield_record:
+#   format: md-tools-forcefield/v1
+#   route: complex
+#   solvation: explicit
+#   source: builder report (resources actually loaded), with requested values labelled
+#   protein:
+#     forcefield: amber14-all.xml
+#     openmm_resource: amber14-all.xml
+#     openmm_resource_includes:
+#     - amber14/protein.ff14SB.xml
+#     - amber14/DNA.OL15.xml
+#     - amber14/RNA.OL3.xml
+#     - amber14/lipid17.xml
+#     tleap_resource: null
+#     requested_label: amber14-all.xml
+#   ligand:
+#     forcefield: openff-2.2.1
+#     openff_resource: openff-2.2.1
+#     requested_label: sage-2.2.1
+#     charge_method: am1bcc
+#     charge_scheme: am1bcc
+#     charge_model: null
+#     charge_model_sha256: null
+#     toolkit_registry: null
+#     net_charge_e: 9.71445146547012e-17
+#     formal_charge: 0
+#     n_atoms: 32
+#     prepared_artifact: null
+#     prepared_artifact_sha256: null
+#     family: smirnoff
+#     typing: null
+#     installed_versions: null
+#     antechamber: null
+#     sqm: null
+#     ambertools: null
+#     nonbonded_compatibility:
+#       packages:
+#       - reference: LOCAL-DKNAYSZNMZIMIZ/param_bd1388e5fe3e
+#         coulomb14scale: 0.8333333333333334
+#         lj14scale: 0.5
+#         applied:
+#           coulomb14scale: 0.8333333333333334
+#           lj14scale: 0.5
+#           tolerance: 1.0e-05
+#           defined_by: the force field's first NonbondedForce definition
+#       force_field_nonbonded:
+#         coulomb14scale: 0.8333333333333334
+#         lj14scale: 0.5
+#   water:
+#     model: TIP3P
+#     openmm_resource: amber14/tip3p.xml
+#     requested_label: TIP3P
+#     rigid: true
+#   explicit_solvent:
+#     box_shape: cube
+#     padding_nm: 1.2
+#     ionic_strength_molar: 0.15
+#     positive_ion: Na+
+#     negative_ion: Cl-
+#     cutoff_nm: 0.9
+#     n_waters: 16079
+#     ions: &id001
+#       NA: 48
+#       CL: 44
+#     salt:
+#       requested_salt_molar: 0.15
+#       realized_salt_pair_molar: 0.13069
+#       ionic_strength_molar: 0.13663
+#       n_salt_pairs: 44
+#       n_neutralizing_ions: 4
+#       neutralizing_charge_e: 4
+#       solute_formal_charge: null
+#       charge_balanced: null
+#       n_positive_ions: 48
+#       n_negative_ions: 44
+#       n_ions_total: 92
+#       ion_counts:
+#         NA: 48
+#         CL: 44
+#       positive_ion_requested: Na+
+#       negative_ion_requested: Cl-
+#       n_water_molecules: 16079
+#       box_volume_nm3: 559.06317
+#       salt_pairs_per_55p5_mol_water: 0.151875
+#       note: 'realized_salt_pair_molar counts ADDED salt only: min(n_positive, n_negative)
+#         over the box volume. Excess ions are neutralising counterions and are reported
+#         separately; they are not salt and are not ionic strength.'
+#     box_volume_nm3: 559.0631699425977
+#     box_vectors_nm:
+#     - - 8.23797167229309
+#       - 0.0
+#       - 0.0
+#     - - 0.0
+#       - 8.23797167229309
+#       - 0.0
+#     - - 0.0
+#       - 0.0
+#       - 8.23797167229309
+#     box_geometry:
+#       padding_nm_requested: 1.2
+#       padding_semantics: openmm
+#       box_width_nm: 8.23797
+#       box_width_requested_nm: 8.23797
+#       grown_for_cutoff: false
+#       solute_bounding_radius_nm: 3.51899
+#       shortest_lattice_translation_nm: 8.23797
+#       solute_image_clearance_nm: 1.2
+#       min_reduced_box_height_nm: 8.23797
+#       required_cutoff_height_nm: 1.9
+#       max_legal_cutoff_nm: 4.11899
+#       minimum_image_margin_nm: 0.1
+#     water_packing_model: tip3p
+#     water_packing_substituted: false
+#     water_model_reconciled: null
+#   implicit_solvent: null
+#   nonbonded:
+#     method: PME
+#     requested_method: PME
+#     cutoff_nm: 0.9
+#     switching: false
+#     switch_distance_nm: null
+#     dispersion_correction: true
+#     ewald_error_tolerance: 0.0005
+#     minimum_image_margin_nm: 0.1
+#   constraints:
+#     type: HBonds
+#     rigid_water: true
+#     hydrogen_mass_amu: null
+#     hmr_scope: none
+#     n_hydrogens_repartitioned: 0
+#     hmr_performed_by: null
+#     hmr_verified_by: null
+#     hmr_group_conservation: null
+#   builder:
+#     route: openmm.app.ForceField.createSystem
+#     openmm_xml_loaded:
+#     - amber14-all.xml
+#     - amber14/tip3p.xml
+#     openmm_xml_includes:
+#       amber14-all.xml:
+#       - amber14/protein.ff14SB.xml
+#       - amber14/DNA.OL15.xml
+#       - amber14/RNA.OL3.xml
+#       - amber14/lipid17.xml
+#       amber14/tip3p.xml: []
+#     tleap_used: false
+#     notes: null
+#   package_versions:
+#     python: 3.12.14
+#     openmm: 8.6.0
+#     openff_toolkit: 0.19.0
+#     openmmforcefields: 0.16.0
+#     parmed: 4.3.1
+#     rdkit: 2026.3.1
+#     numpy: 2.4.6
+#     pyyaml: 6.0.3
+#   artifact_checksums: {}
+# counts:
+#   atoms: 53030
+#   particles: 53030
+#   residues: 16462
+#   solute_atoms: 4701
+#   waters: 16079
+# periodic: true
+# box_vectors_nm:
+# - - 8.238
+#   - 0.0
+#   - 0.0
+# - - 0.0
+#   - 8.238
+#   - 0.0
+# - - 0.0
+#   - 0.0
+#   - 8.238
+# box_geometry:
+#   box_shape: cube
+#   box_width_nm: 8.23797
+#   box_width_requested_nm: 8.23797
+#   box_volume_nm3: 559.06317
+#   grown_for_cutoff: false
+#   solute_bounding_radius_nm: 3.51899
+#   padding_nm_requested: 1.2
+#   padding_semantics: openmm
+#   shortest_lattice_translation_nm: 8.23797
+#   solute_image_clearance_nm: 1.2
+#   min_reduced_box_height_nm: 8.23797
+#   nonbonded_cutoff_nm: 0.9
+#   minimum_image_margin_nm: 0.1
+#   required_cutoff_height_nm: 1.9
+#   max_legal_cutoff_nm: 4.11899
+#   min_image_distance_nm: 8.23797
+#   solute_image_gap_nm: 1.2
+#   minimum_image_required_nm: 1.9
+#   legacy_field_note: min_image_distance_nm and solute_image_gap_nm are the REDUCED-BOX
+#     HEIGHT and that height minus the solute diameter. They are not the solute-to-periodic-copy
+#     distance; use shortest_lattice_translation_nm and solute_image_clearance_nm.
+#   box_vectors_nm:
+#   - - 8.23797167229309
+#     - 0.0
+#     - 0.0
+#   - - 0.0
+#     - 8.23797167229309
+#     - 0.0
+#   - - 0.0
+#     - 0.0
+#     - 8.23797167229309
+# solvent:
+#   treatment: explicit
+#   model: TIP3P
+#   water_model: tip3p
+#   ions: *id001
+# forcefield: *id002
+# hmr:
+#   enabled: false
+#   applied: false
+#   target_hydrogen_mass_amu: null
+#   configured_hydrogen_mass_amu: 3.024
+#   ignored_because_disabled: enabled is false; the force field's own masses are serialised
+#   distinct_hydrogen_masses_amu:
+#   - 1.0079
+#   - 1.008
+#   total_mass_amu: 326045.4244
+#   recommended_timestep_fs: 2.0
+# platform:
+#   name: null
+#   properties: {}
+# validation:
+#   particle_counts_match: true
+#   periodicity_matches_solvent: true
+# structure_completion:
+#   missing_atoms_policy: refuse
+#   chain_breaks: []
+#   residues_missing_atoms: []
+#   missing_terminal_atoms: []
+#   atoms_added: []
+# protonation:
+#   method: openmm
+#   ph: 7.0
+#   addhydrogens_ph: 7.0
+#   hydrogen_seed: 1062893145
+#   near_ph_window: 1.0
+#   histidine_proximity_angstrom: 5.0
+#   n_hydrogens_before: 2329
+#   n_hydrogens_after: 2328
+#   frozen_residues:
+#   - B:1
+#   overrides: []
+#   assignments:
+#   - chain: A
+#     resid: '893'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HID
+#     final_variant: HID
+#   - chain: A
+#     resid: '894'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '898'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '899'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '902'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '905'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '907'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HIE
+#     final_variant: HIE
+#   - chain: A
+#     resid: '910'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '915'
+#     insertion_code: ''
+#     residue: CYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '917'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '921'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '925'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '930'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '933'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '935'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '936'
+#     insertion_code: ''
+#     residue: CYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '940'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HID
+#     final_variant: HID
+#   - chain: A
+#     resid: '945'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '947'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '949'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '956'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HID
+#     final_variant: HID
+#   - chain: A
+#     resid: '957'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '958'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HID
+#     final_variant: HID
+#   - chain: A
+#     resid: '961'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '963'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '965'
+#     insertion_code: ''
+#     residue: CYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '966'
+#     insertion_code: ''
+#     residue: CYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '967'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '968'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '971'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '972'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '979'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '988'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '993'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HID
+#     final_variant: HID
+#   - chain: A
+#     resid: '1008'
+#     insertion_code: ''
+#     residue: CYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1009'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1015'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HIE
+#     final_variant: HIE
+#   - chain: A
+#     resid: '1018'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HID
+#     final_variant: HID
+#   - chain: A
+#     resid: '1021'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HID
+#     final_variant: HID
+#   - chain: A
+#     resid: '1023'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1032'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1034'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1038'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1041'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1046'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1050'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1052'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HID
+#     final_variant: HID
+#   - chain: A
+#     resid: '1053'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1059'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1060'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1062'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1071'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1072'
+#     insertion_code: ''
+#     residue: CYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1074'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1075'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1077'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1083'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1093'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1097'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HIE
+#     final_variant: HIE
+#   - chain: A
+#     resid: '1098'
+#     insertion_code: ''
+#     residue: CYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1099'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1107'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1110'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1126'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1129'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1132'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1138'
+#     insertion_code: ''
+#     residue: ASP
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1139'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1140'
+#     insertion_code: ''
+#     residue: CYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1142'
+#     insertion_code: ''
+#     residue: CYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1143'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1146'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HID
+#     final_variant: HID
+#   - chain: A
+#     resid: '1149'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1151'
+#     insertion_code: ''
+#     residue: CYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1153'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1155'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1163'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1170'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1173'
+#     insertion_code: ''
+#     residue: HIS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes:
+#     - addHydrogens chose HID
+#     final_variant: HID
+#   - chain: A
+#     resid: '1174'
+#     insertion_code: ''
+#     residue: GLU
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   - chain: A
+#     resid: '1175'
+#     insertion_code: ''
+#     residue: LYS
+#     variant: null
+#     source: openmm addHydrogens(pH 7.0)
+#     pka: null
+#     model_pka: null
+#     near_ph: false
+#     coupled: false
+#     notes: []
+#     final_variant: null
+#   unsupported: []
+#   histidine_proximity: []
+#   warnings: []
+#   propka: null
+# outputs:
+#   system_xml:
+#     path: built.xml
+#     bytes: 14461933
+#     sha256: 64bac6937ae88e4a365f83554c5cdfaa0a7aad6bf245f4045384f9c9656e80ac
+#   topology_pdb:
+#     path: built.pdb
+#     bytes: 4296663
+#     sha256: a7f00869e3472332332dd6eb38dd8ec6e32298eddd2424072c642aece3f8e97c
+#   solute_topology_pdb:
+#     path: built.solute.pdb
+#     bytes: 381960
+#     sha256: 16b0f625071e9498dbe518207eeb8256060e0effb56db138ed07083fae6e73bc
+#   ligand_mapping:
+#     path: ligand_mapping.json
+#     bytes: 7783
+#     sha256: 1e3dfe7853df67c17bf317015d3c0bf7cf57ec27a441d0addee3d92299cb4dfe
+# ligand_packages:
+#   catalog_searched:
+#   - ../../../catalog
+#   placed_in: ligands
+#   packages:
+#   - reference: LOCAL-DKNAYSZNMZIMIZ/param_bd1388e5fe3e
+#     compound_id: LOCAL-DKNAYSZNMZIMIZ
+#     aliases: []
+#     parameter_id: param_bd1388e5fe3e
+#     template_name: MDT_param_bd1388e5fe3e
+#     residue_name: L31
+#     package_sha256: 155f6c98063100a1cfbf05f0332cf9f6e9447792f188e7b257603e46ec728269
+#     parameter_digest: 65a778b83e94f384eadb4d26e1fb8a245d0092d09f1e08742c531001e7dbb2af
+#     chemical_state_digest: 074f6ab7dcb4c80adcfaf0e4e2d944be1a3247d1c5d9bccad611e57c472ec73e
+#     forcefield: openff-2.2.1
+#     charge_method: am1bcc
+#     charge_backend_id: ambertools-sqm
+#     charge_backend_recorded: true
+#     net_formal_charge: 0
+#     n_atoms: 32
+#     path: ligands/LOCAL-DKNAYSZNMZIMIZ/param_bd1388e5fe3e
+#     how: written
+#   attached: null
+#   instances:
+#   - selector:
+#       resname: ''
+#       chain: B
+#       resid: '1'
+#       insertion_code: ''
+#     residue_name: L31
+#     parameters: LOCAL-DKNAYSZNMZIMIZ/param_bd1388e5fe3e
+#     atom_map: null
+# ===== END md-tools machine record =====
