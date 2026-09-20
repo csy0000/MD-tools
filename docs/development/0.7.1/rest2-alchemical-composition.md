@@ -10,7 +10,8 @@ calculation of relative protein-ligand binding affinities*, PNAS 109(6):1937-194
 <https://doi.org/10.1073/pnas.1114017109> (FEP/REST). The two pieces being composed are
 0.6.1's selective REST2 (`md_tools.rest2.hamiltonian`, convention `rest2-unscaled-torsions` v3) and
 0.7.0's Amber18 softcore Hamiltonian
-([softcore-hamiltonian.md](../0.7.0/softcore-hamiltonian.md)).
+(`docs/development/0.7.0/softcore-hamiltonian.md`, which lives on the `0.7.0` branch with the
+implementation and its evidence).
 
 ## 0. The one design decision everything else follows from
 
