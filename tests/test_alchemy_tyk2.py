@@ -162,6 +162,41 @@ def test_the_ligand_legs_build_and_their_plans_recover_both_endpoints(tmp_path):
 
 
 @pytest.mark.slow
+def test_the_internal_pair_shift_is_real_and_accounted_on_a_ligand_wider_than_the_cutoff(tmp_path):
+    """The one place the moved internal pairs are NOT worth zero, and the reason they moved.
+
+    A unique group's non-excluded internal pairs are carried by one CustomBondForce at BOTH ends,
+    uncut and vacuum Coulomb, with a zero exception in each NonbondedForce. Where the whole group
+    fits inside the cutoff that is exactly the force field's own treatment and the shift is zero
+    -- which is why every miniature fixture passed while the construction was still asymmetric.
+    These ligands do not fit: S3 measured 74 intra-ligand pairs beyond 0.9 nm on ejm_31 and a
+    shift of -0.076484 kJ/mol, dominated by Lennard-Jones, and it scales with the pair count
+    beyond the cutoff (74 / 108 / 146 for ejm_31 / ejm_42 / ejm_43) rather than with the extent.
+
+    So this asserts BOTH halves: the shift is not zero (the test would pass vacuously on any
+    smaller ligand, and did), and the accounting closes with it named.
+    """
+    from md_tools.alchemy.topology import build_decoupling_plan
+    from md_tools.alchemy.topology_recovery import endpoint_accounting
+    from tests.alchemy_fixtures import ENERGY_TOL_KJ, independent_reference
+
+    _script(tmp_path, "--ligand", "ejm_31", "--kind", "solvated")
+    env = _environment(tmp_path / "ejm_31" / "solvated" / "build", "ejm_31", "solvated")
+    a = _package("ejm_31")
+    plan = build_decoupling_plan(a, env, restraint=None)
+    reference, index = independent_reference(plan, env, a, "A")
+    accounting = endpoint_accounting(plan, "A", reference, index)
+
+    assert accounting["internal_pairs_moved"] == len(
+        plan.record["nonbonded"]["unique_group_internal"]["pairs"])
+    # S3's number for this ligand, to the precision a single configuration reproduces
+    assert accounting["internal_pair_shift"] == pytest.approx(-0.076484, abs=2e-4), accounting
+    # and the residual still closes, which is the point: the shift is ACCOUNTED, not absorbed
+    assert max(abs(v) for v in accounting["residual"].values()) < ENERGY_TOL_KJ, accounting
+    assert abs(accounting["raw_total_difference"]) > 1e-2
+
+
+@pytest.mark.slow
 def test_single_topology_is_refused_on_a_constrained_bond_and_dual_builds(tmp_path):
     """The H -> heavy mapping single topology would need makes a constraint appear."""
     from md_tools.alchemy.topology import TopologyError, build_topology_plan
