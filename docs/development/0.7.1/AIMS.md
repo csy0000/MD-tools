@@ -3,7 +3,7 @@
 **Planning only.** This branch carries aims and references. No implementation is authorized on it
 during the 0.6.1 / 0.7.0 wave, and nothing here is available in any release.
 
-Baseline: `dev-0.6.0` at `e524e0e`. Prerequisite: a completed and integrated 0.7.0 — every
+Baseline: `e524e0e` on the 0.6.0 development line (released as `v0.6.0` at `3927105`; the `dev-0.6.0` branch has since been deleted). Prerequisite: a completed and integrated 0.7.0 — every
 milestone below composes the alchemical Hamiltonian 0.7.0 defines, and none of them can be
 validated against a Hamiltonian that does not yet exist.
 

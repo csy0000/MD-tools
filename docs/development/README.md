@@ -4,7 +4,7 @@
 or under construction, on branches that have not been released. What the package does today is in
 the [documentation index](../README.md).
 
-Four branches were opened on 2026-09-18 from `dev-0.6.0` at `e524e0e`, following the
+Four branches were opened on 2026-09-18 from `e524e0e` on the 0.6.0 development line (released as `v0.6.0` at `3927105`; the `dev-0.6.0` branch has since been deleted), following the
 [20260918 parallel development instruction](../claudecode-instructions/20260918_parallel-0.6.1-0.7.x-development.md).
 That instruction is the shared roadmap; the aims pages below specialize it per branch.
 
@@ -14,6 +14,11 @@ That instruction is the shared roadmap; the aims pages below specialize it per b
 | [0.7.0](0.7.0/AIMS.md) | conventional alchemy: `md-openmm combine-topology`, Amber18 softcore, TI and FEP, solvation and binding free energies | under construction |
 | [0.7.1](0.7.1/AIMS.md) | FEP–REST2, EDS, RE-EDS, ATM | **planning only** — aims and references, no implementation |
 | [0.7.2](0.7.2/AIMS.md) | grand-canonical and nonequilibrium water sampling | **planning only** — aims and references, no implementation |
+
+[The protein–ligand campaign](protein-ligand-campaign.md) is the shared target of all four
+branches: one prepared TYK2 system with three congeneric ligands, on which 0.6.1 demonstrates
+selective REST2, 0.7.0 ABFE and RBFE, 0.7.1 their combination, and 0.7.2 multi-state EDS/RE-EDS.
+It also fixes the tutorial layout.
 
 [Shared contracts](shared-contracts.md) holds the records 0.6.1 and 0.7.0 must agree on before
 their code diverges: selection identity, the alchemical topology plan, and the naming of
