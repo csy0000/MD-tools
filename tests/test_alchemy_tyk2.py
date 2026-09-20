@@ -230,7 +230,8 @@ def test_an_abfe_decoupling_leg_in_the_complex_needs_a_restraint_and_records_it(
     [recorded] = complex_leg.record["restraints"]
     assert recorded["role"] == "standard-state" and recorded["kind"] == "boresch"
     assert recorded["ligand_atoms"] == ligand_atoms
-    assert len(recorded["environment_atom_labels"]) == 3 and ":" in recorded["environment_atom_labels"][0]
+    labels = recorded["environment_atom_labels"]
+    assert len(labels) == 3 and ":" in labels[0]
     assert "the plan records it, and does not build it" in recorded["built_by"]
 
     # the two legs of the ABFE cycle: the same ligand Hamiltonian, one restraint between them

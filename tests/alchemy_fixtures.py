@@ -189,7 +189,8 @@ def independent_reference(plan, environment, pkg, side: str,
 
     The environment minus its ligand, plus *pkg* as a fresh residue at the plan's coordinates,
     parameterised by `ForceField(*forcefield_files)` -- the files the environment's build record
-    names -- with the package's ffxml loaded through the ligand module's own loader, under the environment's recorded nonbonded settings. Returns the
+    names -- with the package's ffxml loaded through the ligand module's own loader, under the
+    environment's recorded nonbonded settings. Returns the
     System and, for each of its particles, the plan particle it is.
     """
     from openmm import NonbondedForce, app, unit

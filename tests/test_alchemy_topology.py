@@ -1316,7 +1316,8 @@ def test_lambda_zero_is_the_environment_and_lambda_one_is_the_ligand_absent(eta,
     x = plan.positions_nm
 
     # lambda 0: the environment as built, with the ligand fully present
-    accounting = endpoint_accounting(plan, "A", water.system, list(range(water.system.getNumParticles())))
+    every_particle = list(range(water.system.getNumParticles()))
+    accounting = endpoint_accounting(plan, "A", water.system, every_particle)
     assert max(abs(v) for v in accounting["residual"].values()) < ENERGY_TOL_KJ, accounting
 
     # lambda 1: environment-without-ligand + the ligand's own Hamiltonian + the dispersion shift
