@@ -94,3 +94,35 @@ def test_set_state_reaches_a_live_cuda_context():
         moved = h.energy(live, state)
         fresh = _cuda_context(h.system, positions, openmm.VerletIntegrator(0.001), "mixed")
         assert moved == pytest.approx(h.energy(fresh, state), rel=1e-6, abs=1e-3), t
+
+
+@pytest.mark.parametrize("precision", ["mixed", "double"])
+def test_npt_on_cuda_leaves_nothing_stale(precision):
+    """NPT on the device: a MonteCarloBarostat moves the box during a run, and the Hamiltonian's
+    energy at every state still equals a fresh Context's at that box and those coordinates.
+
+    The Reference twin (test_alchemy_hamiltonian_fixture.py::test_a_barostat_moving_the_box_leaves
+    _nothing_stale) checks the same property in float64 and catches it on any machine; it is not
+    CUDA evidence, and NPT on CUDA was an uncovered row until this test. What only the device can
+    show: the PME grid, the dispersion coefficients and the softcore delta's kappa are fixed at
+    build, and CUDA rebuilds none of them when the barostat rescales the box.
+    """
+    sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
+    for s in (sa, sb):
+        s.addForce(openmm.MonteCarloBarostat(1.0, 300.0, 5))
+    h = build_hamiltonian(sa, sb, a, b)
+    live = _cuda_context(h.system, x, openmm.LangevinMiddleIntegrator(300.0, 1.0, 0.0005), precision)
+    state = dict(zip(NAMES, (0.5, 0.5, 0.5)))
+    h.set_state(live, state)
+    openmm.LocalEnergyMinimizer.minimize(live, 10.0, 200)
+    v0 = live.getState().getPeriodicBoxVolume()._value
+    live.getIntegrator().step(500)
+    st = live.getState(getPositions=True)
+    assert st.getPeriodicBoxVolume()._value != v0, "the barostat never moved the box"
+    box, pos = st.getPeriodicBoxVectors(), st.getPositions(asNumpy=True)._value
+    tol = {"mixed": 5e-3, "double": 1e-6}[precision]
+    for t in ((0.0, 0.0, 0.0), (0.25, 0.5, 0.75), (1.0, 1.0, 1.0)):
+        fresh = _cuda_context(h.system, pos, openmm.VerletIntegrator(0.001), precision)
+        fresh.setPeriodicBoxVectors(*box)
+        moved, again = h.energy(live, dict(zip(NAMES, t))), h.energy(fresh, dict(zip(NAMES, t)))
+        assert moved == pytest.approx(again, abs=tol), (precision, t, moved, again)

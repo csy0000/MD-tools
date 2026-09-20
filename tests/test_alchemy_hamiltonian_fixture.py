@@ -576,3 +576,49 @@ def test_a_barostat_moving_the_box_leaves_nothing_stale():
     fresh.setPeriodicBoxVectors(*box)
     for t in DIAGONAL + OFF_DIAGONAL:
         assert h.energy(live, _state(t)) == pytest.approx(h.energy(fresh, _state(t)), abs=1e-8), t
+
+
+@pytest.mark.parametrize("dispersion", [False, True], ids=["no-lrc", "lrc"])
+@pytest.mark.parametrize("tail", [False, True], ids=["no-internal-pairs", "internal-pairs"])
+def test_the_decoupling_shape_an_abfe_leg_needs(dispersion, tail):
+    """S2's proposed ABFE `decoupling` mode, measured rather than assumed: the whole ligand is the
+    unique region, nothing appears, and there is no mapped core.
+
+    The questions it answers: a unique group bonded to nothing in the environment (no junction);
+    the ligand's internal terms physical at BOTH ends, so the decoupled end is a physical molecule
+    in vacuum inside the box; and the end states still reproduced, dispersion correction included.
+    """
+    sa, _sb, _a, _b, x = fx.build(True, dispersion=dispersion, tail=tail)
+    # the whole ligand: the molecule, and the five-atom chain when the fixture carries it. A small
+    # ligand has NO non-excluded internal pair (everything is within three bonds); the tail gives
+    # it 1-5 pairs. Both are legitimate ABFE shapes, so both are tested.
+    ligand = sorted(set(range(9)) | (set(range(12, 16)) if tail else set()))
+    da, db = fx.decoupling_pair(sa, ligand)
+    h = build_hamiltonian(da, db, ligand, set())
+    assert h.record["particles"]["b_only"] == []
+    assert (h.record["plan_internal_pairs_checked"] > 0) is tail
+    c = _context(h.system, x)
+    e_a = _context(da, x).getState(getEnergy=True).getPotentialEnergy()._value
+    e_b = _context(db, x).getState(getEnergy=True).getPotentialEnergy()._value
+    assert abs(e_a - e_b) > 1.0                        # decoupling is a real change (~10 kJ/mol
+    #                                                    here: a small, mostly non-polar ligand)
+    assert h.energy(c, _state((0, 0, 0))) == pytest.approx(e_a, abs=1e-8)
+    assert h.energy(c, _state((1, 1, 1))) == pytest.approx(e_b, abs=1e-8)
+    # the ligand's intramolecular energy is lambda-independent: the unscaled group
+    internal = FORCE_GROUPS["softcore_internal"]
+    energies = {v: h.energy_components(c, _state((v, v, v)))["softcore_internal"]
+                for v in (0.0, 0.5, 1.0)}
+    assert len(set(round(e, 9) for e in energies.values())) == 1, energies
+    # and the derivative is still the finite-difference limit at the decoupled end
+    parts = h.derivative_components(c, _state((1.0, 1.0, 1.0)))
+    groups = set(FORCE_GROUPS.values()) - {FORCE_GROUPS["dispersion"]}
+
+    def energy(t):
+        h.set_state(c, _state(t))
+        return c.getState(getEnergy=True, groups=groups).getPotentialEnergy()._value
+    for k, name in enumerate(NAMES):
+        want = sum(v for g, v in parts[name].items() if g != "dispersion")
+        fds = [_fd(lambda v, k=k: energy([1.0 if i != k else v for i in range(3)]), 1.0, step)
+               for step in (1e-2, 1e-3, 1e-4)]
+        best = min(abs(want - r) for r in _richardson(fds))
+        assert best < 2e-5 * max(1.0, abs(want)), (name, want, fds)
