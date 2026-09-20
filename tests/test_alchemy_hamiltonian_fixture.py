@@ -540,3 +540,29 @@ def test_environment_virtual_sites_are_carried_and_softcore_ones_refused():
         s.setVirtualSite(sites[0], openmm.TwoParticleAverageSite(7, 0, 0.5, 0.5))
     with pytest.raises(AlchemicalHamiltonianError, match="softcore particle"):
         build_hamiltonian(sa, sb, a, b)
+
+
+def test_a_barostat_moving_the_box_leaves_nothing_stale():
+    """NPT: with a MonteCarloBarostat in both end states (copied once, as an identical force), a
+    run whose box moves gives, at every lambda, the energy a fresh Context reports at that box and
+    those coordinates. Nothing box-dependent is cached: PME alpha and grid are fixed at build, the
+    softcore delta's kappa is a constant, both dispersion pieces are C/V at the current volume."""
+    sa, sb, a, b, x = fx.build(True, dispersion=True)
+    for s in (sa, sb):
+        s.addForce(openmm.MonteCarloBarostat(1.0, 300.0, 1))
+    h = build_hamiltonian(sa, sb, a, b)
+    live = openmm.Context(h.system, openmm.LangevinMiddleIntegrator(300.0, 1.0, 0.0005),
+                          openmm.Platform.getPlatformByName("Reference"))
+    live.setPositions(x)
+    h.set_state(live, _state((0.5, 0.5, 0.5)))
+    openmm.LocalEnergyMinimizer.minimize(live, 10.0, 100)
+    v0 = live.getState().getPeriodicBoxVolume()._value
+    live.getIntegrator().step(40)
+    st = live.getState(getPositions=True)
+    assert st.getPeriodicBoxVolume()._value != v0, "the barostat never moved the box"
+    box = st.getPeriodicBoxVectors()
+    pos = st.getPositions(asNumpy=True)._value
+    fresh = _context(h.system, pos)
+    fresh.setPeriodicBoxVectors(*box)
+    for t in DIAGONAL + OFF_DIAGONAL:
+        assert h.energy(live, _state(t)) == pytest.approx(h.energy(fresh, _state(t)), abs=1e-8), t

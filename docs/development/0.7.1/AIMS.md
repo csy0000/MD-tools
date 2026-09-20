@@ -18,9 +18,11 @@ EDS or ATM into a lambda interpolation to make them look alike.
 
 ### 1. FEP–REST2
 
-Compose alchemical coupling with the selective REST2 of 0.6.1 in ONE defined Hamiltonian, with a
-term-by-term derivation. Specify the exchange topology (which pairs may swap, over which
-coordinate) and the cross-state evaluations each exchange needs.
+Compose alchemical coupling with the selective REST2 of 0.6.1 in ONE defined Hamiltonian, following
+Wang, Berne and Friesner, PNAS 109(6):1937-1942 (2012). The derivation is
+[rest2-alchemical-composition.md](rest2-alchemical-composition.md): the composed Hamiltonian term by
+term, the two reductions and how each is tested, the exchange topology, and what it costs and buys
+on a TYK2 edge. Nothing on this page authorises implementation.
 
 Two reductions are acceptance criteria, not remarks:
 - at `tau = 0` it must reduce exactly to the 0.7.0 alchemical Hamiltonian;
