@@ -56,6 +56,27 @@ then T4/T5 (ABFE with restraints). Each is a separate request with its cards and
 sized from P5 — never a block of GPU-days. The faster card is excluded from anything with exchange: its
 speed advantage is wasted behind an exchange barrier and it must not join a homogeneous ladder.
 
+## For the TI-FEP tutorial, decided now rather than at writing time
+
+Three things the tutorial must say, all of them learned from M2.6 rather than from the campaign
+it precedes:
+
+1. **"Validated against AMBER" is true of the ENERGIES and false of the free energy.** M2.6a
+   corroborates the Hamiltonian at fixed coordinates to ~1e-4 kJ/mol against a tolerance declared
+   beforehand. M2's ΔΔG has no independent engine behind it while M2.6c/d are unrun. The tutorial
+   keeps those two sentences apart; it is the single most temptingly quotable line in the branch.
+2. **Only ΔΔG crosses engines.** A reader comparing a per-leg number against an AMBER tutorial's
+   will find a difference that is a convention, not an error: in `mode="dual"` with no common
+   atoms MD-tools' vacuum leg is exactly 0 (its Hamiltonian does not depend on λ — asserted by
+   `test_a_dual_vacuum_leg_with_no_common_atoms_carries_no_information`), while AMBER scales each
+   copy's whole potential with λ and reports the molecules' internal free-energy difference. Both
+   reach the same ΔΔG.
+3. **Why that was visible at all**: the row had already been corrected once, before any number
+   existed, from comparing hybrid-against-dual to dual-against-dual. Had it run as first written,
+   the convention difference and an engine difference would have arrived together and neither
+   could have been attributed. The tutorial says this in its own words, because it is the habit
+   being taught, not an anecdote.
+
 ## What each production run must carry
 
 Unchanged from the registered rows: experiment reported and never gated; the internal checks
