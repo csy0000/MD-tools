@@ -84,6 +84,30 @@ Both across the topology-building modes the branch already supports, so the tuto
 single, dual and hybrid topology actually change. Hydration on ethane/chloroethane stays the
 development fixture; TYK2 is the demonstration.
 
+#### Replica exchange over lambda (the user, 2026-09-21)
+
+Today's windows are INDEPENDENT: each samples at a fixed lambda and the estimators combine them
+afterwards. The user asks for exchange between lambda windows as the tutorial's advanced example,
+so 0.7.0 gains it as a milestone of its own:
+
+- **A3b — lambda exchange (Hamiltonian replica exchange).** Neighbouring lambda windows attempt
+  swaps, through `md_tools.remd` — the one MPI and exchange authority — not a second
+  implementation. Every window stays at the same physical temperature; what is exchanged is the
+  Hamiltonian's lambda, exactly as REST2 exchanges tau.
+
+The design question to settle first, because the two ladders differ where it matters: a REST2 rung
+is a SAVED SYSTEM on disk and `md-run` reads it from the group file, while a lambda window is ONE
+System with different Context parameter values. The saved-state rule exists so no Hamiltonian is
+re-derived at run time; a lambda window does not re-derive anything, it sets a recorded parameter.
+Whether that means the ladder driver learns a second rung kind, or alchemy supplies rungs through
+the caller-supplied path with its declaration and per-rung provenance, is S3 and S4's to answer
+together before anything is written.
+
+What must hold either way: a series follows a STATE, not a walker (`cv_state<i>`-style, with the
+walker recorded); exchanges never rescale velocities; acceptance uses independently evaluated
+reduced potentials, which S4's sample record already carries per origin state; and the tutorial
+reports acceptance per neighbour pair and round trips, as the REST2 pages do.
+
 ### 0.7.1 — REST2-TI / REST2-FEP
 
 The composition of 0.6.1 and 0.7.0, following Wang, Berne and Friesner, *On achieving high
@@ -114,7 +138,7 @@ One directory per method, under `docs/tutorial/protein-ligand-complex/`:
 | directory | shows |
 |---|---|
 | `REST2/` | simultaneous ligand + pocket-sidechain scaling on 4 GPUs |
-| `TI-FEP/` | ABFE and RBFE with Amber18 softcore |
+| `TI-FEP/` | ABFE and RBFE with Amber18 softcore, and — as the advanced example — the same edge with replica exchange over lambda |
 | `REST2-TI-FEP/` | the combination, and when it is worth its cost |
 | `EDS-RE-EDS/` | three ligands in one multi-state calculation |
 
