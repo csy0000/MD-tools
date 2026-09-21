@@ -111,7 +111,11 @@ __all__ = [
 #:    part of ligand_hamiltonian_sha256 in any mode (S0 ruling, 2026-09-20).
 #: 4: adds `junction_policy`, so every result STATES which construction produced it. The two
 #:    policies are different physics, not a formatting difference, so it is an identity field.
-PLAN_SCHEMA = "md-tools-topology-plan/4"
+#: 5: a unique group's non-excluded internal pairs are carried by INTERNAL_FORCE_NAME at BOTH
+#:    endpoints, with a zero carrier exception in each NonbondedForce (`carried_at`,
+#:    `exception_slot`). The term becomes lambda-independent, which moves
+#:    ligand_hamiltonian_sha256 for every plan with a unique group.
+PLAN_SCHEMA = "md-tools-topology-plan/5"
 #: What a stored record's identity is compared on when its digest no longer matches: if these all
 #: agree, only the record's shape moved and the physics is the same.
 PLAN_IDENTITY_FIELDS = ("ligand_hamiltonian_sha256", "mode", "junction_policy", "atom_map.sha256",
@@ -1151,9 +1155,28 @@ def build_topology_plan(package_a: LigandPackage, package_b: Optional[LigandPack
                                 "a": list(pa), "b": list(pb),
                                 "unique_group_internal": internal(key)})
 
-    # the non-excluded internal pairs: at the physical end the NonbondedForce computes them; at the
-    # dummy end the particles carry no charge or epsilon, so they are carried by one
-    # CustomBondForce, present in both Systems, zero at the physical end.
+    # The non-excluded internal pairs, carried by ONE CustomBondForce at BOTH ends, with a zero
+    # exception in each NonbondedForce so nothing is counted twice.
+    #
+    # This used to be asymmetric -- the NonbondedForce computed them at the physical end and the
+    # CustomBondForce only at the dummy end -- and the two are not the same function. The
+    # NonbondedForce cuts at the environment's cutoff and treats electrostatics with PME; the
+    # CustomBondForce cannot cut and is vacuum Coulomb. For a ligand that fits inside the cutoff
+    # the difference is exactly zero, which is why every miniature fixture passed. S3 measured it
+    # on the 32-atom TYK2 ligand ejm_31: 74 intra-ligand pairs lie beyond 0.9 nm, and U(0) missed
+    # System A by 0.076484 kJ/mol.
+    #
+    # Symmetric is the right fix, and NOT because uncut is more correct -- it is not; System A's
+    # cut treatment is the force field's. It is because under the asymmetric construction those
+    # pairs are LAMBDA-DEPENDENT: they enter dU/dlambda with nothing correcting them, and the
+    # decoupling derivation's premise that the ligand's intramolecular Hamiltonian cancels between
+    # the legs of a cycle is false by exactly that amount. Symmetric, it is one modified but
+    # lambda-independent function, the same in both legs, and it cancels in a ddG exactly --
+    # provided both legs are built alike, which `matched_legs` and `ligand_hamiltonian_sha256`
+    # already enforce. A small error that cancels beats a smaller one that does not.
+    #
+    # Endpoint recovery therefore ACCOUNTS for the shift rather than absorbing it in a tolerance:
+    # `endpoint_accounting` reports it per force class as `internal_pair_shift`.
     internal_pairs = []
     for n, g in enumerate(unique_groups):
         source = package_b if g["dummy_at"] == "A" else package_a
@@ -1180,14 +1203,22 @@ def build_topology_plan(package_a: LigandPackage, package_b: Optional[LigandPack
             # never periodic, whatever the environment: the term must be identical in every leg
             # of a cycle for it to cancel, so no box may enter it (contract section 4)
             force.setUsesPeriodicBoundaryConditions(False)
-            endpoint = "A" if system is system_a else "B"
             for k, pair in enumerate(internal_pairs):
-                params = pair["physical"] if pair["dummy_at"] == endpoint else \
-                    [0.0, pair["physical"][1], 0.0]
-                if force.addBond(*pair["atoms"], params) != k:
+                # the SAME parameters in both Systems: this force is lambda-independent
+                if force.addBond(*pair["atoms"], pair["physical"]) != k:
                     raise AssertionError("internal pair layouts diverged")
             system.addForce(force)
         internal_force = INTERNAL_FORCE_NAME
+        # and a zero exception in each NonbondedForce, so the pair is carried once. At the dummy
+        # end the particles already have charge 0 and epsilon 0, so this changes nothing there;
+        # at the physical end it removes the pair from the cutoff/PME treatment, including its
+        # reciprocal-space part, which OpenMM subtracts for an exception.
+        for pair in internal_pairs:
+            i, j = pair["atoms"]
+            slot = nb_a.addException(i, j, 0.0, 1.0, 0.0)
+            if nb_b.addException(i, j, 0.0, 1.0, 0.0) != slot:
+                raise AssertionError("internal pair exception layouts diverged")
+            pair["exception_slot"] = slot
     exclusions = []
     a_ligand = sorted(hyb_a) if dual else a_only
     for i in a_ligand:
@@ -1504,7 +1535,13 @@ def build_topology_plan(package_a: LigandPackage, package_b: Optional[LigandPack
                 "convention": "a unique group's own exceptions and non-excluded pairs keep "
                               "their physical values at its dummy end (Amber: interactions "
                               "among the disappearing atoms are not changed); vacuum Coulomb "
-                              "and Lennard-Jones, per connected group, never across groups",
+                              "and Lennard-Jones, per connected group, never across groups. The "
+                              "non-excluded pairs are carried by the named force at BOTH ends, "
+                              "with a zero exception in each NonbondedForce, so the term is "
+                              "lambda-independent; the cost is that it is uncut and vacuum "
+                              "Coulomb at the physical end too, which endpoint recovery accounts "
+                              "for rather than absorbs (Amber's gti_cut = 1)",
+                "carried_at": "both endpoints",
                 "coulomb_constant_kj_mol_nm_e2": COULOMB_CONSTANT,
                 "force": internal_force,
                 "groups": unique_groups,

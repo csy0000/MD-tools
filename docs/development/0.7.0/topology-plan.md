@@ -63,7 +63,8 @@ are dummies.
   Its own exceptions keep their physical values in the NonbondedForce; its non-excluded internal
   pairs are carried by one `CustomBondForce` named `UniqueGroupInternalNonbonded` (vacuum
   Coulomb, constant 138.93545764438198, plus Lennard-Jones, Lorentz-Berthelot), present in both
-  Systems and zero at the physical end, where the NonbondedForce computes them. Per connected
+  Systems **with the same parameters at both ends**, and a zero CARRIER exception in each
+  NonbondedForce so the pair is counted once (schema /5; see below). Per connected
   group, never across two groups: two groups on different anchors are separated by physical
   coordinates, and a pair between them would not separate. In dual topology each whole ligand is
   one group. `record.nonbonded.unique_group_internal` lists the groups and pairs.
@@ -244,6 +245,7 @@ sites; a constraint changing across the path.
 
   ```text
   E_endpoint(x) = E_reference(x_phys) + E_dummy(x) + dE_dispersion + E_restraint
+                  + dE_internal_pairs
   ```
 
   with E_dummy (retained bonded terms, plus each unique group's internal exceptions and pairs)
@@ -251,6 +253,44 @@ sites; a constraint changing across the path.
   OpenMM's dispersion correction. **That correction averages over every particle, zero-epsilon
   dummies included**, so a dummy shifts it (-1.2e-4 kJ/mol for one dummy in the fixture box). It
   is a real term, not noise, and a Hamiltonian that moves LJ out of `NonbondedForce` changes it.
+
+  `dE_internal_pairs` is the last term. Because the internal pairs are carried at both ends by a
+  force that cannot cut, the physical endpoint no longer treats them as the force field does --
+  cut at the environment's cutoff, electrostatics by PME. The difference is REPORTED
+  (`internal_pair_shift`, with `internal_pairs_moved`), never absorbed into a tolerance. It is
+  the NET number: what this construction computes for those pairs minus what the force field did.
+  The removal on its own is the whole intramolecular nonbonded energy -- -993.97 kJ/mol on
+  ejm_31 -- and almost all of it returns through the `CustomBondForce`.
+
+### Why the internal pairs are carried at BOTH ends
+
+They used to be carried only at the dummy end, the `NonbondedForce` computing them at the
+physical end. For a group that fits inside the cutoff those are the same function and the
+difference is exactly zero, which is why every miniature fixture passed. S3 measured the real
+case on the campaign ligands (solvated, 0.9 nm cutoff, built coordinates):
+
+| ligand | atoms | internal pairs | beyond cutoff | shift (kJ/mol) |
+|---|---|---|---|---|
+| `ejm_31` | 32 | 347 | 74 | -0.076484 |
+| `ejm_42` | 35 | 428 | 108 | -0.089954 |
+| `ejm_43` | 38 | 518 | 146 | -0.126622 |
+
+It tracks the pair COUNT beyond the cutoff rather than the ligand's extent, which barely moves
+across the three: it is the ligand's surface against a fixed cutoff. Lennard-Jones dominates; the
+real-space electrostatic part is two orders smaller.
+
+The fix is symmetry, and NOT because uncut is more correct -- it is not; the force field's cut
+treatment is the physical one. It is because under the asymmetric construction those pairs are
+**lambda-dependent**: they enter `dU/dlambda` with nothing correcting them, and the decoupling
+derivation's premise that the ligand's intramolecular Hamiltonian cancels between the legs of a
+cycle is false by exactly that amount. Carried symmetrically it is one modified but
+lambda-independent function, the same in both legs, and it cancels in a ddG exactly -- provided
+both legs are built alike, which `matched_legs` and `ligand_hamiltonian_sha256` enforce. A small
+error that cancels beats a smaller one that does not. This is Amber's `gti_cut = 1`.
+
+Applying the cutoff inside the internal force was considered and rejected: a `CustomBondForce`
+cannot cut, and cutting a term whose distance changes during sampling makes the energy
+discontinuous.
 
 The tests build the reference endpoint from scratch with `ForceField("amber14/tip3p.xml")` plus
 the package's ffxml, and hold every force class to 1e-7 kJ/mol on the Reference platform, after
