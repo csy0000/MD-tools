@@ -51,11 +51,11 @@ build records. Four methods preparing their own protein four times is four diffe
 2. **Ligand plus pocket sidechains.** The ligand and the sidechains of the residues lining the
    pocket, 8 rungs, tau 0 → 0.25.
 
-**A ladder gets HOMOGENEOUS cards** (the user, 2026-09-21). On this machine card 0 is slightly
+**A ladder gets HOMOGENEOUS cards** (the user, 2026-09-21). On this machine one card is slightly
 faster than the rest, so it is excluded from every REMD run: at each exchange every rank waits for
 the slowest rung, so a faster card cannot make the ladder faster — it idles — and it makes
-per-rung throughput figures incomparable. The TYK2 ladders run on cards 1–4. Independent work
-(alchemical windows, AIS paths) may use card 0 freely, but must then say which card produced which
+per-rung throughput figures incomparable. The TYK2 ladders run on four identical cards. Independent work
+(alchemical windows, AIS paths) may use the faster card freely, but must then say which card produced which
 window rather than comparing their throughput as equals.
 
 Both on 4 GPUs (8 rungs over 4 cards, 2 ranks per card, through the existing MPI/MPS rules), with
