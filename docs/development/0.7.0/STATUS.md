@@ -68,7 +68,7 @@ A2 — individual development does not.
   - M3.4: `dU/dλ_bonded` = 0.00 at both ends in every retain-all leg; separable +619/−225, +566/−244, +256/−503 — S3's 660.77 decomposition and S2's 610.585 angle, sampled.
   - Per-leg ΔG differs by construction and is ungated, as registered; S3's cutoff asymmetry is in both arms and cancels from the gated difference. S4 checked the suspicious number first: retain-all's three vacuum repeats agree to 0.0009 kcal/mol with differing stream digests, so it is genuinely better determined, not a duplicated trajectory.
 - **M2 RE-RUN PASSES EVERY GATE**, 2026-09-21 15:28 (S4 `2f06ceb`, code at `c6ca0ab`; 156 windows,
-  9 legs, 0 skips, 2 h 56 m, all on card 0, now released). **Same thresholds, same schedule, same
+  9 legs, 0 skips, 2 h 56 m, all on ONE card -- so there is no per-card throughput caveat -- now released). **Same thresholds, same schedule, same
   fixture as the failed campaign -- only the construction differs**, which is what makes it evidence
   rather than a second opinion.
   - M2.1 PASS: overlap 0.038-0.084 in all nine legs, 216-529 decorrelated samples (separable had four legs under the floor).
@@ -90,7 +90,7 @@ A2 — individual development does not.
   arithmetic: run 2 measures ns/day on the real complex and every later request is sized from the
   measurement. A cost table nobody has re-derived is how a campaign gets granted at a third of its
   true price.
-- **The grant sequence is one request per run**, each naming cards and hours, card 0 excluded from
+- **The grant sequence is one request per run**, each naming cards and hours, the faster card excluded from
   anything with exchange in it. Run 1 (M2.6) needs NO card: AMBER 26 CPU pmemd on the same edge,
   same grid and lengths, placed FIRST so the first independent number does not arrive after the
   GPU-days are spent.
