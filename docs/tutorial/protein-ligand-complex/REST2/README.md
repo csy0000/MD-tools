@@ -1,7 +1,7 @@
 # REST2 on a protein–ligand complex: heating the ligand, and the pocket around it
 
 !!! note "Both ladders were run on 2026-09-21; every number here is copied from their files"
-    Cards 1–4 (RTX 3080), 8 ranks, 2 per card under MPS, CUDA mixed precision, md-tools 0.6.1 on
+    Four RTX 3080s, 8 ranks, 2 per card under MPS, CUDA mixed precision, md-tools 0.6.1 on
     branch `work/0.6.1-selection`. The system is S2's prepared TYK2 fixture with `ejm_31`.
 
     **One check on this page did not pass**: the recorded exchange energies were recomputed
@@ -46,8 +46,9 @@ is the right trade for this pocket is one of the things these runs measure.
 
 3. **Four GPUs, and they must be the same model.** In a ladder every rank meets every other at the
    exchange barrier, so a faster card cannot make the ladder faster — it waits for the slowest
-   rung — and it makes per-rung throughput incomparable between rungs. These runs used cards 1–4
-   (RTX 3080) and deliberately not card 0 (RTX A5000) on the same machine.
+   rung — and it makes per-rung throughput incomparable between rungs. These runs used **four
+   RTX 3080s**, and deliberately not the faster RTX A5000 in the same machine. Pick four identical
+   cards; below they are written as `1,2,3,4` for the sake of a worked example.
 
 4. **MPS**, because eight states over four cards is two ranks per card, and md-tools refuses to
    share a card without it (the ranks would be time-sliced, which is a different experiment rather
@@ -57,7 +58,7 @@ is the right trade for this pocket is one of the things these runs measure.
    export CUDA_MPS_PIPE_DIRECTORY=$HOME/.cache/rest2-mps/pipe     # NOT under /tmp/<long path>
    export CUDA_MPS_LOG_DIRECTORY=$HOME/.cache/rest2-mps/log
    mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
-   CUDA_VISIBLE_DEVICES=1,2,3,4 nvidia-cuda-mps-control -d
+   CUDA_VISIBLE_DEVICES=<your four cards> nvidia-cuda-mps-control -d
    ```
 
    !!! warning "Two ways this goes wrong, both silent"
@@ -66,17 +67,18 @@ is the right trade for this pocket is one of the things these runs measure.
        control daemon", exits immediately, and every later client reports MPS simply absent. Keep
        it in `$HOME/.cache`.
 
-       **The client's device numbering is the SERVER's.** A server started with
-       `CUDA_VISIBLE_DEVICES=1,2,3,4` exposes those four cards to its clients as `0,1,2,3`. A
-       client that repeats `1,2,3,4` asks for a card that does not exist and every rank dies with
-       "Illegal value for DeviceIndex: 3". Launch the ladder with:
+       **The client's device numbering is the SERVER's.** Say your four cards are `1,2,3,4`. A
+       server started with `CUDA_VISIBLE_DEVICES=1,2,3,4` exposes them to its clients as
+       `0,1,2,3`. A client that repeats `1,2,3,4` asks for a fifth card that does not exist, and
+       every rank dies with "Illegal value for DeviceIndex: 3". Launch the ladder with the
+       SERVER's numbering, which is always `0..n-1` for n cards:
 
        ```bash
        export CUDA_VISIBLE_DEVICES=0,1,2,3      # the server's four cards, in ITS numbering
        ```
 
-       This has a useful consequence: a server bound to cards 1–4 cannot reach card 0 **at all**,
-       so the homogeneity rule above stops depending on anybody remembering it.
+       This has a useful consequence: a server bound to four chosen cards cannot reach any other
+       card **at all**, so "do not use the fast one" stops depending on anybody remembering it.
 
 ## 1. Which residues line the pocket
 
