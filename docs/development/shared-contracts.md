@@ -464,11 +464,17 @@ in `docs/development/0.7.0/lambda-exchange-design.md`; the part that binds both 
   under the year the run completed, through `md-openmm data-register`. `$MD_DATA/dev/tutorials/...`
   as first written cannot be registered -- v2 has no `dev` segment and no month segment -- so
   registering there would have failed, or worse, written files that no `dataset.yaml` describes.
-  **Registration is WRITE-ONCE.** `solute.aliases` defaults to empty and cannot be corrected
-  afterwards, so a dataset registered without aliases is permanently unfindable by name. Therefore:
-  set the aliases BEFORE registering, and **the data_name and the alias list go to the user for
-  approval first** -- one approval per dataset, naming both. No tutorial in the repository sets
-  that field today, which is how it gets forgotten.
+  **Registration is WRITE-ONCE, and the `data_name` goes to the user for approval before it
+  happens** -- one approval per dataset, with the notes it will carry, since neither can be
+  corrected afterwards.
+  **A DATASET HAS NO ALIAS FIELD** (S1's correction to S0, 2026-09-21): v2 `Dataset` is
+  dataset_id, path, year, project_name, data_name, role, system, created_at, created_by, status,
+  origin, software, components, derived_from, completed_at, archived_at, notes. `solute.aliases`
+  is a LIGAND PACKAGE field, set when `build-top --parameterize` creates the package, and that is
+  where the write-once findability hazard lives -- a package registered without aliases is
+  permanently unfindable by name, and no tutorial sets the field. So a dataset's findability rests
+  on its `data_name` and `notes`; a ligand package's rests on aliases decided before the build.
+  Two different write-once traps, and conflating them hides the real one.
 - **A RELAYED approval is not an approval, for anything write-once or outside the worktree** (S2,
   2026-09-21, and adopted). The coordinator relays what the user decided in good faith, and that is
   enough for ordinary work; it is NOT enough to register a dataset, which is irreversible and
