@@ -83,6 +83,17 @@ A2 — individual development does not.
     sufficient, and the campaign's ΔΔG stays uncorroborated until M2.6 exists.
   - Retain-all ran ~14% faster per water window, on a different card model, unpredicted: an
     OBSERVATION, not a benchmark, and it is not to be cited as a performance result.
+- **The TYK2 cost table is OPTIMISTIC by about 2.7x, and the plan says so rather than re-scaling
+  quietly** (S4 `fe965ec`, `handoffs/S4-tyk2-plan.md`). The matrix assumed ~40,000 particles at
+  80 ns/day; the complex is **53,030** particles and S3 measures the hybrid Hamiltonian at **2.0x**
+  a plain end state per step, which turns a 3.3-day leg into roughly 9. No request is made on that
+  arithmetic: run 2 measures ns/day on the real complex and every later request is sized from the
+  measurement. A cost table nobody has re-derived is how a campaign gets granted at a third of its
+  true price.
+- **The grant sequence is one request per run**, each naming cards and hours, card 0 excluded from
+  anything with exchange in it. Run 1 (M2.6) needs NO card: AMBER 26 CPU pmemd on the same edge,
+  same grid and lengths, placed FIRST so the first independent number does not arrive after the
+  GPU-days are spent.
 - **TYK2 is unblocked.** Its gate was M2 passing; M2 now passes on the same thresholds. The protein
   campaign proceeds to a PLAN -- prerequisites, schedule, and a grant request naming cards and
   hours -- and no sampling starts before the user grants it.
