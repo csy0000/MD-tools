@@ -224,6 +224,40 @@ class LambdaLadderProtocol:
     def production_ps(self, steps=None):
         return self.schedule.step_to_ps(self.total_steps if steps is None else steps)
 
+    @property
+    def tau(self):
+        """PENDING, and loud about it: the ladder's coordinate record is a v2 -> v3 decision.
+
+        The driver reads `protocol.tau` in seventeen places -- the reporter, the per-state
+        trajectories, the CV series, `restart.json`, the exchange and lifetime statistics -- and
+        for a lambda ladder every one of them wants "the coordinate of rung i", which tau is not.
+
+        This raises rather than returning `[0.0] * K`, which would run TODAY and produce
+        structurally valid files. That is precisely why it is refused (S0's ruling, 2026-09-21,
+        recorded at 0.7.0 `295afe2`): a lambda ladder writing tau = 0 at every rung is
+        indistinguishable in the record from a REST2 ladder that never heated, so the defect
+        would be invisible in the output. Being the only option that unblocks the runtime today
+        is an argument against it.
+
+        The agreed shape is a generic `ladder_coordinates()` plus a record that NAMES its
+        coordinate and can hold more than one, designed once with 0.7.1's tent path in view --
+        where a rung has BOTH a tau and a lambda. It lands after the TYK2 campaign, with the
+        hybrid-System output `combine-topology` grows.
+        """
+        raise LambdaLadderError(
+            "a lambda ladder has no tau, and the ladder coordinate record that would carry its "
+            "lambda is PENDING.\n"
+            "  The rungs of this ladder differ in Context parameters; see "
+            "`describe()['rungs']`, where each rung's index, state and derived parameters "
+            "already are.\n"
+            "  What is missing is the on-disk side: `protocol.tau` is what the driver writes "
+            "into the NetCDF ladder record, and a lambda ladder needs a coordinate record that "
+            "names its coordinate and can hold more than one -- 0.7.1's tent path gives every "
+            "rung BOTH a tau and a lambda.\n"
+            "  Ruled and deferred until after the TYK2 campaign (shared-contracts section 5). "
+            "Returning zeros here would make this ladder's record indistinguishable from a REST2 "
+            "ladder that never heated, which is why it is refused rather than merely absent.")
+
     def build_systems(self, base_system=None, solute_indices=None, excluded_bonds=()):
         """The System each rung propagates: THE SAME OBJECT, once per rung.
 

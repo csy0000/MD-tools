@@ -2292,3 +2292,119 @@ def _prepare_ais(loaded: LoadedInputs, *, topology2: Path, system2: Path, source
             "source_atoms": source_atoms, "source_facts": file_facts(source),
             "_facts": facts,
             "notes": {"first_frame": first, "last_frame": last, "frame_stride": stride}}
+
+
+@dataclass(frozen=True)
+class LambdaLadderPreflight(ExecutionPreflight):
+    """A lambda ladder: ONE System, K rungs, each rung a set of Context parameter values.
+
+    Beside `LadderPreflight` rather than instead of it, and beside it in this module rather than
+    in `md_tools.alchemy`, because `md_tools.run.preflight` is the one implementation of the
+    shared runtime guard. A second preflight living next to the protocol it guards is how a
+    runtime ends up with two policies, and it will be the one that runs.
+    """
+
+    replicas: int = 0
+    #: ONE System per rung, in rung order -- and they are THE SAME OBJECT. A lambda rung differs
+    #: from its neighbour in parameters alone, so K copies would be K chances to differ from what
+    #: was audited here.
+    rung_systems: tuple = ()
+    #: Every rung's `context_parameters`, index order. The rung-level identity.
+    rung_states: tuple = ()
+    #: The ladder-level identity: the Hamiltonian's own record, shared by every rung.
+    hamiltonian_record: dict[str, Any] | None = None
+    solute_indices: tuple = ()
+    excluded_bonds: tuple = ()
+    ladder_restraints: tuple = ()
+    cv_definition: Any = None
+
+
+def preflight_lambda_ladder(*, topology, system, replicas, ladder, coordinates=None,
+                            groupfile=None, trajectory=None, restart=None, checkpoint=None,
+                            output=None, log=None, number_of_groups=None, cpu=False, device=None,
+                            machine_config=None, protocol="a lambda ladder", source_trajectory=None,
+                            system2=None, topology2=None, out_dir=None) -> LambdaLadderPreflight:
+    """A lambda ladder. The flag rules are the INVERSE of a REST2 ladder's, and that is the point.
+
+    A REST2 rung IS a file, so that ladder reads `-s` only from its group file and refuses `-s` on
+    the command line. A lambda rung is a set of Context parameter values on ONE System, so this
+    ladder reads `-s` -- the single System every rung runs -- and refuses a group file, EVEN WHEN
+    every line would name the same path. See `md_tools.alchemy.ladder`, which owns that wording:
+    two phrasings of one rule are two rules as soon as one of them is edited.
+
+    What is validated here, before any output exists: the flags, the rung schedule against the
+    state count, and every rung's state through the Hamiltonian's own `context_parameters` -- so a
+    rung that could not be set is refused now rather than at the first propagation, with the run
+    directory already created.
+    """
+    from ..alchemy.ladder import LambdaLadderError, refuse_group_file
+
+    if source_trajectory is not None or system2 is not None or topology2 is not None:
+        _reject_flags_outside_their_protocol(protocol_name="a lambda ladder",
+                                             source_trajectory=source_trajectory,
+                                             system2=system2, topology2=topology2)
+    try:
+        refuse_group_file(groupfile, what=f"{protocol}: --groupfile")
+    except LambdaLadderError as refused:
+        raise PreflightError(str(refused)) from None
+    if not system:
+        raise PreflightError(
+            f"{protocol}: -s is required and names the ONE System every rung runs. A lambda rung "
+            f"is that System at recorded parameter values, not a file of its own: there is no "
+            f"group file and no per-rung System.")
+
+    rungs = tuple((ladder or {}).get("rungs") or ())
+    if not rungs:
+        raise PreflightError(
+            f"{protocol}: the ladder describes no rungs. A rung is addressed by INDEX, with "
+            f"(lambda, tau) as its content; the schedule belongs in the resolved configuration.")
+    if replicas and len(rungs) != int(replicas):
+        raise PreflightError(
+            f"{protocol}: the ladder describes {len(rungs)} rung(s) and the launch asks for "
+            f"{replicas}. The plan and the ladder must be the same ladder; neither is inferred "
+            f"from the other.")
+
+    # THE RUNG STATES FIRST, before the inputs are loaded or anything is placed: this check reads
+    # no file and touches no device, so a schedule nobody could run should not be reported only
+    # after a topology/System mismatch has been. Validated through the Hamiltonian's own
+    # definition rather than a copy of the mapping -- a rung whose state cannot be SET is refused
+    # here, where refusing costs nothing, instead of at the first propagation with the run
+    # directory already created.
+    from ..alchemy.hamiltonian import AlchemicalHamiltonian
+
+    states = []
+    for position, rung in enumerate(rungs):
+        stated = rung.get("state") if isinstance(rung, dict) else None
+        declared_index = rung.get("index", position) if isinstance(rung, dict) else position
+        if int(declared_index) != position:
+            raise PreflightError(
+                f"{protocol}: rung {position} carries index {declared_index}. A rung is addressed "
+                f"by its index, and the index IS its position in the ladder.")
+        try:
+            states.append(AlchemicalHamiltonian.context_parameters(stated or {}))
+        except Exception as bad_state:                       # noqa: BLE001 - reported as our own
+            raise PreflightError(f"{protocol}: rung {position}: {bad_state}") from None
+
+    inputs: dict[str, Any] = dict(_continuation_inputs(coordinates, None, where=protocol))
+    coordination, machine, acceleration, index, detail, particles, loaded, plan = _common(
+        topology=topology, system=system,
+        outputs={"o": output, "log": log, "x": trajectory, "r": restart},
+        inputs=inputs, cpu=cpu, device=device, number_of_groups=number_of_groups,
+        replicas=replicas or len(rungs), protocol=protocol, machine_config=machine_config,
+        load=True)
+
+    inventory = _ladder_inventory(protocol=protocol, replicas=len(rungs), output=output, log=log,
+                                  trajectory=trajectory, restart=restart, checkpoint=checkpoint,
+                                  groupfile=None)
+    system_object = getattr(loaded, "system", None)
+    return LambdaLadderPreflight(
+        coordination=coordination, machine=machine, acceleration=acceleration,
+        device_index=index, device_policy=detail.get("policy") if isinstance(detail, dict) else "",
+        device_policy_detail=detail if isinstance(detail, str) else str(detail),
+        placement=plan, particles=particles, loaded=loaded, inventory=inventory,
+        replicas=len(rungs),
+        rung_systems=tuple([system_object] * len(rungs)) if system_object is not None else (),
+        rung_states=tuple(states),
+        hamiltonian_record=(ladder or {}).get("hamiltonian"),
+        solute_indices=tuple(int(i) for i in ((ladder or {}).get("solute_indices") or ())),
+        notes={"protocol": "lambda-ladder", "groupfile": None, "rungs": len(rungs)})

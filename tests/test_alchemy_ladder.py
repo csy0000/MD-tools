@@ -225,3 +225,25 @@ def test_the_ladder_identity_is_the_hamiltonians_and_the_rungs_differ_only_in_pa
     assert described["protocol"] == "lambda-ladder"
     states = [tuple(sorted(r["context_parameters"].items())) for r in described["rungs"]]
     assert len(set(states)) == len(states)
+
+
+def test_asking_a_lambda_ladder_for_tau_explains_the_pending_record(hamiltonian):
+    """The driver reads `protocol.tau`; a lambda ladder refuses, and says why.
+
+    Not `[0.0] * K`: that runs today and writes structurally valid files in which a lambda ladder
+    is indistinguishable from a REST2 ladder that never heated (S0's ruling, 2026-09-21). The
+    refusal is what makes the next person meet the decision rather than an AttributeError, so the
+    message is asserted, not merely the exception type.
+    """
+    h, _ = hamiltonian
+    p = _protocol(h)
+    with pytest.raises(LambdaLadderError, match="coordinate record"):
+        p.tau
+    try:
+        p.tau
+    except LambdaLadderError as refused:
+        text = str(refused)
+    assert "0.7.1" in text and "tent path" in text, "the message must point at the decision"
+    assert "describe()['rungs']" in text, "and at where the rung states already are"
+    # what IS available stays available: the refusal is about the RECORD, not the states
+    assert [r["state"]["lambda_sterics"] for r in p.describe()["rungs"]] == LAMBDAS
