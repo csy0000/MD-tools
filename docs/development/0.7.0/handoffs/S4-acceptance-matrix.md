@@ -185,9 +185,19 @@ Quantities, in order of what they can show:
 | id | quantity | why it comes first |
 |---|---|---|
 | M2.6a | **single-point calibration**: pmemd vs OpenMM on the plain end states, at fixed coordinates | if the two engines do not agree on the unsampled Hamiltonian, no sampled comparison means anything. This is S3's gate-4 method reused, not a new one |
-| M2.6b | ΔG of the **vacuum** leg, both engines | cheap, no solvent, and the leg whose MD-tools uncertainty is smallest (±0.0004 kcal/mol), so it is the sharpest test of agreement |
-| M2.6c | ΔG of the **solvent** leg, both engines | the expensive one; pmemd runs shorter than MD-tools did, so its σ dominates the comparison |
+| M2.6b | ΔG of the **vacuum** leg, both engines, both in **dual topology** and both **unconstrained** | cheap, no solvent, and the sharpest test — see the amendment below |
+| M2.6c | ΔG of the **solvent** leg, both engines, dual topology, unconstrained | the expensive one: a dual-topology prmtop with rigid water needs `noshakemask` over the TI region, and pmemd CPU on ~1 900 atoms is hours per window |
 | M2.6d | **ΔΔG_hyd**, both engines | the quantity M2.5 reports |
+
+**Amendment, 2026-09-21, before any M2.6b number exists.** As first written, M2.6b compared
+pmemd against M2's own vacuum leg. That is TWO differences at once: AMBER TI is **dual topology**
+(both end-state copies present, never seeing each other) while M2's leg is **hybrid** (one mapped
+core with dummies), and the two constructions differ in the dummy atoms' own internal free
+energy, which cancels between legs but not within one. A disagreement would have been
+unattributable — the mistake this matrix exists to prevent. Corrected: **M2.6b builds the
+MD-tools leg in `mode="dual"`**, so the only difference between the two numbers is the engine.
+M2's hybrid number is not the comparison target; the bridge between constructions is ΔΔG, where
+the dummy contributions cancel, which is M2.6d. Nothing about the tolerances changes.
 
 **Declared tolerances.**
 
