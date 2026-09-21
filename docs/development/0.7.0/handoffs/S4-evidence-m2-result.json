@@ -3,201 +3,201 @@
   "M2.1": [
    {
     "leg": "solvent_v2",
-    "min_decorrelated_samples": 190.62736694261093,
-    "min_overlap": 0.06651691268055727,
+    "min_decorrelated_samples": 216.3621740733675,
+    "min_overlap": 0.06525882954022137,
     "ok": true,
     "repeat": "r1"
    },
    {
     "leg": "solvent_v2",
-    "min_decorrelated_samples": 302.7954632293623,
-    "min_overlap": 0.08473625212731406,
+    "min_decorrelated_samples": 223.84627548476945,
+    "min_overlap": 0.08370796631496674,
     "ok": true,
     "repeat": "r2"
    },
    {
     "leg": "solvent_v2",
-    "min_decorrelated_samples": 236.1767036721045,
-    "min_overlap": 0.070356093234646,
+    "min_decorrelated_samples": 302.5424390388326,
+    "min_overlap": 0.08152783762513645,
     "ok": true,
     "repeat": "r3"
    },
    {
     "leg": "vacuum",
-    "min_decorrelated_samples": 28.881637637477183,
-    "min_overlap": 0.01838072797749272,
-    "ok": false,
+    "min_decorrelated_samples": 503.84812868932687,
+    "min_overlap": 0.04392558426073564,
+    "ok": true,
     "repeat": "r1"
    },
    {
     "leg": "vacuum",
-    "min_decorrelated_samples": 52.730529507880284,
-    "min_overlap": 0.010906957753828477,
-    "ok": false,
+    "min_decorrelated_samples": 442.1147610591368,
+    "min_overlap": 0.0387674849486198,
+    "ok": true,
     "repeat": "r2"
    },
    {
     "leg": "vacuum",
-    "min_decorrelated_samples": 89.74089713908454,
-    "min_overlap": 0.031620815597363884,
+    "min_decorrelated_samples": 499.8811608424416,
+    "min_overlap": 0.04277056267037829,
     "ok": true,
     "repeat": "r3"
    },
    {
     "leg": "vacuum_ba",
-    "min_decorrelated_samples": 171.66310068747904,
-    "min_overlap": 0.05412054979180674,
+    "min_decorrelated_samples": 502.90146971770304,
+    "min_overlap": 0.041188236044469695,
     "ok": true,
     "repeat": "r1"
    },
    {
     "leg": "vacuum_ba",
-    "min_decorrelated_samples": 51.3437804305845,
-    "min_overlap": 0.025299469581522425,
-    "ok": false,
+    "min_decorrelated_samples": 528.890386095733,
+    "min_overlap": 0.044893392794001626,
+    "ok": true,
     "repeat": "r2"
    },
    {
     "leg": "vacuum_ba",
-    "min_decorrelated_samples": 47.63945263393332,
-    "min_overlap": 0.013849552622785496,
-    "ok": false,
+    "min_decorrelated_samples": 428.53404263329367,
+    "min_overlap": 0.038419746940930546,
+    "ok": true,
     "repeat": "r3"
    }
   ],
   "M2.2": [
    {
-    "MBAR": -1.7109625737180905,
-    "TI": -0.6476872953181276,
+    "MBAR": -3.3358670933298997,
+    "TI": -3.394671558827339,
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.6257935522526565,
-    "error_kcal_mol": 1.0632752783999628,
+    "combined_sigma_kcal_mol": 0.03708791641848034,
+    "error_kcal_mol": 0.05880446549743912,
     "leg": "solvent_v2",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
     "repeat": "r1",
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.5,
-    "verdict": "INCONCLUSIVE"
+    "tolerance_kcal_mol": 0.11126374925544102,
+    "verdict": "PASS"
    },
    {
-    "MBAR": -1.6832007380479277,
-    "TI": -0.043820955346454506,
+    "MBAR": -3.4258914428879583,
+    "TI": -3.417790145856327,
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.7628657501869375,
-    "error_kcal_mol": 1.639379782701473,
+    "combined_sigma_kcal_mol": 0.03901609962238869,
+    "error_kcal_mol": 0.008101297031631205,
     "leg": "solvent_v2",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
     "repeat": "r2",
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.5,
-    "verdict": "INCONCLUSIVE"
+    "tolerance_kcal_mol": 0.11704829886716606,
+    "verdict": "PASS"
    },
    {
-    "MBAR": -1.3008857455666871,
-    "TI": 0.0357744619512201,
+    "MBAR": -3.382729753942372,
+    "TI": -3.3760898243904287,
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.863217726522552,
-    "error_kcal_mol": 1.3366602075179073,
+    "combined_sigma_kcal_mol": 0.03843313225021824,
+    "error_kcal_mol": 0.006639929551943258,
     "leg": "solvent_v2",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
     "repeat": "r3",
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.5,
-    "verdict": "INCONCLUSIVE"
+    "tolerance_kcal_mol": 0.1152993967506547,
+    "verdict": "PASS"
    },
    {
-    "MBAR": -0.01441214913756461,
-    "TI": -0.3820288505315592,
+    "MBAR": -1.6388120313583174,
+    "TI": -1.6390740131594905,
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.42325224471215844,
-    "error_kcal_mol": 0.3676167013939946,
+    "combined_sigma_kcal_mol": 0.0006759260238021139,
+    "error_kcal_mol": 0.00026198180117309455,
     "leg": "vacuum",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
     "repeat": "r1",
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.5,
-    "verdict": "INCONCLUSIVE"
+    "tolerance_kcal_mol": 0.002027778071406342,
+    "verdict": "PASS"
    },
    {
-    "MBAR": -0.014160180989896487,
-    "TI": -0.8016295656658334,
+    "MBAR": -1.6382711837729005,
+    "TI": -1.6385376651511945,
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.4288028911804481,
-    "error_kcal_mol": 0.787469384675937,
+    "combined_sigma_kcal_mol": 0.000688998981623556,
+    "error_kcal_mol": 0.0002664813782939923,
     "leg": "vacuum",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
     "repeat": "r2",
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.5,
-    "verdict": "INCONCLUSIVE"
+    "tolerance_kcal_mol": 0.002066996944870668,
+    "verdict": "PASS"
    },
    {
-    "MBAR": 0.7858725790207209,
-    "TI": -0.014854760216813322,
+    "MBAR": -1.6383878466921604,
+    "TI": -1.637983849332762,
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.30033787135701695,
-    "error_kcal_mol": 0.8007273392375343,
+    "combined_sigma_kcal_mol": 0.0006985798245216454,
+    "error_kcal_mol": 0.0004039973593983337,
     "leg": "vacuum",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
     "repeat": "r3",
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.5,
-    "verdict": "INCONCLUSIVE"
+    "tolerance_kcal_mol": 0.002095739473564936,
+    "verdict": "PASS"
    },
    {
-    "MBAR": -0.7260472279097824,
-    "TI": 0.23093454962257004,
+    "MBAR": 1.6382692624361752,
+    "TI": 1.638689317543808,
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.23557428446654383,
-    "error_kcal_mol": 0.9569817775323524,
+    "combined_sigma_kcal_mol": 0.00069603867506088,
+    "error_kcal_mol": 0.0004200551076327663,
     "leg": "vacuum_ba",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
     "repeat": "r1",
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.5,
-    "verdict": "FAIL"
+    "tolerance_kcal_mol": 0.00208811602518264,
+    "verdict": "PASS"
    },
    {
-    "MBAR": -0.23815620815058022,
-    "TI": 0.42172975798623374,
+    "MBAR": 1.6381682007192337,
+    "TI": 1.6378422246137894,
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.4262540057976573,
-    "error_kcal_mol": 0.6598859661368139,
+    "combined_sigma_kcal_mol": 0.0007094662840433891,
+    "error_kcal_mol": 0.00032597610544438105,
     "leg": "vacuum_ba",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
     "repeat": "r2",
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.5,
-    "verdict": "INCONCLUSIVE"
+    "tolerance_kcal_mol": 0.0021283988521301673,
+    "verdict": "PASS"
    },
    {
-    "MBAR": -0.4814776862414269,
-    "TI": 0.4809892470158845,
+    "MBAR": 1.6380488029012188,
+    "TI": 1.6380254504809701,
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.33584825341553737,
-    "error_kcal_mol": 0.9624669332573115,
+    "combined_sigma_kcal_mol": 0.0007261605938362552,
+    "error_kcal_mol": 2.33524202486457e-05,
     "leg": "vacuum_ba",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
     "repeat": "r3",
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.5,
-    "verdict": "INCONCLUSIVE"
+    "tolerance_kcal_mol": 0.0021784817815087656,
+    "verdict": "PASS"
    }
   ],
   "M2.3": [
    {
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.12304297495302945,
-    "error_kcal_mol": 0.02776183567016277,
+    "combined_sigma_kcal_mol": 0.04253622306567969,
+    "error_kcal_mol": 0.0900243495580586,
     "leg": "solvent_v2",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
@@ -206,13 +206,13 @@
      "r2"
     ],
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.3691289248590883,
+    "tolerance_kcal_mol": 0.12760866919703906,
     "verdict": "PASS"
    },
    {
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.12154614010170539,
-    "error_kcal_mol": 0.41007682815140334,
+    "combined_sigma_kcal_mol": 0.04236631131981427,
+    "error_kcal_mol": 0.04686266061247224,
     "leg": "solvent_v2",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
@@ -221,13 +221,13 @@
      "r3"
     ],
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.3646384203051162,
-    "verdict": "FAIL"
+    "tolerance_kcal_mol": 0.1270989339594428,
+    "verdict": "PASS"
    },
    {
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.12464747101362597,
-    "error_kcal_mol": 0.38231499248124057,
+    "combined_sigma_kcal_mol": 0.04237060834971216,
+    "error_kcal_mol": 0.04316168894558636,
     "leg": "solvent_v2",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
@@ -236,13 +236,13 @@
      "r3"
     ],
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.37394241304087794,
-    "verdict": "FAIL"
+    "tolerance_kcal_mol": 0.12711182504913648,
+    "verdict": "PASS"
    },
    {
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.08976027025181318,
-    "error_kcal_mol": 0.0002519681476681225,
+    "combined_sigma_kcal_mol": 0.0006970013690085995,
+    "error_kcal_mol": 0.0005408475854169481,
     "leg": "vacuum",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
@@ -251,13 +251,13 @@
      "r2"
     ],
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.2692808107554395,
+    "tolerance_kcal_mol": 0.0020910041070257984,
     "verdict": "PASS"
    },
    {
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.09335068194636076,
-    "error_kcal_mol": 0.8002847281582856,
+    "combined_sigma_kcal_mol": 0.0006998201268601618,
+    "error_kcal_mol": 0.00042418466615701256,
     "leg": "vacuum",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
@@ -266,13 +266,13 @@
      "r3"
     ],
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.2800520458390823,
-    "verdict": "FAIL"
+    "tolerance_kcal_mol": 0.0020994603805804856,
+    "verdict": "PASS"
    },
    {
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.09127057121274287,
-    "error_kcal_mol": 0.8000327600106174,
+    "combined_sigma_kcal_mol": 0.0007064134478707068,
+    "error_kcal_mol": 0.00011666291925993555,
     "leg": "vacuum",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
@@ -281,13 +281,13 @@
      "r3"
     ],
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.27381171363822865,
-    "verdict": "FAIL"
+    "tolerance_kcal_mol": 0.00211924034361212,
+    "verdict": "PASS"
    },
    {
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.09836761870158203,
-    "error_kcal_mol": 0.4878910197592021,
+    "combined_sigma_kcal_mol": 0.0007057186306378358,
+    "error_kcal_mol": 0.00010106171694146404,
     "leg": "vacuum_ba",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
@@ -296,13 +296,13 @@
      "r2"
     ],
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.29510285610474607,
-    "verdict": "FAIL"
+    "tolerance_kcal_mol": 0.0021171558919135074,
+    "verdict": "PASS"
    },
    {
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.10587565180010163,
-    "error_kcal_mol": 0.24456954166835548,
+    "combined_sigma_kcal_mol": 0.0007158051161655159,
+    "error_kcal_mol": 0.00022045953495641868,
     "leg": "vacuum_ba",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
@@ -311,13 +311,13 @@
      "r3"
     ],
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.3176269554003049,
+    "tolerance_kcal_mol": 0.0021474153484965478,
     "verdict": "PASS"
    },
    {
     "absolute_ceiling_kcal_mol": 0.5,
-    "combined_sigma_kcal_mol": 0.1040586401442276,
-    "error_kcal_mol": 0.24332147809084667,
+    "combined_sigma_kcal_mol": 0.0007164100779611664,
+    "error_kcal_mol": 0.00011939781801495464,
     "leg": "vacuum_ba",
     "max_combined_sigma_kcal_mol": 0.25,
     "numerical_floor_kcal_mol": 0.0,
@@ -326,38 +326,45 @@
      "r3"
     ],
     "sigmas": 3.0,
-    "tolerance_kcal_mol": 0.3121759204326828,
+    "tolerance_kcal_mol": 0.002149230233883499,
     "verdict": "PASS"
    }
   ],
   "M2.4": {
-   "A_to_B_kcal": 0.23297433227817285,
-   "B_to_A_kcal": -0.475011668959056,
+   "A_to_B_kcal": -1.638495025163385,
+   "B_to_A_kcal": 1.6381643032785285,
    "absolute_ceiling_kcal_mol": 0.5,
-   "combined_sigma_kcal_mol": 0.055904421306165034,
-   "error_kcal_mol": 0.2420373366808832,
+   "combined_sigma_kcal_mol": 0.0004080002011371623,
+   "error_kcal_mol": 0.00033072188485659774,
    "max_combined_sigma_kcal_mol": 0.25,
    "numerical_floor_kcal_mol": 0.0,
    "sigmas": 3.0,
-   "tolerance_kcal_mol": 0.16771326391849511,
-   "verdict": "FAIL"
+   "tolerance_kcal_mol": 0.0012240006034114868,
+   "verdict": "PASS"
   },
   "M2.5": {
    "cycle": {
     "cycle": "relative_hydration",
-    "delta_g_kJ_mol": -7.526446540131096,
-    "delta_g_kcal_mol": -1.7988638958248317,
+    "delta_g_kJ_mol": -7.292718727482181,
+    "delta_g_kcal_mol": -1.743001607906831,
     "matched_legs": {
      "environments": [
       "603ebf04f16b0a305ade6d477319e6890c5c1548ebaf25c6f46f5620a405fedb",
       "bc3d549077fa0cd3add63fb2379c40b296223be954cf1d6656f52cbc9391880c"
      ],
-     "ligand_hamiltonian_sha256": "622bb1d6c667ad92f50b82cc545e9ff24ac5808a8f2033882815878236205b8c",
+     "ligand_hamiltonian_sha256": "d8332b699859f3e910f02439fe73ec886d77f6e07f3c0cfbd6b3cd55306096c8",
      "plans": [
-      "e1e75115b3a0a243f709c1a6513a4fe2e22253ef794a1712a49bb40f6045b840",
-      "c10d5fd85338a24475b4de42710ca68cc7d2b9ab1f278cbcd9a3859199511466"
+      "f5fe6723d6f4ba9b9cf841f8d47a5f0bb4c46d3e7ada3818e54d45efa736822b",
+      "aee75a6c68343a4c245b30f2a017ca8239ccdd6fb6772525afd66a2ac81d00f9"
      ],
-     "scheme": "md-tools-ligand-hamiltonian/1"
+     "restraints": {
+      "alchemical_coupling": "none",
+      "standard_state": [
+       [],
+       []
+      ]
+     },
+     "scheme": "md-tools-ligand-hamiltonian/2"
     },
     "quantity": "ddG_hyd = dG_hyd(chloroethane) - dG_hyd(ethane)",
     "repeats": [
@@ -366,42 +373,42 @@
      "r3"
     ],
     "schema": "md-tools-alchemical-cycle/1",
-    "sigma_kJ_mol": 0.26160411913962356,
-    "sigma_kcal_mol": 0.06252488507161175,
+    "sigma_kJ_mol": 0.10877013151816665,
+    "sigma_kcal_mol": 0.02599668535329031,
     "temperature_k": 300.0,
     "terms": [
      {
       "alchemical_scheme": "amber18-hybrid",
-      "delta_g_kJ_mol": -6.551681933879221,
+      "delta_g_kJ_mol": -14.148181912765784,
       "endpoint_a": "ethane",
       "endpoint_b": "chloroethane",
       "environment": "solvent",
       "estimator": "MBAR",
-      "ligand_hamiltonian_sha256": "622bb1d6c667ad92f50b82cc545e9ff24ac5808a8f2033882815878236205b8c",
+      "ligand_hamiltonian_sha256": "d8332b699859f3e910f02439fe73ec886d77f6e07f3c0cfbd6b3cd55306096c8",
       "name": "solvent (3 repeats)",
       "restraint_digest": null,
-      "sigma_kJ_mol": 0.2100647701863072,
+      "sigma_kJ_mol": 0.10876354236480355,
       "sign": 1,
       "temperature_k": 300.0
      },
      {
       "alchemical_scheme": "amber18-hybrid",
-      "delta_g_kJ_mol": 0.9747646062518752,
+      "delta_g_kJ_mol": -6.855463185283603,
       "endpoint_a": "ethane",
       "endpoint_b": "chloroethane",
       "environment": "vacuum",
       "estimator": "MBAR",
-      "ligand_hamiltonian_sha256": "622bb1d6c667ad92f50b82cc545e9ff24ac5808a8f2033882815878236205b8c",
+      "ligand_hamiltonian_sha256": "d8332b699859f3e910f02439fe73ec886d77f6e07f3c0cfbd6b3cd55306096c8",
       "name": "vacuum (3 repeats)",
       "restraint_digest": null,
-      "sigma_kJ_mol": 0.155915064946888,
+      "sigma_kJ_mol": 0.0011972312804356643,
       "sign": -1,
       "temperature_k": 300.0
      }
     ],
     "variance_rule": "legs independent; variances add"
    },
-   "ddG_hyd_kcal": -1.7988638958248317,
+   "ddG_hyd_kcal": -1.743001607906831,
    "experiment_is_gated": false,
    "experiment_kcal": -2.46,
    "repeats_used": [
@@ -409,7 +416,7 @@
     "r2",
     "r3"
    ],
-   "sigma_kcal": 0.06252488507161175
+   "sigma_kcal": 0.02599668535329031
   }
  },
  "unusable_legs": []
