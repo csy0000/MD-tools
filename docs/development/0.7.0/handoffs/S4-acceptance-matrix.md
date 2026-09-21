@@ -170,3 +170,46 @@ least **100 decorrelated samples** (`n / g`, reported per window), and a placeme
 pilot is re-checked against the production run's own overlap; if production overlap falls below
 0.03 the campaign FAILS rather than being re-placed after the fact. A pilot that cannot estimate
 overlap may not change anything.
+
+## M2.6: the independent engine (AMBER 26 pmemd, CPU)
+
+Declared 2026-09-21, **before any pmemd number exists**, at S0's instruction. The point of this
+run is that it is independent; a tolerance chosen after seeing a disagreement would throw that
+away. Every check M2 passed is MD-tools against itself.
+
+**What is compared.** The same ethane → chloroethane edge, same packages, same λ grid (M2.0's
+16 windows for solvent, 18 for vacuum), same temperature, cutoff, PME settings and constraints,
+sampled by pmemd rather than by MD-tools, analysed by MBAR from pmemd's own `ifmbar` energies.
+Quantities, in order of what they can show:
+
+| id | quantity | why it comes first |
+|---|---|---|
+| M2.6a | **single-point calibration**: pmemd vs OpenMM on the plain end states, at fixed coordinates | if the two engines do not agree on the unsampled Hamiltonian, no sampled comparison means anything. This is S3's gate-4 method reused, not a new one |
+| M2.6b | ΔG of the **vacuum** leg, both engines | cheap, no solvent, and the leg whose MD-tools uncertainty is smallest (±0.0004 kcal/mol), so it is the sharpest test of agreement |
+| M2.6c | ΔG of the **solvent** leg, both engines | the expensive one; pmemd runs shorter than MD-tools did, so its σ dominates the comparison |
+| M2.6d | **ΔΔG_hyd**, both engines | the quantity M2.5 reports |
+
+**Declared tolerances.**
+
+| source | size | treatment |
+|---|---|---|
+| statistical | each engine's own σ, error-barred by repeat spread where repeats exist | the gate is \|Δ\| < 0.5 kcal/mol AND < 3 σ_c, σ_c = √(σ_MDtools² + σ_pmemd²); INCONCLUSIVE above σ_c = 0.25, exactly as everywhere else in this matrix |
+| Coulomb constant | the engines differ by **3.5e-5 relative** (S3, gate 4) | expected, not a surprise: on the λ-dependent electrostatic part of these legs (tens of kJ/mol) it is ~1e-3 kJ/mol, three orders below the statistical σ. Declared here so it is accounted rather than discovered, and reported in the result |
+| pmemd print resolution | 1e-4 kcal/mol = 4.18e-4 kJ/mol per printed energy | added twice, as in S3's rule, to the single-point row M2.6a only |
+| erfc table vs exact | pmemd uses `eedmeth=1` under PME and refuses exact erfc | an intentional difference, reported; it is inside M2.6a's calibration by construction |
+
+**M2.6a's rule is S3's, unchanged**: the λ-dependent part of the engines' shared discrepancy,
+\|cal_B − cal_A\|, plus two print resolutions. A constant offset cancels in every free energy and
+is reported separately.
+
+**What a disagreement would mean, decided now:** M2.6b failing with M2.6a passing implicates the
+sampling or the estimator, not the Hamiltonian; both failing implicates the Hamiltonian or the
+matching of settings. Either way the result stands as measured and comes back to S2/S3 — the
+tolerance is not revisited.
+
+| id | verdict |
+|---|---|
+| M2.6a | NOT RUN |
+| M2.6b | NOT RUN |
+| M2.6c | NOT RUN |
+| M2.6d | NOT RUN |
