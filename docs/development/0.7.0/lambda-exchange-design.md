@@ -1,8 +1,9 @@
-# Replica exchange over lambda (A3b): the Hamiltonian's half
+# Replica exchange over lambda (A3b): the joint recommendation
 
-**S3's half of a joint recommendation with S4.** S0 asked for one recommendation, not two; this is
-the part that belongs to the Hamiltonian, written so S4 can fold it into the execution design. It
-answers S0's four questions in order. Nothing here is implemented and nothing is authorised.
+**S3 and S4, one recommendation as S0 asked.** Sections 1-4 are the Hamiltonian's half (S3),
+answering S0's four questions in order; the closing section records S4's decisions on the four
+questions those left open, agreed 2026-09-21. Nothing here is implemented and nothing is
+authorised.
 
 ## 1. What an exchange attempt needs, and what it costs
 
@@ -134,16 +135,32 @@ tau and lambda together. That is the real reason to keep them distinguished in t
 than calling them both "the ladder coordinate": on the tent path, rung `j` and rung `j+1` differ by
 a Context parameter AND by a serialised System, and only the second requires the neighbour's file.
 
-## Open, for S4 and me to close together
+## Closed with S4, 2026-09-21 — this is now the joint recommendation
 
-1. **Who evaluates the neighbour's potential?** Section 3 of the 0.7.1 note prefers exchanging
-   CONFIGURATIONS (preserving the per-state trajectory contract). For lambda that choice is nearly
-   free either way; for the tent path it is not. One answer for both, chosen now.
-2. **Cadence.** Needs the card measurement above, on a campaign-sized system, before a number goes
-   into any config.
-3. **MBAR's `u_k(x_n)` at every state**, not only neighbours: with lambda a parameter, a rank can
-   produce a whole row by looping `set_state` over every state at one configuration. Cheap here,
-   expensive on the tent path. S4's estimator layer should say what it wants stored.
-4. **The CV contract carries over unchanged**, and I think it must: pre-exchange rows, one series
-   per STATE, step 0 and the final step exactly once. Worth S4 confirming against `md_tools.remd`
-   rather than assuming.
+S4 agreed the four answers above and settled the four open questions. Their decisions, with the
+reasoning worth keeping:
+
+1. **Exchange CONFIGURATIONS**, as 0.6.1's ladder does. The decisive reason is not cost: it keeps
+   STATE <-> CONTEXT FIXED, which makes every per-state output correct BY CONSTRUCTION. Swapping
+   lambda between Contexts instead would make the Context follow the WALKER, so every per-state
+   file -- trajectory, CV series, sample stream -- would have to be re-routed at each accepted
+   swap, and that bookkeeping is invisible when it is wrong: rows filed under whichever state
+   happened to own the Context. Configuration exchange makes the invariant structural rather than
+   maintained. Supporting: `md_tools.remd` already does exactly this
+   (`ReplicaEngine.set_configuration/get_configuration` move positions, velocities and box, and
+   `u_i(x_j)` comes from putting a configuration into a state's own Context), so a neighbour
+   Context would be a SECOND exchange mechanism living in the alchemy layer; under MPI the
+   collective is already the configuration gather, and a parameter exchange needs a different
+   collective and therefore a second policy; and a neighbour Context doubles resident Systems per
+   rank for lambda alone, multiplying by the reachable taus on the tent path.
+2. **Cadence: still unmeasured, deliberately.** S4 will measure a cross-lambda evaluation against
+   an MD step on a campaign-sized system when they next hold a card, and will not borrow time from
+   M2's granted protocol for a side measurement. No number goes into a config before then.
+3. **Estimators: the FULL `u_k(x_n)` row per saved sample** -- every rung's reduced potential at
+   each reported configuration -- at the REPORTING cadence, not the exchange cadence. That is what
+   MBAR consumes and what `md-tools-alchemical-samples/1` already holds. BAR needs only neighbour
+   pairs, which acceptance computes anyway. On the tent path, where a row costs one Context per
+   tau, still full rows at reporting cadence, never per attempt.
+4. **The CV contract carries over unchanged:** pre-exchange rows, one series per STATE with
+   `walker_index` recorded, step 0 and the final step exactly once, `exchange_attempt = -1` at step
+   0. S4's sample record keys by `origin_state`, so it composes with no change.
