@@ -93,6 +93,34 @@ mixed-precision accumulation, its PREDICTION written down first, and then checke
 that was not used to set it. Until G2-6b exists and passes that way, **G2-6 on production-sized
 systems is UNVALIDATED.**
 
+**G2-8, the scaling probes** (100 ps per state, 50 exchanges, same system and same equilibrated
+start; cards 1-4 RELEASED 2026-09-21 after them, MPS daemon shut down and its pipe directory
+removed):
+
+| configuration | ranks per card | ns/day per rung | ns/day aggregate |
+|---|---|---|---|
+| 4 rungs on 4 cards | 1 | 209.9 | 839.5 |
+| 8 rungs on 4 cards | 2 | 117.6 | 940.8 |
+| 8 rungs on 2 cards | 4 | 69.1 | 553.1 |
+
+Read as a decomposition against 330 ns/day for a bare loop with no ladder: the ladder machinery
+(exchange barriers, per-state trajectories, checkpoints) costs **36%**; a second rank on a card
+buys **1.12x aggregate** and returns 56% per rung -- the same 1.13x the production ladders gave,
+from an independent measurement; a fourth rank **loses throughput outright** (553.1 aggregate,
+below the 1-per-card configuration), it does not merely stop helping. Two per card is the setting.
+
+**The probes overestimate sustained throughput by ~26%**: 117.6 ns/day per rung on a 100 ps probe
+against the 93.5 the 5 ns production ladder of the same shape sustained. Plan from the PRODUCTION
+figure; the probes are evidence for the RELATIVE scaling between configurations and nothing else.
+S1 flagged this itself rather than leaving the two numbers to be read as a contradiction.
+
+**G2-6b is registered BEFORE measurement** (S1 `181e8c7`), derived rather than fitted:
+`dU ~ K*sqrt(|u|)` from independent single-precision rounding of M summed terms, with K taken from
+the 1,760-atom fixture ALONE; TYK2 then lands 1.7x/2.7x above that law, which is what partially
+correlated rounding predicts. Bound `3*K*sqrt(|u|)`, the >=100x discrimination check kept in the
+row, and a TWO-SIDED prediction for a third, unused system size -- too small refutes K, too large
+refutes the sqrt law. It needs one card for ~10 minutes and is requested as its own grant.
+
 Discrimination is not in doubt either way: the whole-solute Hamiltonian at the same taus misses by
 15,548 kT (A) and 8,002 kT (B), five orders of magnitude above the discrepancy.
 **Ladder B** (ligand + pocket sidechains, tau 0 -> 0.25) started 14:07, expected ~15:30, then G2-6
