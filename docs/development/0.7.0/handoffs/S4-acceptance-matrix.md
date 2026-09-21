@@ -87,11 +87,11 @@ Two additions, for these rows only:
 
 | # | what | owner | state |
 |---|---|---|---|
-| P1 | the prepared TYK2 complex per ligand: `build-top` complex, one parameter package per ligand, with build records, as a versioned fixture | S2 (campaign page: prepared once) | NOT STARTED |
-| P2 | hybrid plans for the two RBFE edges in BOTH environments (complex and solvent), pairing under `matched_legs` | S2 | NOT STARTED |
-| P3 | **a decoupling construction for ABFE**: an end state where the ligand does not interact with its environment. S2's plans are A→B with both endpoints real, and S3's `build_hamiltonian` applies softcore only to unique particles, so a common-particle decoupling would be linear in λ and its integrand would diverge at the end point. This is new work for S2/S3, not a parameter of mine | S0 to assign | **BLOCKED — A5 cannot start without it** |
+| P1 | the prepared TYK2 complex per ligand | S2 | **DONE** `tests/data/alchemy/tyk2-v1`: complex 53,030 particles at 8.238 nm, ligand-in-water 1,733–1,928, vacuum 32–38; ff14SB + TIP3P |
+| P2 | hybrid plans for the RBFE edges in BOTH environments, pairing under `matched_legs` | S2 | **DONE** (automatic maps, 21-atom MCS, endpoint recovery recorded) |
+| P3 | a decoupling construction for ABFE | S2/S3 | **DONE**: `topology.build_decoupling_plan`. A5 is no longer blocked on construction |
 | P4 | Boresch anchor selection inputs: an equilibrated complex trajectory (≥ 5 ns) per ligand, the ligand's heavy-atom names, and the pocket residue list | S2 prepares, S4 selects and records | NOT STARTED |
-| P5 | a measured throughput number (ns/day) for the solvated complex under the alchemical Hamiltonian, from one short window, before any grant request | S4 | NOT RUN |
+| P5 | measured ns/day for the solvated complex under the alchemical Hamiltonian | S4 | NOT RUN — **run 2** of [the plan](S4-tyk2-plan.md). Every cost below is provisional until it lands |
 
 ### Rows
 
@@ -118,9 +118,11 @@ disjoint set of candidates.
 
 ### What it costs, before anyone approves it
 
-Assumptions, to be replaced by P5's measurement: solvated complex ≈ 40 000 particles; one RTX
-3080 ≈ 80 ns/day under the alchemical Hamiltonian (about 10 % below plain MD, from the
-cross-state reporting at 2 ps); ligand in water ≈ 3 000 particles ≈ 600 ns/day.
+**These numbers are now known to be optimistic and are NOT what anything will be requested on.**
+They assumed ~40 000 particles and 80 ns/day. P1 landed at **53 030** particles, and S3 measures
+the hybrid Hamiltonian at **2.0×** a plain end state per step — together about 2.7× the assumed
+per-window cost, turning a 3.3-day leg into ~9 days. P5 (run 2 of [the plan](S4-tyk2-plan.md))
+replaces both with one measurement on the real system before any production grant is asked for.
 
 | campaign | windows × repeats × ns | simulated time | one RTX 3080 |
 |---|---|---|---|
