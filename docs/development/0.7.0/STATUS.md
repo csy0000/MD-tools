@@ -33,6 +33,18 @@ S3 and S4 do not wait for S2. S3 builds against the agreed miniature topology-pl
 builds against frozen energy and derivative fixtures. Real end-to-end execution waits for A1 and
 A2 — individual development does not.
 
+## What a session may push, and when
+
+- **A push grant is per branch and ONE-OFF unless the user says otherwise.** S2's user granted
+  `work/0.7.0-topology` on 2026-09-21 and S2 flagged, unprompted, that it was "push this branch"
+  rather than "and for the rest of the session" -- so it asks again next time and I plan around no
+  standing permission. S3's branch is NOT pushable as of the same date: `a1d9469` (A3b runtime,
+  both mutation results) and `2500ef5` (the coordinate-record design) exist in one worktree only,
+  which is the largest single risk on this branch.
+- **A relayed approval is not an approval** for anything write-once or outside the worktree; see
+  the shared contract. The coordinator does not route a push for a session whose user has not
+  answered, and does not ask a third session to do it either.
+
 ## Coordinator queue (S0)
 
 | item | why it waits |
