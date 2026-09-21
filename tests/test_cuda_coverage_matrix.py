@@ -364,6 +364,14 @@ NON_CUDA_CONTEXT_SITES = {
         "walks `System.getForces()` -- the host-side list of Force OBJECTS, not `State.getForces` "
         "-- to read an endpoint System's bonded terms, exceptions and particle parameters for "
         "the term audit. Accessors only; nothing is evaluated and no Context exists.",
+    "alchemy/topology_recovery.py::_reference_without_internal_pairs":
+        "flagged for `System.getForces()`, the host-side list of Force OBJECTS, which shares its "
+        "spelling with `State.getForces`. It clones the independently built reference System "
+        "through the XML serialiser and adds a zero exception for each internal pair the plan "
+        "carries in its own force, so the physical endpoint's NonbondedForce does not compute "
+        "them twice. Serialiser and accessors only: it creates NO Context and evaluates nothing. "
+        "The energies of what it returns are read by `_energies_by_class`, which is classified "
+        "above and is Reference-only.",
     "alchemy/topology_recovery.py::audit_plan":
         "the same `System.getForces()` list, on both endpoint Systems and the environment, to "
         "prove each endpoint reproduces its package's parameter table and leaves the environment "
