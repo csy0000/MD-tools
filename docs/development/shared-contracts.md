@@ -452,8 +452,12 @@ in `docs/development/0.7.0/lambda-exchange-design.md`; the part that binds both 
   exists to prevent; it is refused even though it would run today and produce structurally valid
   files. S3 raised it rather than doing it, which is what the freeze is for.
   **Design once, with 0.7.1 in view**: a FEP-REST2 rung has BOTH a tau and a lambda, so a field
-  designed now to hold one number would be designed again in 0.7.1. The record change is v2 -> v3
-  and lands AFTER the TYK2 campaign. Until it does, a lambda ladder is not launchable end to end,
+  designed now to hold one number would be designed again in 0.7.1. The record change is **v3 -> v4**
+  -- `md_tools.remd.storage.SCHEMA_VERSION` is already `md-tools-replica-exchange/v3`, and S3
+  caught S0 and itself both writing v2 -> v3. Harmless in a message, not in a migration note:
+  `SUPERSEDED_SCHEMAS` keys on the exact string, so an entry written for the wrong version would
+  never match a real file and the refusal it was meant to produce would never fire. It lands
+  AFTER the TYK2 campaign. Until it does, a lambda ladder is not launchable end to end,
   and it fails LOUDLY at that line rather than being made to run.
 - **A lambda ladder's `-s` is a hybrid System that something must WRITE** (open, assigned to S0's
   surface with S2's plan). The invariant is that every Hamiltonian a run integrates is written as
