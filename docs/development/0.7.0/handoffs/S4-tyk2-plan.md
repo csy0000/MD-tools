@@ -56,6 +56,26 @@ then T4/T5 (ABFE with restraints). Each is a separate request with its cards and
 sized from P5 — never a block of GPU-days. The faster card is excluded from anything with exchange: its
 speed advantage is wasted behind an exchange barrier and it must not join a homogeneous ladder.
 
+## Registration of tutorial datasets (the sandbox lift, 2026-09-21)
+
+A simulation that SUCCEEDED and is CITED BY A TUTORIAL may be registered; everything else about
+the sandbox stands (no other dataset read, retrieved, altered or deleted). Rules, recorded here
+because the moment they apply is weeks after the moment they were given:
+
+- **Path is the contract's, not a convenient one**: `$MD_DATA/2026/tutorials/{data_name}/` via
+  `md-openmm data-register`. No `dev` segment, no month segment, and never a directory made by
+  hand. The v2 contract is `$MD_DATA/{year}/{project_name}/{data_name}/`.
+- **`data_name` and the ALIAS LIST go to S0 for the user's approval BEFORE registering.**
+  Registration is write-once and `solute.aliases` defaults to empty, so a dataset registered
+  without aliases is permanently unfindable by name.
+- **The provenance must carry the corroboration distinction**, not only the handoff: M2.6a
+  corroborates the ENERGIES against AMBER; the FREE ENERGY has no independent engine behind it
+  while M2.6c/d are unrun. A dataset outlives both the handoff and the person who remembers.
+- **Nothing from the FAILED M2 campaign is registered.** It is evidence *against* which the fix
+  is measured and it belongs in the repository's record; a registered dataset implies a result
+  someone may reuse.
+- The TYK2 production runs are the ones worth registering, and they have not happened.
+
 ## For the TI-FEP tutorial, decided now rather than at writing time
 
 Three things the tutorial must say, all of them learned from M2.6 rather than from the campaign
