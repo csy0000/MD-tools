@@ -442,6 +442,29 @@ in `docs/development/0.7.0/lambda-exchange-design.md`; the part that binds both 
   the right file. And a rung whose recorded state disagrees with its Context parameters is refused:
   the lambda analogue of "tau 0 on a hot state", compared against `context_parameters(state)`, the
   one definition.
+- **The ladder coordinate is ONE accessor, and the record carries BOTH coordinates** (S0 ruling,
+  2026-09-21, on S3's A3b report). `driver.py` reads `protocol.tau` in seventeen places; for a
+  lambda ladder every one of them wants "the ladder coordinate of rung i", which tau is not. The
+  ruling is a generic `protocol.ladder_coordinates()` with a record that names its coordinate and
+  can hold more than one -- NOT a second writer (a second storage path is the second-policy shape),
+  and NOT a `tau` property returning zeros. **A lambda ladder recording `tau = 0` at every rung is
+  indistinguishable from a REST2 ladder that never heated**, which is the flattening this contract
+  exists to prevent; it is refused even though it would run today and produce structurally valid
+  files. S3 raised it rather than doing it, which is what the freeze is for.
+  **Design once, with 0.7.1 in view**: a FEP-REST2 rung has BOTH a tau and a lambda, so a field
+  designed now to hold one number would be designed again in 0.7.1. The record change is v2 -> v3
+  and lands AFTER the TYK2 campaign. Until it does, a lambda ladder is not launchable end to end,
+  and it fails LOUDLY at that line rather than being made to run.
+- **A lambda ladder's `-s` is a hybrid System that something must WRITE** (open, assigned to S0's
+  surface with S2's plan). The invariant is that every Hamiltonian a run integrates is written as
+  a file before the run and never re-derived at run time -- as `build-top --rest2-scaler` writes
+  `system_state<i>.xml`. Today nothing writes the hybrid: `combine-topology` writes a PLAN and
+  `from_plan` builds the System in memory, so a runtime that built it from the plan would be
+  exactly the re-derivation the invariant forbids. Ruled: `combine-topology` grows a System output
+  and records its sha256 beside the plan's, `from_plan` becomes that writer's implementation rather
+  than a run-time path, and ONE hybrid System serves every rung -- the rungs differ in Context
+  parameters, not in file. It is a plan-schema change, so it lands with the coordinate record,
+  after the campaign.
 - **An exchange attempt uses `energy` only.** `derivative_components` is TI's consumer and is not
   part of an attempt: pairing a derivative at one state with energies at two is the class of error
   the AIS two-probe separation exists to prevent.
