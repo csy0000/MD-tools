@@ -116,8 +116,16 @@ Two mitigations, and I would take both:
 1. v3 runtimes already refuse `schema != "md-tools-replica-exchange/v3"`, so a released v3 runtime
    will refuse a v4 file for the right reason. This is the real protection, and it exists today.
 2. A v4 `fep-rest2` file names its tau variable `tau` **and** sets `tau.incomplete_coordinate = 1`
-   with a long_name saying the state is not described by tau alone. A reader that ignores it is a
-   reader that already ignored `ladder_kind`; this is for the human reading `ncdump`.
+   with a long_name saying the state is not described by tau alone.
+
+**`incomplete_coordinate` IS A LABEL, NOT A MECHANISM, and must stay labelled as one.** It changes
+nothing about what any reader does: a program that ignores `ladder_kind` will ignore this too, since
+both are attributes and NetCDF hands out neither unless asked. It exists for the person reading
+`ncdump` output, and writing it must never be mistaken for having closed the hole. The mechanism is
+mitigation 1 -- a released v3 runtime refusing a schema it does not recognise -- and there is no
+second one. If this line is ever read as "v4 protects old readers", the failure it invites is the
+one with no trace: a correct `tau`, a lambda that was never seen, and a plausible analysis of a
+ladder the reader did not understand.
 
 ## 5. What this does to the other sixteen readers
 
