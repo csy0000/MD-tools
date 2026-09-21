@@ -22,7 +22,7 @@ in [`handoffs/`](handoffs/) and never edit it.
 | S1-D | ligand instances and exclusion files | IMPLEMENTED against a synthetic mapping record; the registered-package row is BLOCKED (sandbox) | rows 2, 19 |
 | S1-E | versioned CMAP rule | IMPLEMENTED | rows 2, 9 |
 | S1-F | identity, resume and refusal | IMPLEMENTED | rows 11–15: a ladder run by 0.6.0 code extends; selective states refused by name; exports verify; each integration patch reverted fails its tests |
-| S1-G | CUDA explicit-solvent ladders | **VALIDATED** 2026-09-20, card 5 (user-granted, in a window hpREST2 freed): `tests/test_selective_rest2_cuda.py` 12 passed, 0 skipped, `--error-on-skip`, 73 s. All four ladders (backbone, sidechain, ligand, combined) completed on CUDA/mixed, `selection_mode: explicit`, fingerprint `md-tools-hamiltonian-identity/v3`, read from `restart.json`. Exchange energies recomputed on CUDA at stored coordinates: worst |u| 0.00582 kT, worst cross 0.00901 kT, against a 0.05 kT tolerance calibrated beforehand — 3–5× the CPU figures, which is what mixed precision costs. Each test also re-checked that the whole-solute Hamiltonian at the same taus is REJECTED, so no pass is vacuous | [S1](handoffs/S1.md) row 18 |
+| S1-G | CUDA explicit-solvent ladders | **VALIDATED** 2026-09-20, on one granted card (in a window hpREST2 freed): `tests/test_selective_rest2_cuda.py` 12 passed, 0 skipped, `--error-on-skip`, 73 s. All four ladders (backbone, sidechain, ligand, combined) completed on CUDA/mixed, `selection_mode: explicit`, fingerprint `md-tools-hamiltonian-identity/v3`, read from `restart.json`. Exchange energies recomputed on CUDA at stored coordinates: worst |u| 0.00582 kT, worst cross 0.00901 kT, against a 0.05 kT tolerance calibrated beforehand — 3–5× the CPU figures, which is what mixed precision costs. Each test also re-checked that the whole-solute Hamiltonian at the same taus is REJECTED, so no pass is vacuous | [S1](handoffs/S1.md) row 18 |
 
 State values are NOT STARTED, IN PROGRESS, IMPLEMENTED (code and deterministic tests), VALIDATED
 (evidence on the required platform), or BLOCKED (with the blocker named). IMPLEMENTED is not
@@ -45,7 +45,7 @@ VALIDATED, and neither is released.
 - S1-G: DONE, validated on CUDA (see the milestone row). What remains BLOCKED is the registered-package ligand row and dataset registration (the `$MD_DATA` sandbox rule), and the two TYK2 ladders, which need S2's prepared complex and 4 cards.
 - Integration: done. Resume and export of a selective ladder work on `0.6.1`.
 
-## TYK2 campaign (S1, cards 1-4)
+## TYK2 campaign (S1, four granted cards)
 
 **Ladder A — ligand only, 32 hot atoms, 4 scaled torsion bonds, tau 0 -> 0.5, 8 rungs — FINISHED
 2026-09-21 14:07.** 2,500,000 steps, 2500 exchanges, 5000 ps per state, 40 ns aggregate; 83m22s
@@ -55,7 +55,7 @@ restated from a plan.
 | gate | result |
 |---|---|
 | G2-1 ladder completes | PASS |
-| G2-2 every rank CUDA/mixed | PASS — MPS devices 0-3 = physical cards 1-4, 2 workers per card |
+| G2-2 every rank CUDA/mixed | PASS — the four granted cards, exposed by the MPS server to its clients as 0-3, 2 workers per card |
 | G2-3 MPS recorded not inferred | PASS — `execution.acceleration.placement.mps` records `verified: true` with the driver listing the process as an MPS client (M+C), pipe under the session's own cache |
 | G2-4 acceptance per pair | 0.590, 0.602, 0.581, 0.550, 0.546, 0.489, 0.483 over the 7 neighbouring pairs; 0.549 overall. No pair at zero |
 | G2-5 round trips | 105 over 8 walkers (8, 10, 10, 11, 16, 16, 17, 17); every exchange row a permutation |
@@ -94,7 +94,7 @@ that was not used to set it. Until G2-6b exists and passes that way, **G2-6 on p
 systems is UNVALIDATED.**
 
 **G2-8, the scaling probes** (100 ps per state, 50 exchanges, same system and same equilibrated
-start; cards 1-4 RELEASED 2026-09-21 after them, MPS daemon shut down and its pipe directory
+start; the four granted cards RELEASED 2026-09-21 after them, MPS daemon shut down and its pipe directory
 removed):
 
 | configuration | ranks per card | ns/day per rung | ns/day aggregate |
