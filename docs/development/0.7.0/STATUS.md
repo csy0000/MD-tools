@@ -78,7 +78,29 @@ A2 — individual development does not.
   - M2.5 reported and NOT gated: ΔΔG_hyd = -1.743 +/- 0.026 kcal/mol against experiment -2.46.
     The 0.72 kcal/mol gap is force-field and model error (openff-2.2.1/AM1-BCC in TIP3P), not an
     implementation result, and it must never be quoted as one.
-  - **M2.6 NOT RUN: there is no independent engine behind this number.** Every check above is
+  - **M2.6a PASSES** (S4 `4107d86`, 2026-09-21, CPU only, whole physical cores): at FIXED
+    coordinates AMBER `pmemd` and OpenMM agree on the plain end states to -1.53e-4 and +2.61e-4
+    kJ/mol, and on the λ-dependent part to 4.14e-4 against the 1.25e-3 declared BEFORE the run.
+    ParmEd's writer contributes <=2.6e-5. **The softcore Hamiltonian now has an independent engine
+    behind it at the energy level**, which is the first such corroboration in this branch.
+  - **M2.6b INCONCLUSIVE, and it found a convention difference rather than a defect.** pmemd's
+    dual vacuum leg gives MBAR +1.2520 +/- 0.0002 kcal/mol; the same edge in MD-tools `mode="dual"`
+    gives **exactly 0.0000 +/- 0.0000**. Not a sampling failure -- CONSTRUCTION: with no common
+    atoms both whole-molecule dummies retain every internal term at both ends, so the dual vacuum
+    Hamiltonian is λ-INDEPENDENT, `U(0) = U(0.5) = U(1)` to all printed digits with every dU/dλ
+    identically zero. AMBER scales each copy's whole potential with λ, so ITS vacuum leg is the two
+    molecules' internal free-energy difference. Both conventions are self-consistent and give the
+    same ΔΔG. **The per-leg number is convention-dependent; only ΔΔG is comparable across engines**
+    -- and S4 had already corrected this row once, before any number existed, when it was
+    hybrid-vs-dual. The same lesson twice, at two depths.
+    For S2 and S3: **in `mode="dual"` with no common atoms a vacuum leg carries NO information at
+    all.** A test asserting that makes the property explicit instead of incidental, and it is the
+    kind of property a future change could silently remove.
+  - **M2.6c/d NOT RUN, so M2's free energy remains uncorroborated by an independent engine.** A
+    dual-topology prmtop with rigid water needs `noshakemask` over the TI region, and pmemd CPU on
+    ~1,900 atoms is hours per window; it did not fit run 1. The corroboration that exists is of
+    ENERGIES, not of the free energy.
+  - **M2.6 originally NOT RUN: there was no independent engine behind this number.** Every check above is
     MD-tools against itself. Internal consistency at this quality is necessary and is not
     sufficient, and the campaign's ΔΔG stays uncorroborated until M2.6 exists.
   - Retain-all ran ~14% faster per water window, on a different card model, unpredicted: an
