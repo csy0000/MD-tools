@@ -9,16 +9,20 @@
 set -u
 ROOT="$1"; CORES="$2"; shift 2
 REPO=/data3/data/chen/scheme/MD-tools-S4-execution
-IFS=',' read -ra CORE_LIST <<< "$(echo "$CORES" | sed 's/-/../' | xargs -I{} bash -c 'eval echo {}' | tr ' ' ',')"
+# "39-47" or "39,41,43": expand to a list of single cores
+if [[ "$CORES" == *-* ]]; then
+  CORE_LIST=($(seq "${CORES%-*}" "${CORES#*-}"))
+else
+  IFS=',' read -ra CORE_LIST <<< "$CORES"
+fi
 WIDTH=${#CORE_LIST[@]}
 echo "$(date +%T) driver: root=$ROOT cores=${CORE_LIST[*]} width=$WIDTH policies=$*"
 
 jobs_list=()
 for policy in "$@"; do
   for leg in vacuum vacuum_ba solvent_v2; do
-    n=$(python - "$leg" <<'PY'
+    n=$(PYTHONPATH="$REPO:$REPO/src" python - "$leg" <<'PY'
 import sys
-sys.path.insert(0, "/data3/data/chen/scheme/MD-tools-S4-execution")
 from tests.test_alchemy_junction_policy import S_VALUES
 print(len(S_VALUES[sys.argv[1]]))
 PY
@@ -40,7 +44,7 @@ for job in "${jobs_list[@]}"; do
   log="$ROOT/logs/$1_$2_$3_$4.log"
   mkdir -p "$ROOT/logs"
   taskset -c "$core" env OPENMM_CPU_THREADS=1 CUDA_VISIBLE_DEVICES="" PYMBAR_DISABLE_JAX=true \
-      MD_TOOLS_S4_M3_ROOT="$ROOT" PYTHONPATH="$REPO" \
+      MD_TOOLS_S4_M3_ROOT="$ROOT" PYTHONPATH="$REPO:$REPO/src" \
       python "$REPO/tests/test_alchemy_junction_policy.py" "$1" "$2" "$3" "$4" \
       > "$log" 2>&1 &
   i=$((i + 1))
