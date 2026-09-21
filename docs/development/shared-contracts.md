@@ -465,6 +465,19 @@ in `docs/development/0.7.0/lambda-exchange-design.md`; the part that binds both 
   than a run-time path, and ONE hybrid System serves every rung -- the rungs differ in Context
   parameters, not in file. It is a plan-schema change, so it lands with the coordinate record,
   after the campaign.
+- **$MD_DATA is open for TUTORIAL datasets only** (the user, 2026-09-21, lifting part of the
+  2026-09-19 sandbox). A simulation that SUCCEEDED and is CITED BY A TUTORIAL may be registered.
+  Everything else about the sandbox stands: no other dataset is read, retrieved, altered or
+  deleted, and no session reaches outside its own new dataset.
+  The path is the CONTRACT's, not a new namespace: `$MD_DATA/{year}/tutorials/{data_name}/`, filed
+  under the year the run completed, through `md-openmm data-register`. `$MD_DATA/dev/tutorials/...`
+  as first written cannot be registered -- v2 has no `dev` segment and no month segment -- so
+  registering there would have failed, or worse, written files that no `dataset.yaml` describes.
+  **Registration is WRITE-ONCE.** `solute.aliases` defaults to empty and cannot be corrected
+  afterwards, so a dataset registered without aliases is permanently unfindable by name. Therefore:
+  set the aliases BEFORE registering, and **the data_name and the alias list go to the user for
+  approval first** -- one approval per dataset, naming both. No tutorial in the repository sets
+  that field today, which is how it gets forgotten.
 - **An exchange attempt uses `energy` only.** `derivative_components` is TI's consumer and is not
   part of an attempt: pairing a derivative at one state with energies at two is the class of error
   the AIS two-probe separation exists to prevent.
