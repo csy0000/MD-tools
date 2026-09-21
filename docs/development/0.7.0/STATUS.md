@@ -60,7 +60,12 @@ A2 — individual development does not.
 
 ## Blockers
 
-- **M3 is RUNNING** since 2026-09-20 15:00 (S4, `a34ba88`, cores 39–47 agreed with hpREST2, 9 single-threaded processes, no GPU, 312 windows, ETA ~12 h): the same edge and legs under both junction policies, gating the two ΔΔG against each other. Pre-launch check: retain-all has zero λ-dependent bonded terms and `dU/dλ_bonded` = 0.00 at both ends; separable has 10 terms and 660.77 kJ/mol, S3's figure to the decimal.
+- **M3 FINISHED 2026-09-21 04:03** (312 windows, 0 errors, CPU): **retain-all is CONFIRMED and the bonded junction term was the whole of M2's fault.**
+  - M3.1, the gated row: retain-all −1.7436 ± 0.0370 against separable −1.7690 ± 0.3471 kcal/mol — **agreeing to 0.0254**, twenty times inside the 0.5 ceiling. Reported INCONCLUSIVE rather than PASS because σ_c = 0.349 exceeds the registered 0.25 band: separable cannot certify agreement at the power M3.0 demanded, and that inability IS the defect. The band was not moved.
+  - M3.2: retain-all clears the 0.03 overlap floor in all nine legs (0.039–0.068); separable is below it in 5 of 6 vacuum legs (0.007–0.029) — M2's failure reproduced on CPU and removed by the policy.
+  - M3.3: vacuum closure 0.00014 ± 0.00042 under retain-all (PASS); 0.0123 ± 0.2746 under separable (INCONCLUSIVE).
+  - M3.4: `dU/dλ_bonded` = 0.00 at both ends in every retain-all leg; separable +619/−225, +566/−244, +256/−503 — S3's 660.77 decomposition and S2's 610.585 angle, sampled.
+  - Per-leg ΔG differs by construction and is ungated, as registered; S3's cutoff asymmetry is in both arms and cancels from the gated difference. S4 checked the suspicious number first: retain-all's three vacuum repeats agree to 0.0009 kcal/mol with differing stream digests, so it is genuinely better determined, not a duplicated trajectory.
 - **TYK2 is stopped.** Its gate was M2 passing, and M2 failed. No protein campaign starts until the cause is fixed and M2 re-run.
 - A pilot that is too short to ESTIMATE overlap must not be allowed to choose window placement: M2.0's rule let a 40-sample pilot do it, and its overlap estimates were optimistic. The rule is being rewritten before the next campaign.
 

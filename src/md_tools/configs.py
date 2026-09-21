@@ -96,9 +96,23 @@ def _holds_the_examples(candidate: Path) -> bool:
 
 
 def example_root() -> Path:
-    """The directory holding `machine/`, `sys/` and `md/`, wherever this is running."""
+    """The directory holding `machine/`, `sys/` and `md/`, wherever this is running.
+
+    THE SOURCE TREE COMES FIRST, and that order is the point. The examples document the code that
+    is RUNNING, so they must come from the same tree it was imported from. Asking the installed
+    distribution first meant a checkout run against an environment holding a different md-tools
+    read that other version's examples: for weeks `test_the_build_top_example_resolves_to_the_model_defaults`
+    failed on every branch here -- the checkout's model said `solute.parameters: search` while the
+    environment's installed 0.5.4 example said `null` -- and it was written off as "environmental"
+    rather than read as what it was, two versions in one process. A shared environment is never
+    reinstalled to make a test pass, so the fix belongs here.
+
+    `_from_source_tree` only answers when `md_tools/configs.py` really sits two levels under a
+    repository root holding `configs/`, so an ordinary installed package still resolves through the
+    distribution metadata, and an editable install correctly gets its own checkout's examples.
+    """
     tried = []
-    for locate in (_from_distribution, _from_prefix, _from_source_tree):
+    for locate in (_from_source_tree, _from_distribution, _from_prefix):
         found = locate()
         if found is None:
             continue

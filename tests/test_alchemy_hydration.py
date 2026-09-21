@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import statistics
 
 import pytest
 
@@ -87,12 +88,25 @@ def test_a_short_vacuum_leg_runs_and_analyses(tmp_path, vacuum_plan):
     assert math.isfinite(leg.delta_g_kj_mol)
 
 
-def test_combining_repeats_is_inverse_variance():
+def test_combining_repeats_is_inverse_variance_and_error_bars_by_the_spread():
+    """The value is the inverse-variance mean; the uncertainty is the LARGER of what the
+    estimators claim and what the repeats actually scatter by (the M2 finding)."""
     legs = [Leg(f"r{i}", "vacuum", "A", "B", v, s, 300.0, "MBAR", "x")
             for i, (v, s) in enumerate([(1.0, 0.1), (2.0, 0.2)])]
     c = combine_repeats(legs)
     assert c.delta_g_kj_mol == pytest.approx((1 / 0.01 + 2 / 0.04) / (1 / 0.01 + 1 / 0.04))
-    assert c.sigma_kj_mol == pytest.approx((1 / (1 / 0.01 + 1 / 0.04)) ** 0.5)
+    estimator = (1 / (1 / 0.01 + 1 / 0.04)) ** 0.5
+    spread = statistics.stdev([1.0, 2.0]) / math.sqrt(2)
+    assert spread > estimator
+    assert c.sigma_kj_mol == pytest.approx(spread)
+    assert c.source["sigma_used"] == "repeat spread"
+    assert c.source["estimator_sigma_kJ_mol"] == pytest.approx(estimator)
+    # tight, consistent repeats: the estimator's own uncertainty is the larger one and is used
+    tight = [Leg(f"r{i}", "vacuum", "A", "B", v, 0.5, 300.0, "MBAR", "x")
+             for i, v in enumerate([1.0, 1.01])]
+    assert combine_repeats(tight).source["sigma_used"] == "estimator"
+    # one repeat has no spread to measure, and the record says so
+    assert combine_repeats([legs[0]]).source["n_repeats"] == 1
     with pytest.raises(WindowError, match="different legs"):
         combine_repeats([legs[0], Leg("x", "solvent", "A", "B", 1, 0.1, 300.0, "MBAR", "x")])
 

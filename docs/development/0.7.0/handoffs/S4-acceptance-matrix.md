@@ -139,3 +139,32 @@ Levers, if that is too much: 2 repeats instead of 3 (−33 %), 3 ns production i
 (−40 %, at the cost of precision on the near-null `ejm_42` edge), or dropping the second anchor
 set (−4.85 days, at the cost of the only internal ABFE check). Each is a protocol decision to be
 recorded **before** sampling, not after.
+
+## M3: the two-policy comparison (junction `retain-all` vs `separable`)
+
+Registered 2026-09-20, **before it runs**, at S0's instruction after M2 failed. One construction
+difference, measured rather than bounded: the SAME edge, legs, schedule, lengths, seeds and
+analysis, built twice — once with S2's new default `junction_policy = retain-all`, once with
+`separable`, the construction M2 ran under. CPU only, no card.
+
+| name | value | why |
+|---|---|---|
+| agreement of the two ΔΔG | the usual gate: \|Δ\| < 0.5 kcal/mol AND < 3 σ_c; σ_c > 0.25 → INCONCLUSIVE | if they agree, S2's sensitivity bound (0.02–0.05 kJ/mol against a 2.09 kJ/mol gate) is confirmed and `retain-all` is simply correct. If they disagree, **that difference IS the bias**, measured, and it changes the recommendation |
+| per-leg ΔG | expected to DIFFER between policies, and not gated | `separable` removes junction terms at a dummy's end, so each leg's endpoint state is a different physical state. The dummy's internal free energy cancels between legs; ΔΔG is where the comparison belongs |
+| uncertainty | every combined result is error-barred by **the larger of the estimator's uncertainty and the repeat spread** (`campaign.combine_repeats`) | M2.3: MBAR claimed 0.09 kcal/mol where repeats scattered by 0.80 |
+
+| id | fixture | expected quantity | independent reference | tolerance | platform | command | evidence | verdict |
+|---|---|---|---|---|---|---|---|---|
+| M3.0 | **protocol, registered before sampling.** Both policies, identical in everything else: vacuum A→B and B→A at 18 windows (the M2 placement), 1 ns production, 50 ps equilibration, 3 repeats; solvent v2 at 16 windows, 200 ps production, 50 ps equilibration, 3 repeats. 2 fs, reports every 1 ps, minimised per window. CPU, one thread per window, windows in parallel. No pilot, and no window placement change: the placement is M2's so that the policy is the only difference | — | — | — | CPU | — | — | the protocol for M3.1–M3.4 |
+| M3.1 | both policies | ΔΔG_hyd(retain-all) vs ΔΔG_hyd(separable) | each other | gate | CPU | `pytest tests/test_alchemy_junction_policy.py -k ddg` | — | **INCONCLUSIVE by the registered rule, and the two agree**: retain-all −1.7436 ± 0.0370, separable −1.7690 ± 0.3471 kcal/mol; they differ by **0.0254**, far inside the 0.5 ceiling. The verdict is INCONCLUSIVE only because σ_c = 0.349 exceeds the 0.25 band — and that width is separable's own noise, the defect retain-all removes. Retain-all's ΔΔG is 9× better determined from identical sampling |
+| M3.2 | both policies | minimum neighbour overlap and decorrelated samples per leg | M2's values under `separable` | reported; `retain-all` is expected to clear 0.03 where M2 did not | CPU | `-k overlap` | — | **retain-all clears the floor everywhere, separable does not**: retain-all 0.039–0.068 overlap with 43–551 decorrelated samples; separable 0.007–0.029 in **5 of its 6 vacuum legs** (and 0.044–0.075 in solvent). This is M2's failure reproduced on CPU, and removed by the policy |
+| M3.3 | both policies | vacuum closure A→B + B→A = 0, each policy | closure | gate | CPU | `-k closure` | — | retain-all **PASS**: A→B −1.6382, B→A +1.6381, closure 0.00014 ± 0.00042 kcal/mol. separable **INCONCLUSIVE**: 0.0123 ± 0.2746. The three retain-all repeats of one vacuum leg agree to 0.0009 kcal/mol with distinct trajectories (stream digests differ); separable's scatter across 0.61 |
+| M3.4 | both policies | dU/dλ_bonded at s = 0 and s = 1 | S3's decomposition (660.77 kJ/mol from junction terms, 0.00 from the core) and S2's single 610.585 kJ/mol angle | reported: `retain-all` must show no λ-dependent bonded slots and no endpoint spike | CPU | `-k integrand` | — | **as predicted**: retain-all 0.00 kJ/mol at both end points in all three legs. separable +619.00/−225.45 (solvent), +566.34/−243.89 (vacuum), +255.99/−502.71 (vacuum_ba) — S3's 660.77 decomposition and S2's single 610.585 kJ/mol angle, sampled |
+
+**M2.0's pilot rule is rewritten, and the old one is void.** It let a 40-sample pilot choose
+window placement, and its overlap estimates were optimistic — M2's vacuum legs then failed the
+0.03 floor at 1 ns. From now on: a pilot may change window placement only if every window has at
+least **100 decorrelated samples** (`n / g`, reported per window), and a placement chosen from a
+pilot is re-checked against the production run's own overlap; if production overlap falls below
+0.03 the campaign FAILS rather than being re-placed after the fact. A pilot that cannot estimate
+overlap may not change anything.

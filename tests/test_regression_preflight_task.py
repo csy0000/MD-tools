@@ -143,6 +143,38 @@ def test_md_run_refuses_ng_on_a_cmd_stage_and_writes_nothing(tmp_path):
         f"the rule fired without -ng: {accepted.stderr}"
 
 
+def test_md_run_check_creates_nothing_on_a_cpu_run(tmp_path):
+    """The device-free half of `--check` creates nothing: the same two cases, with `--cpu`.
+
+    `--check` runs the WHOLE preflight, which ends in a real CUDA Context, so the ordinary form of
+    this check cannot run without a card and lives in the gpu lane below. What it is really
+    asserting -- that `md-run` does not create `-odir` or `resolved.config` before dispatching to
+    a runtime -- is platform-independent, and `--cpu` is the project's one per-run override. So
+    the coverage stays in the fast lane rather than moving wholesale to a lane most runs never
+    reach, and the gpu test keeps the default CUDA path and the real run.
+    """
+    fixture = _a_real_stage(tmp_path)
+
+    checked = subprocess.run(CLI + ["md-run", *fixture["argv"], "-odir", "fresh", "--check",
+                                    "--cpu"],
+                             cwd=fixture["cwd"], capture_output=True, text=True, timeout=300)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "Nothing was created" in checked.stdout, checked.stdout
+    assert not (tmp_path / "fresh").exists(), \
+        f"--check created -odir: {sorted(p.name for p in (tmp_path / 'fresh').iterdir())}"
+
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    (existing / "marker.txt").write_text("kept", encoding="utf-8")
+    again = subprocess.run(CLI + ["md-run", *fixture["argv"], "-odir", "existing", "--check",
+                                  "--cpu"],
+                           cwd=fixture["cwd"], capture_output=True, text=True, timeout=300)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert sorted(p.name for p in existing.iterdir()) == ["marker.txt"], \
+        sorted(p.name for p in existing.iterdir())
+
+
+@pytest.mark.gpu
 def test_md_run_check_creates_nothing_not_even_the_output_directory(tmp_path):
     """`--check` printed "Nothing was created." and created `-odir` and `resolved.config`.
 
@@ -152,6 +184,12 @@ def test_md_run_check_creates_nothing_not_even_the_output_directory(tmp_path):
     calls indistinguishable from a run that happened.
 
     Three cases, because the third is what a guard on the first two could silently break.
+
+    MARKED `gpu`, which it was not: every case here goes through the whole preflight, and that
+    ends in a real CUDA Context, so all three fail with CUDA_ERROR_NO_DEVICE on a machine with no
+    card. Unmarked, it failed in every card-less lane instead of being deselected honestly -- and
+    a lane with a standing known failure is a lane people stop reading. The device-free half is
+    `test_md_run_check_creates_nothing_on_a_cpu_run` above, in the fast lane.
     """
     fixture = _a_real_stage(tmp_path)
 

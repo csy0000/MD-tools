@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import statistics
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -125,7 +127,22 @@ def analyze_leg(directory, *, repeat: str = "r1", estimator: str = "MBAR",
 
 
 def combine_repeats(legs: Sequence[Leg]) -> Leg:
-    """Inverse-variance mean of independent repeats of ONE leg."""
+    """Combine independent repeats of ONE leg, and error-bar them by the REPEATS.
+
+    The value is the inverse-variance mean. The uncertainty is the LARGER of
+
+        the inverse-variance uncertainty   -- what the estimators claim, and
+        the spread of the repeats          -- std(values, ddof=1) / sqrt(n),
+
+    because on the M2 campaign (2026-09-20, `handoffs/S4.md`) the repeats of one leg differed by
+    up to 0.80 kcal/mol while MBAR claimed 0.09: an asymptotic covariance computed where
+    neighbouring states barely overlap is not a measurement of the run-to-run spread, and
+    publishing it as one understates the error by an order of magnitude. Both numbers are kept in
+    the record, with which one was used.
+
+    With a single repeat there is no spread to measure; the estimator's own uncertainty is
+    returned and the record says `repeats: 1`, which is not evidence of precision.
+    """
     if not legs:
         raise WindowError("no repeats")
     first = legs[0]
@@ -135,14 +152,22 @@ def combine_repeats(legs: Sequence[Leg]) -> Leg:
                 (first.environment, first.endpoint_a, first.endpoint_b, first.alchemical_scheme,
                  first.ligand_hamiltonian_sha256):
             raise WindowError("repeats of different legs cannot be combined")
+    values = [leg.delta_g_kj_mol for leg in legs]
     w = [1.0 / leg.sigma_kj_mol ** 2 for leg in legs]
-    value = sum(wi * leg.delta_g_kj_mol for wi, leg in zip(w, legs)) / sum(w)
+    value = sum(wi * v for wi, v in zip(w, values)) / sum(w)
+    estimator_sigma = (1.0 / sum(w)) ** 0.5
+    spread_sigma = (statistics.stdev(values) / math.sqrt(len(values))) if len(values) > 1 else 0.0
+    sigma = max(estimator_sigma, spread_sigma)
     return Leg(f"{first.environment} ({len(legs)} repeats)", first.environment,
-               first.endpoint_a, first.endpoint_b, value, (1.0 / sum(w)) ** 0.5,
+               first.endpoint_a, first.endpoint_b, value, sigma,
                first.temperature_k, first.estimator, first.alchemical_scheme,
-               first.restraint_digest, {"repeats": [leg.to_record() for leg in legs]},
+               first.restraint_digest,
+               {"repeats": [leg.to_record() for leg in legs], "n_repeats": len(legs),
+                "estimator_sigma_kJ_mol": estimator_sigma,
+                "repeat_spread_sigma_kJ_mol": spread_sigma,
+                "sigma_used": "repeat spread" if spread_sigma > estimator_sigma else "estimator",
+                "rule": "the larger of the estimator's uncertainty and the repeat spread"},
                first.ligand_hamiltonian_sha256)
-
 
 def matched_leg_report(first_dir, second_dir) -> dict[str, Any]:
     """S2's `matched_legs` on the plans two leg directories were prepared from.
