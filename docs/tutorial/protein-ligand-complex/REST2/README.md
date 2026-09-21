@@ -1,15 +1,15 @@
 # REST2 on a protein–ligand complex: heating the ligand, and the pocket around it
 
-!!! danger "SKELETON — nothing here has been run"
-    Every command on this page is written to be run exactly as it stands, but **no ladder has been
-    run yet**, so every measured quantity is left blank and marked `TO BE MEASURED`. A tutorial
-    number is copied from the files a run produced or it is not written at all. This page is
-    finished when the two campaigns in
-    [the protein–ligand campaign](../../../development/protein-ligand-campaign.md) have run on 4
-    GPUs and their numbers are pasted in.
+!!! note "Both ladders were run on 2026-09-21; every number here is copied from their files"
+    Cards 1–4 (RTX 3080), 8 ranks, 2 per card under MPS, CUDA mixed precision, md-tools 0.6.1 on
+    branch `work/0.6.1-selection`. The system is S2's prepared TYK2 fixture with `ejm_31`.
 
-    Two prerequisites are not yet met: the prepared TYK2 complex (S2's, one `build-top` per
-    ligand) does not exist yet, and no GPU has been allocated for these ladders.
+    **One check on this page did not pass**: the recorded exchange energies were recomputed
+    against the saved states and came out at 0.077–0.121 kT, against a 0.05 kT tolerance that had
+    been calibrated on a system thirty times smaller. The tolerance does not transfer between
+    system sizes and is being replaced by a derived one; until that is measured, this check is
+    **unvalidated on systems of this size**. It is recorded rather than quietly widened. See
+    `docs/development/0.6.1/handoffs/S1.md`.
 
 Two ladders on TYK2 with `ejm_31` bound, both eight states at 300 K, differing only in what is
 hot:
@@ -228,11 +228,22 @@ TO BE MEASURED: the platform lines, one per rank, and the completion summary
 | hot atoms (of 4,701 solute atoms) | 32 | 193 |
 | scaled torsion central bonds | 4 | 52 |
 | scaled CMAP terms | 0 | 0 |
-| ns/day per state | 93.5 | TO BE MEASURED |
-| ns/day aggregate, 8 rungs on 4 cards | 748 | TO BE MEASURED |
-| neighbouring-pair acceptance | 0.483–0.602, overall 0.549 | TO BE MEASURED |
-| walker round trips (8 walkers, 5 ns) | 105 | TO BE MEASURED |
-| wall clock | 83 min | TO BE MEASURED |
+| ns/day per state | 93.5 | 96.3 |
+| ns/day aggregate, 8 rungs on 4 cards | 748 | 771 |
+| neighbouring-pair acceptance | 0.483–0.602, overall 0.549 | 0.358–0.408, overall 0.388 |
+| walker round trips (8 walkers, 5 ns) | 105 | 45 |
+| wall clock | 83 min | 81 min |
+
+**The finding: six times the hot region, at half the τ_max, costs about a third of the acceptance
+and half the mixing.** That is the trade, measured. Which side of it you want depends on whether
+the pocket has to move with the ligand; neither ladder is "better".
+
+!!! warning "B is not evidence that a bigger hot region is free"
+    B's 96.3 ns/day against A's 93.5 is **not** a measurement that heating 193 atoms costs less
+    than heating 32. The two ladders did not run against identical background load on a shared
+    machine. What the numbers do support is that the per-step cost here is dominated by the
+    53,030-atom box, which both ladders share: the hot region changes what is *sampled*, not what
+    each step costs.
 
 ### How fast is eight rungs on four cards, really
 
@@ -247,6 +258,26 @@ slowest card — which is also why the cards must be the same model.
 
 Plan from the measured number, not from the single-rank one. Multiplying a single-rank figure by
 the card count overestimates a ladder by about a factor of two.
+
+**How the cost divides**, from three 100 ps probes on the same system and the same equilibrated
+start:
+
+| configuration | ranks per card | ns/day per rung | ns/day aggregate |
+|---|---|---|---|
+| one rank, no ladder at all | — | 330 | — |
+| 4 rungs on 4 cards | 1 | 209.9 | 839.5 |
+| 8 rungs on 4 cards | 2 | 117.6 | 940.8 |
+| 8 rungs on 2 cards | 4 | 69.1 | 553.1 |
+
+The ladder machinery — exchange barriers, per-state trajectories, checkpoints — costs 36% before
+any sharing. A second rank on a card gives back 1.12× the aggregate throughput of that card, not
+2×. **A fourth rank loses throughput outright**: 553.1 aggregate against 940.8, so oversubscribing
+past two per card is not a smaller gain, it is a loss.
+
+!!! note "Short probes flatter the machine"
+    The 8-on-4 probe reads 117.6 ns/day per rung; the 5 ns production ladder of the same shape
+    sustained 93.5, about 26% lower. Use probes for the *relative* scaling between configurations
+    and a production run for the number you plan with.
 
 The comparison the campaign asks for is between A and B: what heating the pocket as well as the
 ligand costs in acceptance, and whether it buys sampling the ligand-only ladder does not reach.
