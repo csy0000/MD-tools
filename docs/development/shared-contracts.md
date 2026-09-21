@@ -421,6 +421,18 @@ in `docs/development/0.7.0/lambda-exchange-design.md`; the part that binds both 
   fixed and every per-state output is correct by construction. Swapping lambda between Contexts
   would make each Context follow the WALKER, and every per-state file would need re-routing at each
   accepted swap — bookkeeping that is invisible when it is wrong.
+- **Ownership of A3b** (assigned 2026-09-21, after S3 asked): the lambda-ladder RUNTIME is S3's —
+  it designed the shape and owns the per-rung Hamiltonian, and S4's hands are full with the TYK2
+  campaigns. S4 owns the acceptance test's consumption, the per-state outputs and the tutorial
+  evidence, and reviews the runtime. S0 owns the `md-run` / `build-md` surface and wires it once
+  the runtime shape is settled. One module, one writer.
+- **Two refusals, and both are about the SHAPE rather than the contents** (S3):
+  a per-rung `-s` on a lambda ladder is refused EVEN WHEN the K paths are identical — the column
+  cannot express a true statement about a lambda ladder, so its presence is the error, not its
+  contents, exactly as `-s` on the command line is refused for a REST2 ladder even when it names
+  the right file. And a rung whose recorded state disagrees with its Context parameters is refused:
+  the lambda analogue of "tau 0 on a hot state", compared against `context_parameters(state)`, the
+  one definition.
 - **An exchange attempt uses `energy` only.** `derivative_components` is TI's consumer and is not
   part of an attempt: pairing a derivative at one state with energies at two is the class of error
   the AIS two-probe separation exists to prevent.
