@@ -160,6 +160,16 @@ class ReplicaEngine:
                 # realisation counted twice.
                 integrator.setRandomNumberSeed(int(seed) + 977 * index)
             simulation = Simulation(topology, systems[index], integrator, platform, properties)
+            # A protocol whose rungs differ in CONTEXT PARAMETERS rather than in their System puts
+            # each Context into its own state here -- one hook, at construction, so that a Context
+            # still IS a thermodynamic state by the time anything reads it. A lambda ladder
+            # (`md_tools.alchemy.ladder`) is the case; REST2 defines no such method and is
+            # untouched. Without this the K Contexts of a one-System ladder would all sit at
+            # whatever state the System was serialised in, propagate identically, and exchange
+            # with acceptance 1.
+            prepare = getattr(protocol, "prepare_context", None)
+            if prepare is not None:
+                prepare(index, simulation.context)
             self._simulations[index] = simulation
             self._integrators[index] = integrator
 
