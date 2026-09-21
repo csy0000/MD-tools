@@ -402,6 +402,38 @@ Agree, before S2/S3/S4 diverge, the callable interfaces for: construction, state
 energy and cross-state evaluation, and complete derivatives. Provide real miniature fixtures, not
 only mocks — a mock cannot notice a missing PME reciprocal-space term.
 
+### Exchange ladders: what a rung IS (decided 2026-09-21, S3 and S4, for 0.7.0 A3b and 0.7.1)
+
+A REST2 rung and a lambda window are both "rungs" and they are not the same object. The table is
+in `docs/development/0.7.0/lambda-exchange-design.md`; the part that binds both branches:
+
+- **A rung is addressed by its INDEX `j`, with `(lambda_j, tau_j)` as its CONTENT.** Never by its
+  lambda. Addressing by lambda is the obvious shortcut while tau is absent and it forces 0.7.1
+  either to re-index every rung or to carry two addressing schemes — and two addressing schemes is
+  how a walker is filed under the wrong state. One field now, a migration later.
+- **tau is BAKED into a serialised System; lambda is a Context parameter of ONE System.** So a
+  REST2 ladder reads a saved state per group-file line, and **a lambda ladder has NO group file**:
+  a per-rung `-s` would be the same path repeated K times, and a column that can only ever hold one
+  value will eventually hold a wrong one. The rung's lambda belongs in the resolved configuration.
+  0.7.1's tent path needs BOTH mechanisms at once, since its neighbours differ by a Context
+  parameter AND by a serialised System.
+- **The invariant is satisfied genuinely, not by analogy.** "A scaled Hamiltonian is built once and
+  never re-derived at run time" holds for a lambda window because there is nothing to derive:
+  `set_state` sets parameters, with no reinitialise, no second System, no second Context and no
+  coordinate copy.
+- **Identity splits in two.** The LADDER's recorded identity answers "are these rungs the same
+  experiment?" — end-state digests, plan digest, softcore settings including `sc_boundary_14`,
+  kappa, PME grid, force groups — and every rung shares it by construction. The RUNG's identity is
+  `context_parameters(state)` plus its index, which is already the one definition of a state and
+  the dict the forces actually read. No lambda-aware second authority on what a state is.
+- **Configurations are exchanged, not states**, as 0.6.1's ladder does, so STATE ↔ CONTEXT stays
+  fixed and every per-state output is correct by construction. Swapping lambda between Contexts
+  would make each Context follow the WALKER, and every per-state file would need re-routing at each
+  accepted swap — bookkeeping that is invisible when it is wrong.
+- **An exchange attempt uses `energy` only.** `derivative_components` is TI's consumer and is not
+  part of an attempt: pairing a derivative at one state with energies at two is the class of error
+  the AIS two-probe separation exists to prevent.
+
 ## 6. Data and execution
 
 Reuse the existing authorities: preflight, platform policy, MPI, checkpoints, registration and
