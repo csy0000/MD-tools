@@ -1,0 +1,27 @@
+{
+ "A": {
+  "difference_kJ": -0.00015338331526315585,
+  "openmm_kJ": 4.833091783315264,
+  "pmemd_kJ": 4.832938400000001,
+  "prmtop_roundtrip_kJ": 4.8330916591626245,
+  "writer_difference_kJ": -1.2415263928033937e-07
+ },
+ "B": {
+  "difference_kJ": 0.00026087623643888946,
+  "openmm_kJ": 702.5021255237635,
+  "pmemd_kJ": 702.5023864,
+  "prmtop_roundtrip_kJ": 702.502151917562,
+  "writer_difference_kJ": 2.6393798407298164e-05
+ },
+ "lambda_dependent_part_kJ": 0.0004142595517020453,
+ "print_resolution_kJ": 0.0008368000000000001,
+ "tolerance_kJ": 0.0012510595517020453,
+ "unique_atoms": {
+  "A": [
+   "H6"
+  ],
+  "B": [
+   "Cl1"
+  ]
+ }
+}

@@ -46,17 +46,17 @@ evidence. Every PASS row names the command that produced it; the counts are in
 | W7 | OpenMM harmonic model (18 coordinates), 5 windows × 100 000 steps | MBAR, BAR, EXP, TI ΔG | closed form | gate | CPU `--cpu` | `pytest tests/test_alchemy_windows.py -m slow` | S4.md §W7 | **FAIL (partial)**, 2026-09-19: MBAR, BAR and EXP forward PASS. EXP reverse FAILS by 0.81 kcal/mol, flagged `poor_overlap` (Kish ESS 24 < 50). TI is INCONCLUSIVE: σ_int = 0.62 kcal/mol from its quadrature indicator. The cause is a schedule too coarse for 18 coordinates; the gate is unchanged |
 | W7b | the W7 data | every estimator that does not PASS is flagged (`poor_overlap`, or INCONCLUSIVE through σ_int); no silent failure | the gate | exact | CPU | same | S4.md §W7 | PASS |
 | W8 | same model, **17 windows** (s = k/16; knot at 0.5 included) × 100 000 steps, defined 2026-09-19 after W7 and before sampling | MBAR, BAR, EXP forward, EXP reverse, TI (with σ_int) | closed form | gate, unchanged | CPU `--cpu` | `pytest tests/test_alchemy_windows.py -m slow -k w8` | S4.md §W8 | **PASS**, 2026-09-19, 36 min CPU: MBAR 8.579 ± 0.068, BAR 8.595 ± 0.063, EXP forward 8.591 ± 0.097, EXP reverse 8.546 ± 0.097, TI 8.646 ± 0.081 kcal/mol against the exact 8.633; all five PASS the unchanged gate |
-| G1 | the harmonic and NPT/PME models | fresh window on CUDA recording `resolved_platform: CUDA`, `platform_selection: machine-config`; self-check; interrupt/resume; read-only refusals; W8 and N1 on CUDA | W4–W8, N1; the closed forms | as those rows; CUDA resume byte identity recorded, not asserted | **CUDA, card 4 (RTX 3080), mixed precision** | `CUDA_VISIBLE_DEVICES=4 python -m pytest tests/test_alchemy_windows_cuda.py -s -rs --error-on-skip` | S4.md §G1 | **PASS** at `d65d4f0`, 2026-09-19: 5 passed, 0 skipped, 2 min 42 s. The CUDA resume WAS byte-identical to the uninterrupted run for this model. W8 on CUDA: MBAR 8.596, BAR 8.610, EXP fwd 8.612, EXP rev 8.695, TI 8.667 kcal/mol vs 8.633, all PASS. N1 on CUDA: MBAR 2.260 ± 0.136, BAR 2.613 ± 0.095 vs 2.435, both PASS (asserted); EXP and TI are reported, not asserted. The first G1 run failed twice: once on a wrong key in the test, once on the self-check tolerance, which was then recalibrated with measurements (see thresholds) |
+| G1 | the harmonic and NPT/PME models | fresh window on CUDA recording `resolved_platform: CUDA`, `platform_selection: machine-config`; self-check; interrupt/resume; read-only refusals; W8 and N1 on CUDA | W4–W8, N1; the closed forms | as those rows; CUDA resume byte identity recorded, not asserted | **CUDA, one granted card (RTX 3080), mixed precision** | `CUDA_VISIBLE_DEVICES=4 python -m pytest tests/test_alchemy_windows_cuda.py -s -rs --error-on-skip` | S4.md §G1 | **PASS** at `d65d4f0`, 2026-09-19 on one granted card: 5 passed, 0 skipped, 2 min 42 s. The CUDA resume WAS byte-identical to the uninterrupted run for this model. W8 on CUDA: MBAR 8.596, BAR 8.610, EXP fwd 8.612, EXP rev 8.695, TI 8.667 kcal/mol vs 8.633, all PASS. N1 on CUDA: MBAR 2.260 ± 0.136, BAR 2.613 ± 0.095 vs 2.435, both PASS (asserted); EXP and TI are reported, not asserted. The first G1 run failed twice: once on a wrong key in the test, once on the self-check tolerance, which was then recalibrated with measurements (see thresholds) |
 | M1 | absolute hydration, small neutral molecule | ΔG_hyd | matched reference: AMBER TI with the same parameters, or a published value computed with the same force field and protocol | gate; sampling rules above | CUDA | — | — | BLOCKED on A1 (S2 plan) and A2 (S3 molecular Hamiltonian) |
-| M2 | relative hydration ethane → chloroethane on v2, three repeats per leg | ΔΔG_hyd | see M2.1–M2.6 | see sub-rows | **CUDA, cards 2 and 3** (RTX 3080, mixed), 2026-09-20, commit 3e26959 | `pytest tests/test_alchemy_hydration_m2.py --error-on-skip` | [m2_result.json](S4-evidence-m2-result.json), S4.md §M2 | **FAIL**: the campaign ran to completion (150 windows, 9 legs, 0 skips, 3 h 17 m of GPU) and the gates do not pass. M2.1 FAIL (4 of 9 legs below 0.03 overlap), M2.2 INCONCLUSIVE/FAIL, M2.3 FAIL (repeat spread 12× the reported σ), M2.4 FAIL (closure 0.242 vs tolerance 0.168 kcal/mol). One cause: the λ_bonded endpoints are stiff and 16/18 windows do not resolve them. No threshold was changed |
+| M2 | relative hydration ethane → chloroethane on v2 under `retain-all`, three repeats per leg | ΔΔG_hyd | see M2.1–M2.6 | see sub-rows | **CUDA, one granted card alone** (RTX A5000, mixed), 2026-09-21, commit c6ca0ab | `pytest tests/test_alchemy_hydration_m2.py --error-on-skip` | [m2_result.json](S4-evidence-m2-result.json), S4.md §M2 retain-all | **PASS**: 156 windows, 0 skips, 2 h 56 m. M2.1–M2.4 all PASS; M2.5 reported. Every window ran on ONE card, so there is no per-card throughput caveat |
 | M2.0 | as M2. **Written 2026-09-19 before any sampling.** Schedule: Amber18 one-step diagonal path (λ_elec = λ_ster = λ_bond = s), 16 windows at s = k/15; 2 fs, LangevinMiddle 1/ps, 300 K; NVT for vacuum, NPT at 1.01325 bar (MC barostat every 25 steps) for water; each window minimised at its own state, then 20 ps equilibration discarded; production 1 ns (water) / 1 ns (vacuum) per window, reports every 1 ps; 3 independent repeats (seeds). A short pilot may change ONLY the window placement, adding windows where the neighbour overlap < 0.03; the pilot is not evidence and the change is recorded | — | — | — | — | — | — | the protocol for M2.1–M2.5 |
 | M2.0p | the M2.0 pilot, 2026-09-19, CPU `--cpu`, 16 windows, 40 (vacuum) / 20 (water) samples per window — **not evidence** | neighbour overlap | — | < 0.03 → add windows there, nothing else | CPU | scratch pilot | S4.md §M2 pilot | vacuum: only s = 0 → 1/15 is below (0.026). Water: minimum 0.049, none below. **Decision (applied before production):** the vacuum leg adds s = 1/60 and 1/30 (18 windows); the water leg keeps its 16. The pilot's dU/ds shows why: dU/dλ_bonded is +611 kJ/mol at s = 0 and −238 at s = 1 — the linear mixing of junction terms that the plan removes at the dummy end — identical in both legs by `matched_legs`, so it cancels in ΔΔG but makes the endpoint intervals stiff |
 | M2.0f | **fixture change, S0's ruling of 2026-09-19** (option a): M2.0's water environment changes from `ethane-tip3p` **v1** (1.9 nm cube) to **v2** (a cube with edge ≥ 2 × cutoff + 0.8 nm, ≥ 2.6 nm at 0.9 nm; same water model, cutoff, constraints and package, built through build-top with a record, by S2). Reason: v1 cannot hold NPT at the 0.9 nm cutoff (the stopped run of M2). **No free energy had been computed.** Every other part of M2.0 is unchanged. The v1 water windows are VOID (fixture v1, box too small), kept, not deleted, and not reused: the water leg reruns all three repeats on v2. The vacuum legs resume as they are, after `matched_legs` is re-checked against the v2 solvent plan | — | — | — | — | — | — | recorded before the rerun |
-| M2.1 | each leg, each repeat | every MBAR neighbour overlap ≥ 0.03, every window ≥ 50 decorrelated samples | — | as stated | as M2 | same | same | **FAIL** 2026-09-20: solvent 0.067/0.085/0.070 and 191/303/236 decorrelated — ok; vacuum 0.018/0.011/0.032 with 29/53/90; vacuum_ba 0.054/0.025/0.014 with 172/51/48. 4 of 9 legs below the 0.03 overlap floor |
-| M2.2 | each leg, each repeat | TI (complete dU/ds from S3's derivatives, σ_int included) vs MBAR (cross-state energies) | each other: derivative and energy code paths of one Hamiltonian | gate | as M2 | same | same | **INCONCLUSIVE, one FAIL** 2026-09-20: TI − MBAR is 0.37–1.64 kcal/mol across the nine legs, with σ_c 0.24–0.86 (TI's quadrature indicator dominates). vacuum_ba r1 FAILs outright (0.957 vs 0.236) |
-| M2.3 | each leg | the three repeats agree pairwise | each other | gate, σ of each repeat | as M2 | same | same | **FAIL** 2026-09-20: pairwise repeat differences up to 0.80 kcal/mol (vacuum r1/r3, r2/r3) and 0.41 (solvent r1/r3) against σ_c ≈ 0.09–0.13. The reported MBAR uncertainty underestimates the run-to-run spread by about an order of magnitude |
-| M2.4 | vacuum leg | ΔG_vac(ethane→chloroethane) + ΔG_vac(chloroethane→ethane) = 0, the second from an independently built B→A plan | closure | gate | CPU (vacuum is cheap) | same | same | **FAIL** 2026-09-20: A→B +0.233, B→A −0.475, closure 0.242 kcal/mol against a tolerance of 0.168 (3 σ_c, σ_c = 0.056). Below the 0.5 ceiling but outside three combined standard errors |
-| M2.5 | the cycle | ΔΔG_hyd with σ (MBAR, repeats combined), through `cycles.relative_hydration` | experiment (FreeSolv: ethane 1.83, chloroethane −0.63 → −2.46 kcal/mol) **reported, not gated**: the force field is not matched to experiment | — | as M2 | same | same | **reported, not gated** 2026-09-20: ΔΔG_hyd = −1.80 ± 0.06 kcal/mol (MBAR, three repeats combined) against experiment −2.46. The quoted σ is NOT credible — see M2.3; the repeat scatter implies ≈ 0.3–0.4 |
+| M2.1 | each leg, each repeat | every MBAR neighbour overlap ≥ 0.03, every window ≥ 50 decorrelated samples | — | as stated | as M2 | same | same | **PASS** 2026-09-21 (retain-all): overlap 0.038–0.084 in all nine legs, 216–529 decorrelated samples. Under `separable` four legs were below the floor |
+| M2.2 | each leg, each repeat | TI (complete dU/ds from S3's derivatives, σ_int included) vs MBAR (cross-state energies) | each other: derivative and energy code paths of one Hamiltonian | gate | as M2 | same | same | **PASS** 2026-09-21: TI − MBAR is 0.000–0.059 kcal/mol across the nine legs (σ_c 0.001–0.039). Under `separable` it was 0.37–1.64 |
+| M2.3 | each leg | the three repeats agree pairwise | each other | gate, σ of each repeat | as M2 | same | same | **PASS** 2026-09-21: pairwise repeat differences 0.000–0.090 kcal/mol against σ_c 0.001–0.043; the vacuum legs agree to 0.001. Under `separable` they differed by up to 0.80 against σ_c 0.09 |
+| M2.4 | vacuum leg | ΔG_vac(ethane→chloroethane) + ΔG_vac(chloroethane→ethane) = 0, the second from an independently built B→A plan | closure | gate | CPU (vacuum is cheap) | same | same | **PASS** 2026-09-21: A→B −1.6385, B→A +1.6382, closure 0.0003 kcal/mol against a 0.0012 tolerance |
+| M2.5 | the cycle | ΔΔG_hyd with σ (MBAR, repeats combined), through `cycles.relative_hydration` | experiment (FreeSolv: ethane 1.83, chloroethane −0.63 → −2.46 kcal/mol) **reported, not gated**: the force field is not matched to experiment | — | as M2 | same | same | **reported, not gated** 2026-09-21: ΔΔG_hyd = **−1.743 ± 0.026** kcal/mol (MBAR, three repeats, error-barred by the repeat spread) against experiment −2.46. The 0.72 kcal/mol difference is force-field and model error, not an implementation result: openff-2.2.1/AM1-BCC in TIP3P was never fitted to it |
 | M2.6 | the cycle | ΔΔG_hyd | a matched cross-engine sampling reference (Amber 26 pmemd TI/MBAR on the same parameters, through S3's driver) | gate | CPU pmemd | — | — | NOT RUN: not built; pmemd exists (S3 gate 4) |
 | M3 | relative binding, simple ligand pair | ΔΔG_bind, solvent and complex legs | as M1 | gate | CUDA | — | — | BLOCKED on A1, A2, and a validated pair (A4) |
 | M4 | absolute binding with Boresch restraints | ΔG°_bind incl. restraint attachment and standard-state release | as M1 | gate | CUDA | — | — | BLOCKED on A1, A2 (A5) |
@@ -87,11 +87,11 @@ Two additions, for these rows only:
 
 | # | what | owner | state |
 |---|---|---|---|
-| P1 | the prepared TYK2 complex per ligand: `build-top` complex, one parameter package per ligand, with build records, as a versioned fixture | S2 (campaign page: prepared once) | NOT STARTED |
-| P2 | hybrid plans for the two RBFE edges in BOTH environments (complex and solvent), pairing under `matched_legs` | S2 | NOT STARTED |
-| P3 | **a decoupling construction for ABFE**: an end state where the ligand does not interact with its environment. S2's plans are A→B with both endpoints real, and S3's `build_hamiltonian` applies softcore only to unique particles, so a common-particle decoupling would be linear in λ and its integrand would diverge at the end point. This is new work for S2/S3, not a parameter of mine | S0 to assign | **BLOCKED — A5 cannot start without it** |
+| P1 | the prepared TYK2 complex per ligand | S2 | **DONE** `tests/data/alchemy/tyk2-v1`: complex 53,030 particles at 8.238 nm, ligand-in-water 1,733–1,928, vacuum 32–38; ff14SB + TIP3P |
+| P2 | hybrid plans for the RBFE edges in BOTH environments, pairing under `matched_legs` | S2 | **DONE** (automatic maps, 21-atom MCS, endpoint recovery recorded) |
+| P3 | a decoupling construction for ABFE | S2/S3 | **DONE**: `topology.build_decoupling_plan`. A5 is no longer blocked on construction |
 | P4 | Boresch anchor selection inputs: an equilibrated complex trajectory (≥ 5 ns) per ligand, the ligand's heavy-atom names, and the pocket residue list | S2 prepares, S4 selects and records | NOT STARTED |
-| P5 | a measured throughput number (ns/day) for the solvated complex under the alchemical Hamiltonian, from one short window, before any grant request | S4 | NOT RUN |
+| P5 | measured ns/day for the solvated complex under the alchemical Hamiltonian | S4 | NOT RUN — **run 2** of [the plan](S4-tyk2-plan.md). Every cost below is provisional until it lands |
 
 ### Rows
 
@@ -118,9 +118,11 @@ disjoint set of candidates.
 
 ### What it costs, before anyone approves it
 
-Assumptions, to be replaced by P5's measurement: solvated complex ≈ 40 000 particles; one RTX
-3080 ≈ 80 ns/day under the alchemical Hamiltonian (about 10 % below plain MD, from the
-cross-state reporting at 2 ps); ligand in water ≈ 3 000 particles ≈ 600 ns/day.
+**These numbers are now known to be optimistic and are NOT what anything will be requested on.**
+They assumed ~40 000 particles and 80 ns/day. P1 landed at **53 030** particles, and S3 measures
+the hybrid Hamiltonian at **2.0×** a plain end state per step — together about 2.7× the assumed
+per-window cost, turning a 3.3-day leg into ~9 days. P5 (run 2 of [the plan](S4-tyk2-plan.md))
+replaces both with one measurement on the real system before any production grant is asked for.
 
 | campaign | windows × repeats × ns | simulated time | one RTX 3080 |
 |---|---|---|---|
@@ -168,3 +170,56 @@ least **100 decorrelated samples** (`n / g`, reported per window), and a placeme
 pilot is re-checked against the production run's own overlap; if production overlap falls below
 0.03 the campaign FAILS rather than being re-placed after the fact. A pilot that cannot estimate
 overlap may not change anything.
+
+## M2.6: the independent engine (AMBER 26 pmemd, CPU)
+
+Declared 2026-09-21, **before any pmemd number exists**, at S0's instruction. The point of this
+run is that it is independent; a tolerance chosen after seeing a disagreement would throw that
+away. Every check M2 passed is MD-tools against itself.
+
+**What is compared.** The same ethane → chloroethane edge, same packages, same λ grid (M2.0's
+16 windows for solvent, 18 for vacuum), same temperature, cutoff, PME settings and constraints,
+sampled by pmemd rather than by MD-tools, analysed by MBAR from pmemd's own `ifmbar` energies.
+Quantities, in order of what they can show:
+
+| id | quantity | why it comes first |
+|---|---|---|
+| M2.6a | **single-point calibration**: pmemd vs OpenMM on the plain end states, at fixed coordinates | if the two engines do not agree on the unsampled Hamiltonian, no sampled comparison means anything. This is S3's gate-4 method reused, not a new one |
+| M2.6b | ΔG of the **vacuum** leg, both engines, both in **dual topology** and both **unconstrained** | cheap, no solvent, and the sharpest test — see the amendment below |
+| M2.6c | ΔG of the **solvent** leg, both engines, dual topology, unconstrained | the expensive one: a dual-topology prmtop with rigid water needs `noshakemask` over the TI region, and pmemd CPU on ~1 900 atoms is hours per window |
+| M2.6d | **ΔΔG_hyd**, both engines | the quantity M2.5 reports |
+
+**Amendment, 2026-09-21, before any M2.6b number exists.** As first written, M2.6b compared
+pmemd against M2's own vacuum leg. That is TWO differences at once: AMBER TI is **dual topology**
+(both end-state copies present, never seeing each other) while M2's leg is **hybrid** (one mapped
+core with dummies), and the two constructions differ in the dummy atoms' own internal free
+energy, which cancels between legs but not within one. A disagreement would have been
+unattributable — the mistake this matrix exists to prevent. Corrected: **M2.6b builds the
+MD-tools leg in `mode="dual"`**, so the only difference between the two numbers is the engine.
+M2's hybrid number is not the comparison target; the bridge between constructions is ΔΔG, where
+the dummy contributions cancel, which is M2.6d. Nothing about the tolerances changes.
+
+**Declared tolerances.**
+
+| source | size | treatment |
+|---|---|---|
+| statistical | each engine's own σ, error-barred by repeat spread where repeats exist | the gate is \|Δ\| < 0.5 kcal/mol AND < 3 σ_c, σ_c = √(σ_MDtools² + σ_pmemd²); INCONCLUSIVE above σ_c = 0.25, exactly as everywhere else in this matrix |
+| Coulomb constant | the engines differ by **3.5e-5 relative** (S3, gate 4) | expected, not a surprise: on the λ-dependent electrostatic part of these legs (tens of kJ/mol) it is ~1e-3 kJ/mol, three orders below the statistical σ. Declared here so it is accounted rather than discovered, and reported in the result |
+| pmemd print resolution | 1e-4 kcal/mol = 4.18e-4 kJ/mol per printed energy | added twice, as in S3's rule, to the single-point row M2.6a only |
+| erfc table vs exact | pmemd uses `eedmeth=1` under PME and refuses exact erfc | an intentional difference, reported; it is inside M2.6a's calibration by construction |
+
+**M2.6a's rule is S3's, unchanged**: the λ-dependent part of the engines' shared discrepancy,
+\|cal_B − cal_A\|, plus two print resolutions. A constant offset cancels in every free energy and
+is reported separately.
+
+**What a disagreement would mean, decided now:** M2.6b failing with M2.6a passing implicates the
+sampling or the estimator, not the Hamiltonian; both failing implicates the Hamiltonian or the
+matching of settings. Either way the result stands as measured and comes back to S2/S3 — the
+tolerance is not revisited.
+
+| id | verdict |
+|---|---|
+| M2.6a | **PASS** 2026-09-21: end state A, pmemd − OpenMM = −1.53e-4 kJ/mol; end state B, +2.61e-4; λ-dependent part 4.14e-4 against the declared tolerance 1.25e-3. ParmEd's writer round trip contributes −1.2e-7 (A) and +2.6e-5 (B). [evidence](S4-evidence-m26-calibration.json) |
+| M2.6b | **INCONCLUSIVE — it measured a CONVENTION difference, not engine agreement.** pmemd (dual, unconstrained, 18 λ × 1 ns): MBAR +1.2520 ± 0.0002, BAR +1.2522 ± 0.0001, TI +1.2523 ± 0.0002 kcal/mol. MD-tools (`mode="dual"`, same grid, same lengths): **exactly 0.0000 ± 0.0000** by every estimator. Not a sampling accident: the dual vacuum Hamiltonian is λ-INDEPENDENT by construction — U(0) = U(0.5) = U(1) to all printed digits and all three dU/dλ are 0, because with no common atoms both whole-molecule dummies retain every internal term at both ends. AMBER scales each copy's whole potential with λ, so its vacuum leg IS the copies' internal free-energy difference. Both conventions are self-consistent and give the same ΔΔG; the per-leg number is convention-dependent, so this row cannot certify the engine. [evidence](S4-evidence-m26-pmemd.json) |
+| M2.6c | NOT RUN — a dual-topology prmtop with rigid water needs `noshakemask` over the TI region, and pmemd CPU on ~1 900 atoms is hours per window; it did not fit run 1's budget |
+| M2.6d | NOT RUN — needs M2.6c. **This is the row that would actually corroborate M2**, because ΔΔG is where the convention difference of M2.6b cancels |

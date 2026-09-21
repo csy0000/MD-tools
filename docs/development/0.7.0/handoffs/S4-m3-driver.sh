@@ -8,7 +8,7 @@
 # driver can be re-run after an interruption and continues.
 set -u
 ROOT="$1"; CORES="$2"; shift 2
-REPO=/data3/data/chen/scheme/MD-tools-S4-execution
+REPO=${MD_TOOLS_REPO:-$(git rev-parse --show-toplevel)}
 # "39-47" or "39,41,43": expand to a list of single cores
 if [[ "$CORES" == *-* ]]; then
   CORE_LIST=($(seq "${CORES%-*}" "${CORES#*-}"))

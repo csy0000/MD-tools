@@ -37,7 +37,22 @@ from md_tools.alchemy.paths import linear_path  # noqa: E402
 from md_tools.alchemy.samples import KJ_PER_KCAL  # noqa: E402
 from md_tools.alchemy.windows import WindowSettings  # noqa: E402
 
-pytestmark = [pytest.mark.gpu, pytest.mark.slow]
+
+#: The campaign root is configuration this lane cannot invent: without it there is no campaign to
+#: run or analyse, which is NOT the same as a failing campaign. An unset variable therefore
+#: DESELECTS these tests rather than reddening a suite with "not configured" (S3, 2026-09-21).
+#:
+#: A skipif MARKER, not `pytest.skip(allow_module_level=True)`: a module-level skip happens during
+#: COLLECTION and produces no test report, so `--error-on-skip` cannot see it -- checked, it
+#: reported "1 skipped". A marker skips at setup, which does produce a report, and the conftest
+#: hook then turns it into a failure. That matters because a skip is also how a campaign quietly
+#: stops being evidence: skip by default, FAIL where the campaign is supposed to have run.
+_NO_ROOT = pytest.mark.skipif(
+    not os.environ.get("MD_TOOLS_S4_M2_ROOT"),
+    reason="MD_TOOLS_S4_M2_ROOT is not set: no campaign root to run or analyse. Set it to the campaign "
+           "directory, or run an evidence lane with --error-on-skip.")
+
+pytestmark = [pytest.mark.gpu, pytest.mark.slow, _NO_ROOT]
 
 NAMES = ["lambda_bonded", "lambda_electrostatics", "lambda_sterics"]
 BASE = [k / 15 for k in range(16)]
@@ -51,10 +66,7 @@ EXPERIMENT_KCAL = {"ethane": 1.83, "chloroethane": -0.63}   # FreeSolv; reported
 
 
 def _root() -> Path:
-    value = os.environ.get("MD_TOOLS_S4_M2_ROOT")
-    if not value:
-        pytest.fail("MD_TOOLS_S4_M2_ROOT is not set: the M2 campaign needs a persistent directory")
-    return Path(value)
+    return Path(os.environ["MD_TOOLS_S4_M2_ROOT"])
 
 
 def _machine(root: Path) -> Path:
