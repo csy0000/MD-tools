@@ -259,8 +259,9 @@ slowest card — which is also why the cards must be the same model.
 Plan from the measured number, not from the single-rank one. Multiplying a single-rank figure by
 the card count overestimates a ladder by about a factor of two.
 
-**How the cost divides**, from three 100 ps probes on the same system and the same equilibrated
-start:
+**How the cost divides.** Three 100 ps probes, same system, same equilibrated start. **This table
+is for comparing configurations with each other — do not size a campaign from its absolute
+numbers; see the warning directly below it.**
 
 | configuration | ranks per card | ns/day per rung | ns/day aggregate |
 |---|---|---|---|
@@ -269,15 +270,20 @@ start:
 | 8 rungs on 4 cards | 2 | 117.6 | 940.8 |
 | 8 rungs on 2 cards | 4 | 69.1 | 553.1 |
 
-The ladder machinery — exchange barriers, per-state trajectories, checkpoints — costs 36% before
-any sharing. A second rank on a card gives back 1.12× the aggregate throughput of that card, not
-2×. **A fourth rank loses throughput outright**: 553.1 aggregate against 940.8, so oversubscribing
-past two per card is not a smaller gain, it is a loss.
+!!! warning "These probe numbers are 26% too high for planning"
+    The 8-on-4 probe reads 117.6 ns/day per rung. The 5 ns production ladder of the same shape
+    sustained **93.5**. A 100 ps probe does not pay the accumulated cost of a long run, so a
+    campaign sized from this table comes out about a quarter short. Take the relative scaling from
+    here and the absolute number from a production run.
 
-!!! note "Short probes flatter the machine"
-    The 8-on-4 probe reads 117.6 ns/day per rung; the 5 ns production ladder of the same shape
-    sustained 93.5, about 26% lower. Use probes for the *relative* scaling between configurations
-    and a production run for the number you plan with.
+The ladder machinery — exchange barriers, per-state trajectories, checkpoints — costs 36% before
+any sharing (330 → 209.9). A second rank on a card gives back 1.12× that card's aggregate
+throughput, not 2×.
+
+**A fourth rank per card is a loss, not a smaller gain.** Eight rungs on two cards delivers 553.1
+ns/day aggregate, *below* the 839.5 of four rungs on four cards and far below the 940.8 of eight
+on four. Two ranks per card is the most this system rewards; three is untested and four is worse
+than not sharing at all.
 
 The comparison the campaign asks for is between A and B: what heating the pocket as well as the
 ligand costs in acceptance, and whether it buys sampling the ligand-only ladder does not reach.
