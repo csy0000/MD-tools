@@ -221,17 +221,32 @@ bash run.sh                 # or the mpirun line run.sh prints, -n 8 with MPS
 TO BE MEASURED: the platform lines, one per rank, and the completion summary
 ```
 
-## 5. What these runs are for
-
-Every number below is blank until the runs exist. None of it is a guess.
+## 5. What these runs measure
 
 | quantity | ladder A | ladder B |
 |---|---|---|
-| ns/day per state | TO BE MEASURED | TO BE MEASURED |
-| ns/day against rungs and cards | TO BE MEASURED | TO BE MEASURED |
-| neighbouring-pair acceptance | TO BE MEASURED | TO BE MEASURED |
-| walker round trips through the ladder | TO BE MEASURED | TO BE MEASURED |
-| hot atoms / scaled torsion bonds | TO BE MEASURED | TO BE MEASURED |
+| hot atoms (of 4,701 solute atoms) | 32 | 193 |
+| scaled torsion central bonds | 4 | 52 |
+| scaled CMAP terms | 0 | 0 |
+| ns/day per state | 93.5 | TO BE MEASURED |
+| ns/day aggregate, 8 rungs on 4 cards | 748 | TO BE MEASURED |
+| neighbouring-pair acceptance | 0.483–0.602, overall 0.549 | TO BE MEASURED |
+| walker round trips (8 walkers, 5 ns) | 105 | TO BE MEASURED |
+| wall clock | 83 min | TO BE MEASURED |
+
+### How fast is eight rungs on four cards, really
+
+**The naive expectation:** one rank alone does 330 ns/day on this system, two ranks share a card,
+four cards — so something near 4 × 330 / 2 per rung.
+
+**The measurement:** **93.5 ns/day per rung**, 748 ns/day aggregate. Each of the two ranks on a
+card gets 57% of what one rank alone gets, so a shared card delivers about **1.13×** its
+single-rank throughput, not 2×. Part of that is the sharing and part is the exchange barrier:
+every rank waits for the slowest rung at every exchange, so a ladder runs at the pace of its
+slowest card — which is also why the cards must be the same model.
+
+Plan from the measured number, not from the single-rank one. Multiplying a single-rank figure by
+the card count overestimates a ladder by about a factor of two.
 
 The comparison the campaign asks for is between A and B: what heating the pocket as well as the
 ligand costs in acceptance, and whether it buys sampling the ligand-only ladder does not reach.
