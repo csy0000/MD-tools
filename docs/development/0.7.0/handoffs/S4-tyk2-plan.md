@@ -53,7 +53,7 @@ fact. M2's pilot chose placement from 40 samples and was optimistic; the campaig
 ### Runs 4+ — production, ONE GRANT PER RUN
 T1 (`ejm_31` → `ejm_42`), T2 (`ejm_31` → `ejm_43`), T3 (`ejm_42` → `ejm_43`, the closing edge),
 then T4/T5 (ABFE with restraints). Each is a separate request with its cards and hours named,
-sized from P5 — never a block of GPU-days. Card 0 stays out of any run containing exchange: its
+sized from P5 — never a block of GPU-days. The faster card is excluded from anything with exchange: its
 speed advantage is wasted behind an exchange barrier and it must not join a homogeneous ladder.
 
 ## What each production run must carry

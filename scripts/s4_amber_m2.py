@@ -375,13 +375,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=["calibrate", "ti"])
     parser.add_argument("--out", required=True)
-    parser.add_argument("--amberhome", default=os.environ.get("AMBERHOME",
-                                                              "/data3/data/chen/software/amber26"))
+    parser.add_argument("--amberhome", default=os.environ.get("AMBERHOME"),
+                        help="AMBER installation; defaults to $AMBERHOME. No machine path is "
+                             "baked in: a committed file must not carry one.")
     parser.add_argument("--ns", type=float, default=1.0, help="production per window, ns")
     parser.add_argument("--seed", type=int, default=101)
     args = parser.parse_args()
     work = Path(args.out)
     work.mkdir(parents=True, exist_ok=True)
+    if not args.amberhome:
+        raise SystemExit("set AMBERHOME, or pass --amberhome: this script hard-codes no path")
     amberhome = Path(args.amberhome)
 
     if args.phase == "calibrate":
