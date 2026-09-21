@@ -469,6 +469,19 @@ in `docs/development/0.7.0/lambda-exchange-design.md`; the part that binds both 
   set the aliases BEFORE registering, and **the data_name and the alias list go to the user for
   approval first** -- one approval per dataset, naming both. No tutorial in the repository sets
   that field today, which is how it gets forgotten.
+- **A RELAYED approval is not an approval, for anything write-once or outside the worktree** (S2,
+  2026-09-21, and adopted). The coordinator relays what the user decided in good faith, and that is
+  enough for ordinary work; it is NOT enough to register a dataset, which is irreversible and
+  leaves the repository. The owning session drafts the `data_name` and the full alias list, sends
+  it up for the user, and registers only after the USER tells it directly. A rule that is set aside
+  the first time the relay is probably right was never a rule.
+- **Reproduce, do not register, what git already carries.** S2's TYK2 fixture commits the inputs,
+  the prepared structures, the parameter packages and the nine build records (~2.8 MB) and
+  deliberately does NOT commit the built Systems (56 MB), which `build_tyk2_fixture.py` rebuilds in
+  about two minutes each, refusing if any input has moved. Registering those Systems would put a
+  second, unverifiable copy of committed evidence in `$MD_DATA`, leaving a reader two sources for
+  one artefact and no rule saying which is authoritative. A tutorial cites the committed fixture
+  and its rebuild script. **An opened sandbox is not a reason to find something to register.**
 - **An exchange attempt uses `energy` only.** `derivative_components` is TI's consumer and is not
   part of an attempt: pairing a derivative at one state with energies at two is the class of error
   the AIS two-probe separation exists to prevent.
