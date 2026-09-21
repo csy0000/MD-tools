@@ -219,7 +219,7 @@ tolerance is not revisited.
 
 | id | verdict |
 |---|---|
-| M2.6a | NOT RUN |
-| M2.6b | NOT RUN |
-| M2.6c | NOT RUN |
-| M2.6d | NOT RUN |
+| M2.6a | **PASS** 2026-09-21: end state A, pmemd − OpenMM = −1.53e-4 kJ/mol; end state B, +2.61e-4; λ-dependent part 4.14e-4 against the declared tolerance 1.25e-3. ParmEd's writer round trip contributes −1.2e-7 (A) and +2.6e-5 (B). [evidence](S4-evidence-m26-calibration.json) |
+| M2.6b | **INCONCLUSIVE — it measured a CONVENTION difference, not engine agreement.** pmemd (dual, unconstrained, 18 λ × 1 ns): MBAR +1.2520 ± 0.0002, BAR +1.2522 ± 0.0001, TI +1.2523 ± 0.0002 kcal/mol. MD-tools (`mode="dual"`, same grid, same lengths): **exactly 0.0000 ± 0.0000** by every estimator. Not a sampling accident: the dual vacuum Hamiltonian is λ-INDEPENDENT by construction — U(0) = U(0.5) = U(1) to all printed digits and all three dU/dλ are 0, because with no common atoms both whole-molecule dummies retain every internal term at both ends. AMBER scales each copy's whole potential with λ, so its vacuum leg IS the copies' internal free-energy difference. Both conventions are self-consistent and give the same ΔΔG; the per-leg number is convention-dependent, so this row cannot certify the engine. [evidence](S4-evidence-m26-pmemd.json) |
+| M2.6c | NOT RUN — a dual-topology prmtop with rigid water needs `noshakemask` over the TI region, and pmemd CPU on ~1 900 atoms is hours per window; it did not fit run 1's budget |
+| M2.6d | NOT RUN — needs M2.6c. **This is the row that would actually corroborate M2**, because ΔΔG is where the convention difference of M2.6b cancels |
