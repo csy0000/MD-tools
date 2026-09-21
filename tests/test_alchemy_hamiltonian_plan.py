@@ -213,16 +213,24 @@ def test_the_window_layer_accepts_it_for_a_three_component_path(plan):
 TYK2 = __import__("pathlib").Path(__file__).resolve().parent / "data" / "alchemy" / "tyk2-v1"
 
 
+# The bound below is the dispersion correction's, and it was measured on this system rather than
+# chosen. Until plan schema /5 this test carried xfail(strict=True): the plan treated a unique
+# group's internal non-excluded pairs asymmetrically -- uncut at the dummy end (a CustomBondForce),
+# cut at 0.9 nm at the physical end -- so U(0) missed System A by the intra-ligand energy beyond the
+# cutoff, -0.076484 kJ/mol here, from 74 pairs of a 32-atom ligand. S2's symmetric construction
+# (45d04d3) removes it: the residual is now 4.06e-7 kJ/mol at lambda = 0 and 1.1e-11 at lambda = 1.
+# That asymmetry between the ends IS the attribution. The Reference platform is bit-reproducible on
+# this system (two Contexts agree to 0.0e+00, as does a per-force-group sum), and the residual is
+# accounted for exactly: the nonbonded forces carry -122.908461485 kJ/mol of long-range correction
+# and the dedicated dispersion force adds -10.878356297, against System A's own -133.786818188 --
+# a 4.06e-7 gap, because OpenMM computes a CustomNonbondedForce's correction by quadrature and a
+# NonbondedForce's analytically. At lambda = 1 that force contributes zero and the gap disappears.
+# So: abs=1e-5, twenty-five times the measured quadrature error and 7600 times below the
+# 0.076484 kJ/mol defect this test exists to catch.
+DISPERSION_QUADRATURE_KJ = 1e-5
+
+
 @pytest.mark.slow
-@pytest.mark.xfail(strict=True, reason=(
-    "OPEN RULING (S3 -> S2/S0, 2026-09-20): the plan treats a unique group's internal non-excluded "
-    "pairs asymmetrically. At the dummy end they are in UniqueGroupInternalNonbonded, a "
-    "CustomBondForce with NO cutoff; at the physical end they are in the NonbondedForce, which "
-    "CUTS them. This Hamiltonian is uniform (uncut at every lambda, Amber's gti_cut = 1), so U(1) "
-    "equals System B exactly and U(0) misses System A by the intra-ligand energy beyond the "
-    "cutoff: -0.076484 kJ/mol here, from 74 pairs of a 32-atom ligand (-0.0685 of it LJ). Every "
-    "earlier fixture's ligand fits inside 0.9 nm, which is why nothing caught it. strict=True: "
-    "this flips to a failure the moment the construction is symmetric."))
 def test_the_tyk2_solvated_decoupling_leg(tmp_path):
     """The campaign's own ABFE solvent leg, built by the fixture's script: ejm_31 decoupled from
     water, 32 ligand atoms as one unique region, nothing appearing, no mapped core.
@@ -255,8 +263,13 @@ def test_the_tyk2_solvated_decoupling_leg(tmp_path):
         plan.record["nonbonded"]["unique_group_internal"]["pairs"])
 
     c = _context(h.system, x)
-    assert h.energy(c, _state((0, 0, 0))) == pytest.approx(_energy(plan.system_a, x), abs=1e-7)
+    # the dummy end is the one the cutoff asymmetry used to break, and the one where the dispersion
+    # force is live; the physical end has neither and is held to the platform's own reproducibility
+    assert h.energy(c, _state((0, 0, 0))) == pytest.approx(_energy(plan.system_a, x),
+                                                           abs=DISPERSION_QUADRATURE_KJ)
     assert h.energy(c, _state((1, 1, 1))) == pytest.approx(_energy(plan.system_b, x), abs=1e-7)
+    # what makes the dummy end agree at all: both ends carry the same internal pairs, uncut
+    assert h.record["plan_internal_pairs_convention"] == "carried"
 
     internal = {v: h.energy_components(c, _state((v, v, v)))["softcore_internal"]
                 for v in (0.0, 0.5, 1.0)}

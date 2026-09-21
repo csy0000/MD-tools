@@ -46,6 +46,14 @@ def water():
     return water_environment()
 
 
+def _v(quantity):
+    """A plain float from an OpenMM quantity."""
+    from openmm import unit
+
+    return float(quantity.value_in_unit_system(unit.md_unit_system)) \
+        if hasattr(quantity, "value_in_unit_system") else float(quantity)
+
+
 def _build(a, b, amap, env, mode, **kwargs):
     from md_tools.alchemy.topology import build_topology_plan
 
@@ -223,6 +231,46 @@ def test_retain_all_leaves_no_bonded_term_on_the_lambda_path(request, eta, cle, 
         removed = [s["atoms"] for slots in plan.record["terms"].values() for s in slots
                    if s["at_dummy_end"] == "dummy-removed"]
         assert removed == [], (name, removed)
+
+
+def test_the_plan_states_the_internal_pair_convention_and_carries_it_structurally(water):
+    """The record SAYS "carried", and the Systems actually do it. Both halves.
+
+    S3's Hamiltonian reads `plan_internal_pairs_convention` and mixes accordingly, so a plan that
+    said "carried" while leaving the pairs in the NonbondedForce at the physical end would be
+    counted twice and nothing would fail loudly. The convention is therefore asserted here at the
+    SOURCE, not only where it is consumed: the record's own statement, and then every carrier
+    exception read back out of both endpoint Systems.
+
+    Record shapes are frozen until the TYK2 campaign has run, and a freeze nothing checks is a
+    convention people drift away from.
+    """
+    from md_tools.alchemy.topology import PLAN_SCHEMA
+
+    # ethane -> n-pentane, so the unique propyl group HAS non-excluded internal pairs. A
+    # decoupling plan for ethane has none at all -- every pair in it is a 1-2, 1-3 or 1-4
+    # exception -- and the first version of this test passed over an empty list. The assertion
+    # below caught that, which is the only reason it is written this way.
+    _a, _b, plan = _pentane_plan(water)
+    internal = plan.record["nonbonded"]["unique_group_internal"]
+    assert PLAN_SCHEMA == "md-tools-topology-plan/5"
+    assert plan.record["schema"] == PLAN_SCHEMA
+    assert internal["carried_at"] == "both endpoints"
+    assert internal["pairs"], "pentane has 1-5 pairs; an empty list here would be vacuous"
+
+    from openmm import NonbondedForce
+    for endpoint in ("A", "B"):
+        system = plan.system(endpoint)
+        nb = next(f for f in system.getForces() if isinstance(f, NonbondedForce))
+        found = {}
+        for k in range(nb.getNumExceptions()):
+            i, j, qq, sigma, eps = nb.getExceptionParameters(k)
+            found[tuple(sorted((i, j)))] = (_v(qq), _v(sigma), _v(eps))
+        for pair in internal["pairs"]:
+            key = tuple(sorted(pair["atoms"]))
+            assert key in found, (endpoint, key, "no carrier exception")
+            qq, _sigma, eps = found[key]
+            assert (qq, eps) == (0.0, 0.0), (endpoint, key, found[key])
 
 
 def test_the_policy_that_produced_a_plan_is_in_its_record(hybrid, separable):

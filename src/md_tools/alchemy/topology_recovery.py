@@ -25,12 +25,16 @@ instead:
     ENERGY, against an independent reference System for the physical endpoint:
 
         E_endpoint(x) = E_reference(x_phys) + E_dummy(x) + dE_dispersion + E_restraint
+                        + dE_internal_pairs
 
     per force class, with E_dummy (retained bonded terms plus each unique group's internal
     nonbonded energy) and E_restraint evaluated here in numpy from the plan's own record, and
     dE_dispersion the change in OpenMM's long-range dispersion correction caused by the
-    zero-epsilon dummy particles (it averages over every particle). Nothing is left in a
-    residual that the accounting does not name.
+    zero-epsilon dummy particles (it averages over every particle). dE_internal_pairs is the
+    last term and the newest: a unique group's non-excluded internal pairs are carried by one
+    CustomBondForce at BOTH endpoints, uncut and vacuum Coulomb, so the physical endpoint differs
+    from the force field's own cut, PME treatment of them by a named amount. It is reported, not
+    absorbed. Nothing is left in a residual that the accounting does not name.
 """
 
 from __future__ import annotations
@@ -48,6 +52,7 @@ __all__ = [
     "endpoint_accounting",
     "factorization_check",
     "internal_nonbonded_energy",
+    "internal_pair_energy",
     "restraint_energy",
 ]
 
@@ -165,6 +170,46 @@ def internal_nonbonded_energy(record: dict, endpoint: str, positions_nm: np.ndar
             out["internal_pairs"] += _vacuum_pair(float(np.linalg.norm(x[j] - x[i])),
                                                   *pair["physical"])
     return out
+
+
+def internal_pair_energy(record: dict, positions_nm: np.ndarray) -> float:
+    """The whole `UniqueGroupInternalNonbonded` force, which is the SAME at both endpoints.
+
+    Every unique group's non-excluded internal pairs, at their physical parameters, carried by
+    that one force in both Systems with a zero exception in each NonbondedForce. It is therefore
+    lambda-independent and endpoint-independent, unlike `internal_nonbonded_energy`, which reports
+    only the part belonging to the group that is a DUMMY at the endpoint asked for.
+    """
+    x = positions_nm
+    total = 0.0
+    for pair in record["nonbonded"]["unique_group_internal"]["pairs"]:
+        i, j = pair["atoms"]
+        total += _vacuum_pair(float(np.linalg.norm(x[j] - x[i])), *pair["physical"])
+    return total
+
+
+def _reference_without_internal_pairs(record: dict, reference_system, to_reference: dict):
+    """The reference System with the plan's internal pairs excepted out of its NonbondedForce.
+
+    The plan carries those pairs in a CustomBondForce at both ends, so the physical endpoint's
+    NonbondedForce must not also compute them. The shift this causes is REPORTED rather than
+    absorbed: it is the difference between the force field's cut, PME treatment of an
+    intramolecular pair and this force's uncut vacuum one, and for a ligand wider than the cutoff
+    it is not zero (0.076484 kJ/mol on the 32-atom TYK2 ligand, 74 pairs beyond 0.9 nm).
+    """
+    from openmm import NonbondedForce, XmlSerializer
+
+    moved = [pair for pair in record["nonbonded"]["unique_group_internal"]["pairs"]
+             if pair["atoms"][0] in to_reference and pair["atoms"][1] in to_reference]
+    if not moved:
+        return reference_system, []
+    clone = XmlSerializer.deserialize(XmlSerializer.serialize(reference_system))
+    for force in clone.getForces():
+        if isinstance(force, NonbondedForce):
+            for pair in moved:
+                i, j = pair["atoms"]
+                force.addException(to_reference[i], to_reference[j], 0.0, 1.0, 0.0)
+    return clone, moved
 
 
 def restraint_energy(record: dict, positions_nm: np.ndarray, box_nm: Optional[np.ndarray]) -> float:
@@ -351,7 +396,7 @@ def audit_plan(plan, package_a, package_b, env_system) -> dict[str, Any]:
     """Structural endpoint recovery; raises `TopologyError` on the first discrepancy."""
     from openmm import NonbondedForce
 
-    from .topology import TopologyError, scaled_table
+    from .topology import INTERNAL_FORCE_NAME, TopologyError, scaled_table
     from .topology_mapping import _bonds
 
     record = plan.record
@@ -386,6 +431,32 @@ def audit_plan(plan, package_a, package_b, env_system) -> dict[str, Any]:
         to_local = {h: i for i, h in enumerate(to_hyb)}
         bonds_local = _bonds(package.mol)
         got = _nonzero_terms(system, to_local, bonds_local)
+        # A group's non-excluded internal pairs are carried by the CustomBondForce at both ends,
+        # with a zero exception in each NonbondedForce so they are counted once. Those exceptions
+        # are CARRIERS, not the package's exception table, so they are checked to be exactly zero
+        # and then removed from the comparison -- otherwise every carried pair would read as an
+        # exception the package does not have. Their parameters are the package's by construction
+        # and are compared against it directly in the suite.
+        carried = set()
+        for pair in record["nonbonded"]["unique_group_internal"]["pairs"]:
+            i, j = pair["atoms"]
+            if i in to_local and j in to_local:
+                carried.add(tuple(sorted((to_local[i], to_local[j]))))
+        kept = []
+        for row in got["exceptions"]:
+            if (row[0], row[1]) not in carried:
+                kept.append(row)
+            elif (row[2], row[4]) != (0.0, 0.0):
+                raise TopologyError(
+                    f"endpoint {side}: the carrier exception for internal pair {row[:2]} is "
+                    f"{row[2:]}, not zero; the pair would be counted by the NonbondedForce as "
+                    f"well as by {INTERNAL_FORCE_NAME}")
+        if len(got["exceptions"]) - len(kept) != len(carried):
+            raise TopologyError(f"endpoint {side}: {len(carried)} internal pairs are carried by "
+                                f"{INTERNAL_FORCE_NAME} but "
+                                f"{len(got['exceptions']) - len(kept)} carrier exceptions were "
+                                f"found; every carried pair needs exactly one")
+        got["exceptions"] = kept
         want = _table_nonzero(scaled_table(package, record["environment"]["nonbonded_applied"]))
         # a constrained bond has no term; the package table has one. Its length is checked in
         # constraints-consistent; here it is removed from the expectation.
@@ -529,19 +600,33 @@ def endpoint_accounting(plan, endpoint: str, reference_system, reference_to_hybr
     x = np.array(plan.positions_nm if positions_nm is None else positions_nm, dtype=float)
     system = plan.system(endpoint)
     hybrid = _energies_by_class(system, x)
-    reference = _energies_by_class(reference_system, x[list(reference_to_hybrid)])
+    to_reference = {h: i for i, h in enumerate(reference_to_hybrid)}
+    carried, moved_pairs = _reference_without_internal_pairs(
+        plan.record, reference_system, to_reference)
+    xr = x[list(reference_to_hybrid)]
+    reference = _energies_by_class(reference_system, xr)
+    # the reference as the plan treats it: those pairs excepted out, so they are counted once
+    reference_carried = (reference if not moved_pairs else _energies_by_class(carried, xr))
+    # The NET shift, which is the number that matters: what this construction computes for the
+    # moved pairs (uncut, vacuum Coulomb) MINUS what the force field computed for them (cut, PME).
+    # Not the removal on its own -- that is the whole intramolecular nonbonded energy, hundreds of
+    # kJ/mol, and almost all of it comes straight back through the CustomBondForce.
+    moved_vacuum = sum(_vacuum_pair(float(np.linalg.norm(x[p["atoms"][1]] - x[p["atoms"][0]])),
+                                    *p["physical"]) for p in moved_pairs)
+    internal_pair_shift = (moved_vacuum + reference_carried.get("NonbondedForce", 0.0)
+                           - reference.get("NonbondedForce", 0.0))
     dummy = dummy_energy(plan.record, endpoint, x)
     box = np.array([[_q(c) for c in v] for v in system.getDefaultPeriodicBoxVectors()])
     restraint = restraint_energy(plan.record, x, box)
-    dispersion = _dispersion(system, x) - _dispersion(
-        reference_system, x[list(reference_to_hybrid)])
+    dispersion = _dispersion(system, x) - _dispersion(carried, xr)
     accounted = {
         "HarmonicBondForce": reference.get("HarmonicBondForce", 0.0) + dummy["bonds"],
         "HarmonicAngleForce": reference.get("HarmonicAngleForce", 0.0) + dummy["angles"],
         "PeriodicTorsionForce": reference.get("PeriodicTorsionForce", 0.0) + dummy["torsions"],
-        "NonbondedForce": (reference.get("NonbondedForce", 0.0) + dispersion
+        "NonbondedForce": (reference_carried.get("NonbondedForce", 0.0) + dispersion
                            + dummy["internal_exceptions"]),
-        "CustomBondForce": dummy["internal_pairs"],
+        # the same force at both endpoints: every unique group's internal pairs, uncut
+        "CustomBondForce": internal_pair_energy(plan.record, x),
         "CustomCentroidBondForce": restraint,
     }
     for name, value in reference.items():
@@ -555,6 +640,11 @@ def endpoint_accounting(plan, endpoint: str, reference_system, reference_to_hybr
         "reference": reference,
         "dummy": dummy,
         "dispersion_correction_shift": dispersion,
+        # how much the force field's own treatment of those pairs differed from this one: the
+        # price of making the intramolecular Hamiltonian lambda-independent, named rather than
+        # absorbed, and the same function in both legs of a cycle so it cancels in a ddG
+        "internal_pair_shift": internal_pair_shift,
+        "internal_pairs_moved": len(moved_pairs),
         "restraint": restraint,
         "raw_total_difference": sum(hybrid.values()) - sum(reference.values()),
         "residual": residual,

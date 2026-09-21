@@ -715,3 +715,49 @@ def _bonded_term_energy(kind, atoms, params, x, box=None):
     m = np.cross(n1, b2 / np.linalg.norm(b2))
     phi = math.atan2(m @ n2, n1 @ n2)
     return k * (1 + math.cos(per * phi - ph))
+
+
+def carried_internal_pairs(system_a, system_b, group, physical_end):
+    """Convert a pair of end states to the SYMMETRIC internal-pair convention (plan schema /5).
+
+    Every non-excluded pair inside `group` becomes a zero carrier exception in BOTH
+    NonbondedForces, and the `UniqueGroupInternalNonbonded` force carries it with the SAME physical
+    parameters at both ends. `physical_end` is 0 or 1, the end state where the group is physical and
+    whose particle parameters the pair values come from.
+    """
+    import openmm
+    from md_tools.alchemy.topology import COULOMB_CONSTANT, INTERNAL_FORCE_NAME
+    group = sorted(int(i) for i in group)
+    systems = [openmm.XmlSerializer.deserialize(openmm.XmlSerializer.serialize(s))
+               for s in (system_a, system_b)]
+    source = next(f for f in systems[physical_end].getForces()
+                  if isinstance(f, openmm.NonbondedForce))
+    physical = [tuple(v._value for v in source.getParticleParameters(i))
+                for i in range(source.getNumParticles())]
+    carried = []
+    for s in systems:
+        nb = next(f for f in s.getForces() if isinstance(f, openmm.NonbondedForce))
+        excepted = {(min(i, j), max(i, j)) for k in range(nb.getNumExceptions())
+                    for i, j, *_ in [nb.getExceptionParameters(k)]}
+        for x, i in enumerate(group):
+            for j in group[x + 1:]:
+                if (i, j) in excepted:
+                    continue
+                sigma = 0.5 * (physical[i][1] + physical[j][1])
+                nb.addException(i, j, 0.0, sigma, 0.0)
+                if s is systems[0]:
+                    carried.append((i, j, [physical[i][0] * physical[j][0], sigma,
+                                           math.sqrt(physical[i][2] * physical[j][2])]))
+        for k in reversed(range(s.getNumForces())):
+            if s.getForce(k).getName() == INTERNAL_FORCE_NAME:
+                s.removeForce(k)
+        f = openmm.CustomBondForce(
+            f"{COULOMB_CONSTANT!r}*chargeprod/r + 4*epsilon*((sigma/r)^12 - (sigma/r)^6)")
+        for name in ("chargeprod", "sigma", "epsilon"):
+            f.addPerBondParameter(name)
+        f.setName(INTERNAL_FORCE_NAME)
+        f.setUsesPeriodicBoundaryConditions(system_a.usesPeriodicBoundaryConditions())
+        for i, j, params in carried:
+            f.addBond(i, j, params)
+        s.addForce(f)
+    return systems[0], systems[1], len(carried)
