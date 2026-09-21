@@ -64,6 +64,37 @@ restated from a plan.
 | G2-8 throughput | **93.5 ns/day per state, 748 ns/day aggregate.** Against 330 ns/day for a single rank alone on one card, two ranks per card give 57% each: a shared card delivers ~1.13x its single-rank throughput, not 2x |
 
 The mid-run figure of 79 ns/day included startup and is superseded; the tutorial quotes 93.5.
+
+**Ladder B — ligand + 19 pocket residues' sidechains, 193 hot atoms, 52 scaled torsion bonds,
+tau 0 -> 0.25, 8 rungs — FINISHED 2026-09-21 15:28** (80m54s). 2,500,000 steps, 2500 exchanges,
+5000 ps per state. Acceptance 0.408, 0.404, 0.390, 0.388, 0.392, 0.373, 0.358; **0.388 overall
+against A's 0.549**, and 45 round trips against A's 105 — roughly half the mixing for six times
+the hot region, at half the tau_max. Every exchange row a permutation; explicit selection,
+fingerprint v3; MPS verified. Throughput 96.3 ns/day per state, 770.8 aggregate: nominally faster
+than A, but A and B did not run against the same background load, so **B is not evidence that a
+larger hot region is free.** The per-step cost is the 53,030-atom box either way; that is the
+claim the tutorial may make, and only that one.
+
+**G2-6 FAILS for both ladders against the row as written, and the row stays FAILED.** Recomputed
+on CUDA/mixed from the float64 checkpoint at exchange 2499, 64 values each: ladder A worst |u|
+0.077 kT and worst cross 0.093 kT, ladder B 0.106 and 0.121, against the written 0.05 kT.
+
+The diagnosis is S1's and it is sound: 0.05 kT was calibrated on the 1,760-atom fixture where
+|u| ~ 8,000 kT, so 0.0058 kT was 7.3e-7 RELATIVE; TYK2 is 53,030 atoms with |u| ~ 286,000 kT, and
+0.09-0.12 kT is 3.1e-7 relative — relatively about twice as good as the fixture. An absolute kT
+tolerance does not transfer between system sizes, because mixed-precision error grows with the
+number of terms summed. The row is wrong, not the Hamiltonian.
+
+**It is still a FAIL, and it is recorded as one** (S0, 2026-09-21), for the same reason the
+clash-tail and pmemd rows are carried: a tolerance is never weakened after a failure, and a bound
+fitted to the two measurements that just failed it has no power against the next system. What
+replaces it is a NEW row, G2-6b, derived rather than fitted: a relative criterion argued from
+mixed-precision accumulation, its PREDICTION written down first, and then checked on a system size
+that was not used to set it. Until G2-6b exists and passes that way, **G2-6 on production-sized
+systems is UNVALIDATED.**
+
+Discrimination is not in doubt either way: the whole-solute Hamiltonian at the same taus misses by
+15,548 kT (A) and 8,002 kT (B), five orders of magnitude above the discrepancy.
 **Ladder B** (ligand + pocket sidechains, tau 0 -> 0.25) started 14:07, expected ~15:30, then G2-6
 for both ladders and the three scaling probes, then the cards are released.
 
