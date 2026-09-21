@@ -45,6 +45,28 @@ VALIDATED, and neither is released.
 - S1-G: DONE, validated on CUDA (see the milestone row). What remains BLOCKED is the registered-package ligand row and dataset registration (the `$MD_DATA` sandbox rule), and the two TYK2 ladders, which need S2's prepared complex and 4 cards.
 - Integration: done. Resume and export of a selective ladder work on `0.6.1`.
 
+## TYK2 campaign (S1, cards 1-4)
+
+**Ladder A — ligand only, 32 hot atoms, 4 scaled torsion bonds, tau 0 -> 0.5, 8 rungs — FINISHED
+2026-09-21 14:07.** 2,500,000 steps, 2500 exchanges, 5000 ps per state, 40 ns aggregate; 83m22s
+wall, 4618 s of it production. Reported by S1; the numbers below are copied from its run, not
+restated from a plan.
+
+| gate | result |
+|---|---|
+| G2-1 ladder completes | PASS |
+| G2-2 every rank CUDA/mixed | PASS — MPS devices 0-3 = physical cards 1-4, 2 workers per card |
+| G2-3 MPS recorded not inferred | PASS — `execution.acceleration.placement.mps` records `verified: true` with the driver listing the process as an MPS client (M+C), pipe under the session's own cache |
+| G2-4 acceptance per pair | 0.590, 0.602, 0.581, 0.550, 0.546, 0.489, 0.483 over the 7 neighbouring pairs; 0.549 overall. No pair at zero |
+| G2-5 round trips | 105 over 8 walkers (8, 10, 10, 11, 16, 16, 17, 17); every exchange row a permutation |
+| G2-6 exchange energies at stored coordinates | DEFERRED to CUDA, after ladder B, before the cards are released. Correct: at 53,030 atoms a cross-platform recomputation is ~2 kT against a 0.05 kT tolerance, so a CPU check here would be evidence of nothing |
+| G2-7 identity | PASS — `selection_mode: explicit`, `md-tools-hamiltonian-identity/v3` |
+| G2-8 throughput | **93.5 ns/day per state, 748 ns/day aggregate.** Against 330 ns/day for a single rank alone on one card, two ranks per card give 57% each: a shared card delivers ~1.13x its single-rank throughput, not 2x |
+
+The mid-run figure of 79 ns/day included startup and is superseded; the tutorial quotes 93.5.
+**Ladder B** (ligand + pocket sidechains, tau 0 -> 0.25) started 14:07, expected ~15:30, then G2-6
+for both ladders and the three scaling probes, then the cards are released.
+
 ## Notes
 
 - No AMBER-mask parser exists anywhere in `src/` today; S1-A is new code, not a wiring job.
