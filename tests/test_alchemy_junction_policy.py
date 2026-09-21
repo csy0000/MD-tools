@@ -35,7 +35,22 @@ from md_tools.alchemy.paths import linear_path  # noqa: E402
 from md_tools.alchemy.samples import KJ_PER_KCAL  # noqa: E402
 from md_tools.alchemy.windows import WindowSettings  # noqa: E402
 
-pytestmark = [pytest.mark.slow]          # CPU: no card, so not a gpu lane
+
+#: The campaign root is configuration this lane cannot invent: without it there is no campaign to
+#: run or analyse, which is NOT the same as a failing campaign. An unset variable therefore
+#: DESELECTS these tests rather than reddening a suite with "not configured" (S3, 2026-09-21).
+#:
+#: A skipif MARKER, not `pytest.skip(allow_module_level=True)`: a module-level skip happens during
+#: COLLECTION and produces no test report, so `--error-on-skip` cannot see it -- checked, it
+#: reported "1 skipped". A marker skips at setup, which does produce a report, and the conftest
+#: hook then turns it into a failure. That matters because a skip is also how a campaign quietly
+#: stops being evidence: skip by default, FAIL where the campaign is supposed to have run.
+_NO_ROOT = pytest.mark.skipif(
+    not os.environ.get("MD_TOOLS_S4_M3_ROOT"),
+    reason="MD_TOOLS_S4_M3_ROOT is not set: no campaign root to run or analyse. Set it to the campaign "
+           "directory, or run an evidence lane with --error-on-skip.")
+
+pytestmark = [pytest.mark.slow, _NO_ROOT]          # CPU: no card, so not a gpu lane
 
 POLICIES = ("retain-all", "separable")
 NAMES = ["lambda_bonded", "lambda_electrostatics", "lambda_sterics"]
@@ -51,10 +66,7 @@ ENVIRONMENT = {"solvent_v2": "solvent", "vacuum": "vacuum", "vacuum_ba": "vacuum
 
 
 def root() -> Path:
-    value = os.environ.get("MD_TOOLS_S4_M3_ROOT")
-    if not value:
-        raise SystemExit("MD_TOOLS_S4_M3_ROOT is not set")
-    return Path(value)
+    return Path(os.environ["MD_TOOLS_S4_M3_ROOT"])
 
 
 def settings(leg: str, repeat: str) -> WindowSettings:
@@ -139,6 +151,13 @@ def test_m3_prepare(policy):
     print(f"\n{policy}: matched_legs {report['ligand_hamiltonian_sha256'][:16]}")
 
 
+@pytest.mark.xfail(strict=True, reason=(
+    "M3.1's recorded verdict is INCONCLUSIVE, not PASS (2026-09-21, handoffs/S4.md): the two "
+    "policies' ddG agree to 0.0254 kcal/mol, twenty times inside the 0.5 ceiling, but separable's "
+    "own sigma_c = 0.349 exceeds the 0.25 band registered in M3.0, so the comparison cannot "
+    "certify agreement at the power it demanded. That is the measurement, not a defect to fix by "
+    "relaxing the assertion. STRICT: if this ever passes, the campaign underneath it changed and "
+    "the matrix row must be re-read before the result is believed."))
 def test_m3_analysis():
     out = {"rows": {}, "per_leg": {}}
     per = {p: _legs(p) for p in POLICIES}
