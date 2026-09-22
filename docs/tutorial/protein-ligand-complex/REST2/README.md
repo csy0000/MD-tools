@@ -20,8 +20,35 @@ hot:
 | **B** | the ligand **and** the sidechains lining the pocket | 0 → 0.25 | the pocket rearranges with the ligand; a smaller τ_max because the hot region is larger |
 
 The τ ranges differ on purpose. τ_max is not a free knob: a wider hot region at the same τ_max
-gives a worse overlap between neighbouring states, so B trades reach for acceptance. Whether 0.25
-is the right trade for this pocket is one of the things these runs measure.
+gives a worse overlap between neighbouring states, so B trades reach for acceptance.
+
+!!! warning "B's τ_max of 0.25 is NOT the right trade, and the measurements say so"
+    Four ladders on this complex settle it. **Set τ_max by whether the hot rung crosses the
+    barriers you care about; set acceptance by the number of rungs.** For this ligand:
+
+    | ladder | τ_max | rungs | acceptance | ligand torsion crossings at the hot rung |
+    |---|---|---|---|---|
+    | A | 0.5 | 8 | 0.549 | 10.4 /ns |
+    | A2 | 0.3 | 8 | 0.742 | **0.0 /ns** |
+    | B | 0.25 | 8 | 0.388 | 3.8 /ns |
+    | B3 | 0.4 | 12 | 0.373 | **23.1 /ns** |
+
+    At τ 0.3 the ligand's aryl and amide torsions **never cross in 5 ns** — while acceptance and
+    round trips both look their best of any ladder here. A ladder can transport configurations
+    beautifully and have a hot rung that generates nothing new, and the acceptance figure cannot
+    see it. (Counting every scaled bond would have hidden this too: a methyl on this ligand spins
+    freely at any τ and supplies most of the raw count. Methyls and hydroxyls are excluded above.)
+
+    Raising the pocket ladder to τ 0.4 over 12 rungs gives **6x the ligand crossings of B at the
+    same rung spacing and the same acceptance** (0.373 against 0.388). The pocket sidechains were
+    never the constraint: their χ torsions cross 238 /ns at τ 0.25 and 264 /ns at τ 0.4, a gain of
+    11% where the ligand gained 6x. **τ_max is set by the ligand; the sidechains come along.**
+
+    The cost is transport. Per-exchange diffusion is identical (0.171 against 0.170 states²
+    /exchange), but a 12-rung ladder takes `N²` longer to traverse — 354 exchanges against 144 —
+    so B3 completed 2 round trips where B completed 45. More rungs buy acceptance and pay for it
+    in traversal, so use the fewest rungs that give workable acceptance at the τ_max your barriers
+    demand.
 
 ## What you need first
 
