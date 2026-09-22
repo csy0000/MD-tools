@@ -78,3 +78,32 @@ exit.
 
 These runs may deserve their own registered datasets. That needs the user's approval of the names,
 directly, as the first two did.
+
+## Registered before measuring: torsion transitions at the hot rung (2026-09-22)
+
+Acceptance and round trips say the LADDER mixes better. They say nothing about whether the top
+rung still does the job it exists for: a ligand at tau 0.3 crosses lower barriers than at tau 0.5,
+and that is the cost being traded (S0's point, 2026-09-22). The measurement is a count of
+**torsion transitions per ns at the hot rung**, over the scaled central bonds, from the
+`solute_state7_prod1.nc` trajectories already on disk. No card is needed.
+
+**Method, fixed before the numbers are seen.** Each scaled central bond gives one proper torsion
+(heaviest neighbour either side). Basins are defined ONCE from the pooled dihedral histogram of
+all four ladders, so every run is discretised the same way, and a transition is a basin change
+that persists at least two frames. The trajectories are sampled at 10 ps, so what is counted is
+transitions RESOLVABLE at 10 ps; faster recrossing is invisible to this measurement and the
+number is a lower bound in all four runs equally.
+
+**The prediction.** Solute-solute torsion terms carry `(1-tau)^2`, so the hot rung's barriers are
+at 25% of unscaled for ladder A (tau 0.5) against 49% for A2 (tau 0.3), and 56% for ladder B
+(tau 0.25) against 72% for B2 (tau 0.15). For a representative 5 kT barrier that is a rate ratio
+of `exp(-5*(0.49-0.25))` and `exp(-5*(0.72-0.56))`:
+
+| | predicted transitions at the hot rung | wrong if |
+|---|---|---|
+| A / A2 | A crosses **2-5x more often** than A2 | outside that range |
+| B / B2 | B crosses **1.5-3x more often** than B2 | outside that range |
+| A2 in absolute terms | still crosses: **more than 1 transition per ns** summed over its scaled bonds | fewer, which would mean tau 0.3 buys mixing by giving up the barrier crossing the ladder exists for |
+
+If A2's hot rung samples as many crossings as A's, the user's instruction is a straight win. If it
+samples materially fewer, the trade is real and the recommendation has to say where it lies.
