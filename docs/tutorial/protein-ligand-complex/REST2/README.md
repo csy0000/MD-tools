@@ -221,18 +221,36 @@ refuses a disagreement, naming the rebuild command. Claiming nothing is also all
 is then authoritative and `build-md.log` prints the region it found.
 
 ```yaml
-# REST2-ligand.config
+# REST2-ligand.config -- ladder A, exactly as it was run
 protocol: REST2
 solvent: explicit
+dynamics: {timestep_fs: 2.0, temperature_K: 300.0, seed: 20260921}
+stages:
+  minimization_iterations: 5000
+  restrained_nvt_steps: 25000
+  restrained_npt_steps: 25000
+  unrestrained_npt_steps: 200000
 rest2:
   number_of_replicas: 8
   tau_max: 0.5
-  exchange_interval_steps: 5000
-  number_of_exchanges: TO BE DECIDED
+  exchange_interval_steps: 1000
+  number_of_exchanges: 2500
+  state_trajectory: true
+  rem_log: true
+  neighbour_acceptance_report: true
   ligand_scaling_dict:
-    L01: {mask: ":<ligand residue index>"}
-stages: {...}
-reporting: {...}
+    L31: {mask: ":291"}
+reporting: {crd_printout_solute: 5000, info_printout: 25000, checkpoint_printout: 50000}
+```
+
+2500 exchanges x 1000 steps x 2 fs is **5 ns per state, 40 ns aggregate**, and the exchange
+interval is 2 ps. `L31` and `:291` are this complex's ligand label and residue index -- step 1
+printed them; substitute your own.
+
+For ladder B, the same file with `tau_max: 0.25` and the pocket added:
+
+```yaml
+  sidechain_scaling_list: ":15-18,23,40,72,90-96,139-140,142,152-153"
 ```
 
 ```bash
@@ -246,9 +264,69 @@ cd REST2-ligand-run1
 bash run.sh                 # or the mpirun line run.sh prints, -n 8 with MPS
 ```
 
+Each rank prints where it landed. Eight ranks over four cards, two per card, MPS in front of
+them:
+
 ```text
-TO BE MEASURED: the platform lines, one per rank, and the completion summary
+# platform           : CUDA device=0 (measured throughput (balanced) (rank 0 of 8, local rank 0 on <host>, 2 worker(s) on this device)), precision mixed
+# this process drives: state(s) [0] of 8
+# platform           : CUDA device=0 (... rank 1 of 8, local rank 1 ..., 2 worker(s) on this device), precision mixed
+# platform           : CUDA device=1 (... rank 2 of 8 ...)      # ranks 2,3 -> device 1
+# platform           : CUDA device=2 (... rank 4 of 8 ...)      # ranks 4,5 -> device 2
+# platform           : CUDA device=3 (... rank 6 of 8 ...)      # ranks 6,7 -> device 3
 ```
+
+**`device=N` is the MPS server's numbering, not nvidia-smi's**, and under MPS a client numbers the
+server's device list 0..n-1 whatever its own `CUDA_DEVICE_ORDER` says. Set
+`CUDA_DEVICE_ORDER=PCI_BUS_ID` on the launch that starts the DAEMON -- without it, CUDA's default
+FASTEST_FIRST order can map your `CUDA_VISIBLE_DEVICES` onto different physical cards than you
+named -- and check with `nvidia-smi` which cards hold the server's memory before trusting any
+record of where a run ran.
+
+The tail of `remd_records/REST2_prod1.out` is the completion summary:
+
+```text
+#   overall               4802/8750   0.549
+# REST2:
+#   tau ladder            0, 0.071429, 0.142857, 0.214286, 0.285714, 0.357143, 0.428571, 0.5   (8 state(s), one temperature 300.0 K, NVT)
+#   scaling               solute-solute (1-tau)^2, solute-environment 1-tau
+#   left unscaled         bonds unscaled, angles unscaled, torsions: ordinary amide omega, aromatic ring bonds, other double bonds, impropers
+#   solute region         4701 atom(s), 14 unscaled central bond(s), impropers unscaled
+#   velocities on swap    never rescaled (one beta across the ladder)
+# TIMINGS:
+#   elapsed               4617.9 s
+#   throughput            93.55 ns/day per replica, 748.39 ns/day aggregate over 8 state(s)
+#   per step              1.8472 ms
+# ---------------------------------------------------------------------------
+run_status: completed
+```
+
+### The 12-rung ladder the recommendation above is based on
+
+Ladder B3 is ladder B's region at `tau_max: 0.4` over twelve rungs. Its scaler config:
+
+```yaml
+# build/scaler-pocket-12.config
+method: REST2
+schedule: {kind: linear, n_states: 12, tau_min: 0.0, tau_max: 0.4}
+ligand_scaling_dict:
+  L31: {mask: ":291", torsion_exclusions: auto}
+sidechain_scaling_list: ":15-18,23,40,72,90-96,139-140,142,152-153"
+```
+
+and its protocol differs from ladder B's in two lines, `number_of_replicas: 12` and
+`tau_max: 0.4`. `build-md` then writes a group file with twelve lines rather than eight:
+
+```text
+-i _protocol.py -p ../build/built.pdb -s ../build/REST2/system_state0.xml  -c eq/eq_3.xml --group-index 0
+-i _protocol.py -p ../build/built.pdb -s ../build/REST2/system_state1.xml  -c eq/eq_3.xml --group-index 1
+...
+-i _protocol.py -p ../build/built.pdb -s ../build/REST2/system_state11.xml -c eq/eq_3.xml --group-index 11
+```
+
+Twelve rungs at two ranks per card is **six cards**, and the launch is `run.sh`'s mpirun line with
+`-n 12 ... -ng 12`. Keep two ranks per card: a third is worse and a fourth loses throughput
+outright.
 
 ## 5. What these runs measure
 
@@ -357,5 +435,25 @@ scaling code, and for a selective ladder it uses the region the record carries. 
 and nothing else.
 
 ```text
-TO BE MEASURED: its output
+rung 0  tau 0          identical
+rung 1  tau 0.071429   identical
+rung 2  tau 0.142857   identical
+rung 3  tau 0.214286   identical
+rung 4  tau 0.285714   identical
+rung 5  tau 0.357143   identical
+rung 6  tau 0.428571   identical
+rung 7  tau 0.5        identical
+all 8 rungs rebuild identically from the built System
 ```
+
+!!! warning "Two things `export-reference` needs that a finished run may not have beside it"
+    Both were hit while producing the output above, and neither is reported until the export runs:
+
+    1. **The stage log must be at `<run>/REST2.log`.** A ladder launched by `run.sh` writes
+       `remd_records/REST2_prod1.log` instead, and the export stops with
+       `REST2.log: cannot be read`. Copy it across first:
+       `cp remd_records/REST2_prod1.log REST2.log`.
+    2. **The source structure and the ligand package must still be beside the build** --
+       `complex.pdb` next to `build/`, and `build/ligands/<id>/param_<id>/` intact with its
+       `molecule.sdf`. The export verifies both by digest and refuses rather than guessing. A run
+       tree that has been moved, or registered as a dataset without them, cannot be exported.
