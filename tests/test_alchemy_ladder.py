@@ -247,3 +247,24 @@ def test_asking_a_lambda_ladder_for_tau_explains_the_pending_record(hamiltonian)
     assert "describe()['rungs']" in text, "and at where the rung states already are"
     # what IS available stays available: the refusal is about the RECORD, not the states
     assert [r["state"]["lambda_sterics"] for r in p.describe()["rungs"]] == LAMBDAS
+
+
+def test_preparing_a_context_verifies_it_so_the_guard_is_in_the_run_path(hamiltonian, monkeypatch):
+    """X2 must be structural, not a function the run path can forget to call.
+
+    `verify_context` was reachable only from its own tests, which is the wiring defect this project
+    keeps meeting: every component correct, and the check placed where it cannot stop anything. So
+    `prepare_context` -- the ONE place a rung's Context is put into its state, and what the engine
+    calls -- verifies in the same call. This test proves the check is REACHED by making it fail
+    from inside the engine's own path.
+    """
+    h, x = hamiltonian
+    p = _protocol(h)
+    c = _context(h.system, x)
+
+    # a Hamiltonian that sets a DIFFERENT state than the one it was asked for: the rung's record
+    # and the Context then disagree, which is exactly what X2 exists to catch
+    wrong = dict(p.rungs[3].public_state)
+    monkeypatch.setattr(h, "set_state", lambda context, state: type(h).set_state(h, context, wrong))
+    with pytest.raises(LambdaLadderError, match="claims .* but its Context holds"):
+        p.prepare_context(0, c)

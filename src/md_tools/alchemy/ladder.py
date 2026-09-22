@@ -285,6 +285,13 @@ class LambdaLadderProtocol:
         without change, because a Context still IS a state.
         """
         self.hamiltonian.set_state(context, self.rungs[int(state_index)].public_state)
+        # AND VERIFIED IMMEDIATELY, in the same call. `verify_context` existed and was called only
+        # by its own tests: a guard the run path never reaches is not a guard, it is a function
+        # that passes. Setting and checking here makes X2 -- "a rung whose recorded state
+        # disagrees with context_parameters" -- structural, because this is the ONE place a rung's
+        # Context is put into its state, and the check cannot be skipped by a caller that forgets
+        # it. It costs one dictionary comparison per Context, once, at construction.
+        self.verify_context(state_index, context)
 
     def verify_context(self, state_index, context, *, tolerance=0.0):
         """Refuse a Context whose parameters are not the rung's recorded state.
