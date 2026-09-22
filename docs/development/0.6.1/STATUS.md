@@ -37,6 +37,47 @@ VALIDATED, and neither is released.
 | `62adec3` | merge released **0.6.0** (`dev-0.6.0` = `main` = `v0.6.0` → `3927105`): $MD_DATA test isolation, alias reporting, `--extend-from` refusal writes nothing, OPC 1-4 scale | fast lane: 2270 passed, 3 skipped, 2 known failures (build-top example; `--check` needs a device). `test_selective_rest2_integration.py`: 8 passed, **1 failed as expected** — `test_an_extension_of_the_0_6_0_run_onto_selective_states_is_refused_on_its_hamiltonian` reads `extended/REST2.out`, which a refused `--extend-from` no longer writes; S1 updates it |
 | `4c2002e` (+ handoff `4585d14`) | merge S1: caller-supplied ladder rungs (user decision) — `rung_source` declared with a reason, per-rung origins in `restart.json`, the `rungs` identity key with a legacy compatibility branch, run-time re-derivation refused; `solute.yaml` unchanged | fast lane (CUDA hidden, `MD_DATA` temp root, empty afterwards): 2288 passed, 2 environmental failures; ladder/rung/selective/saved-state files: 46 passed; both inventory guards PASS; S1 shows each of 8 guards failing when removed |
 
+## The tau campaign: four ladders, and the rule the tutorial now states
+
+Run 2026-09-21/22 at the user's direction. Each ladder differs from its predecessor in ONE thing,
+proved by `selection_sha256` and a byte-identical `eq_3.xml` start, not asserted.
+
+| ladder | region | tau_max | rungs | acceptance (worst pair) | ligand non-rotor crossings at the hot rung |
+|---|---|---|---|---|---|
+| A | ligand | 0.5 | 8 | 0.549 (0.483) | 10.8/ns |
+| A2 | ligand | 0.3 | 8 | 0.742 (0.720) | **0.0/ns** |
+| B | ligand + 19 pocket sidechains | 0.25 | 8 | 0.388 (0.358) | 3.81/ns |
+| B3 | same region | 0.4 | 12 | 0.373 (0.341) | **23.05/ns** |
+
+* **The rule**: tau_max is set by barrier crossing at the hot rung; acceptance is set by the rung
+  count. A2 is the proof of the first half -- 0.742 acceptance and 326 round trips while crossing
+  NOTHING but a methyl -- and B3 of the second: Δτ within 2% of B's gave acceptance within 4%
+  across a 60% change in tau_max.
+* **tau_max is set by the LIGAND; the sidechains come along.** B -> B3 gained 6x on the ligand's
+  stiff aryl and amide torsions (3.81 -> 23.05/ns) and 11% on sidechain chis (237.7 -> 264.3/ns):
+  the chis were never the constraint. That is the per-region answer, decided in advance as the
+  branch it would take.
+* **Round trips are an extreme-value readout and must not stand alone.** B3 scored 2 against B's
+  45 while per-exchange diffusion was IDENTICAL (0.1709 vs 0.1696 states^2/exchange): a longer
+  ladder crosses as N^2, and (11/7)^2 = 2.47 against a measured 2.46. D and tau_cross are reported
+  beside it now. Fourth instance in two days of a summary statistic misrepresenting a healthy
+  measurement underneath.
+* **The energy check undermines every explanation offered for ladder B's miss, including the
+  sampling-depth one.** B3 at the same region and depth, with a 2.25x larger sample, came in
+  INSIDE (cross 0.0996, 1.05x) where B was outside (0.121, 1.16x) -- and a max over a larger
+  sample should be larger. Across four runs the cross discrepancy wanders 0.080-0.121 with no
+  clean dependence on tau, N or depth. **Nothing is repaired retroactively**: B stays FAILED as
+  measured and B3's 1.05x is not a margin to lean on. G2-6c's job is now concrete -- a quantile or
+  RMS at stated N and stated depth.
+* **B3's throughput was 81.5 ns/day against 90.7-93.5, and the cause is NOT named.** Twelve ranks
+  synchronise at every exchange where eight did, and hpREST2 ran a diagnostic through the same MPS
+  server during the run; its own figures show the cross-effect was real in the other direction
+  (13-27% on its light client). S1 could not apportion the two and did not.
+* **A2 and B2**: A2's tau 0.3 data is KEPT as the evidence for staying at 0.5. B2 (tau 0.15) was
+  terminated and its data removed at the user's instruction -- 0.15 does not give enough scaling --
+  with the fact recorded here because a terminated run that leaves no trace looks like one nobody
+  thought to do.
+
 ## The road to a 0.6.1 release
 
 Six items, in order. Nothing here is optional and nothing is secretly done.
