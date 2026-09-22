@@ -263,3 +263,86 @@ than tuning.
 the daemon, placement verified by nvidia-smi before launch (six client contexts on cards 1-6,
 card 0 untouched). The daemon serves 1-8 so that hpREST2 can run its own MPS diagnostic on 7-8
 under the same server -- one server per user per node, so a second daemon cannot serve it.
+
+
+## B3 measured: four of six predictions refuted, and the design rule survives (2026-09-22)
+
+12 rungs, tau_max 0.4, ladder B's region and ladder B's start, 12 ranks on six cards, 91m04s.
+
+| quantity | predicted (`c77f6c2`) | measured | |
+|---|---|---|---|
+| acceptance, overall | 0.41, refuted outside 0.35-0.48 | **0.373** (B: 0.388) | inside -- but my REASON was wrong |
+| worst-pair acceptance | 0.38, refuted outside 0.32-0.45 | **0.341** (B: 0.358) | inside |
+| round trips | 15-45 | **2** (B: 45) | **REFUTED, far below** |
+| sidechain transitions | 300-450 /ns | **264.3 /ns** (B: 237.7) | **REFUTED, below** |
+| LIGAND non-rotor transitions | 5-12 /ns | **23.05 /ns** (B: 3.81; A at tau 0.5: 10.42) | **REFUTED, far above** |
+| ns/day per state | 88-97 | **81.5** (aggregate 978.3) | **outside, below** |
+
+**The design rule HOLDS, and this was its test.** Δτ within 2% of ladder B's gave acceptance
+0.373 against B's 0.388 and a worst pair of 0.341 against 0.358 -- spacing governs acceptance,
+across a 60% change in tau_max. My prediction of a small RISE from the `2(1-tau)Δτ` factor was
+wrong in direction: the acceptance fell slightly instead. The rule "acceptance is set by the rung
+count" survives; my second-order correction to it did not.
+
+**Round trips: refuted, and the underlying quantity was not.** State-space diffusion per exchange
+is `D = 0.1709` states²/exchange for B3 against `0.1696` for ladder B -- **identical**. Per-step
+transport did not degrade at all. What changed is the ladder got longer, and crossing time scales
+as `N²`: 144 exchanges for B's 7 gaps against 354 for B3's 11, a factor of 2.46 that `(11/7)² =
+2.47` predicts exactly. Round trips fell by 22x on a 2.4x change, because a round-trip COUNT is an
+extreme-value readout that collapses once the crossing time approaches the run length
+(`K/τ_cross`: 17.3 for B, 7.1 for B3). **Report `D` and `K/τ_cross` beside round trips** -- the
+fourth instance today of a summary statistic exaggerating what it summarises, and the first one
+where the underlying measurement was completely healthy.
+
+**The finding: a hot pocket lets the LIGAND cross.** Ladder B and B3 share a region and differ
+only in tau, so this comparison is clean: **3.81 /ns at tau 0.25 against 23.05 /ns at tau 0.4**, a
+6x gain in exactly the stiff aryl and amide torsions that A2 showed dying. B3's hot rung also
+crosses them **twice as often as ladder A's does at tau 0.5** (10.42 /ns) -- that comparison is
+NOT clean, since A differs in region as well as tau, but it is the strongest hint here: heating
+the pocket around the ligand appears to help the ligand itself, presumably because a cold pocket
+cages it.
+
+**Sidechain chis are saturated and were never the problem**: 237.7 /ns at tau 0.25 against 264.3
+at tau 0.4, +11% for a 60% rise in tau_max, where the ligand gained 6x. Chi barriers are low
+enough to cross at any tau in this range. **So the per-region answer is: tau_max must be set by
+the LIGAND's torsions, and the sidechains come along for free at whatever tau that dictates.**
+
+**Throughput, 81.5 against the 90.7-93.5 of the 8-rung ladders**, is outside my band and I will
+not name one cause. Two candidates, neither established: twelve ranks synchronise at every
+exchange where eight did, so the barrier is wider; and hpREST2 ran an MPS throughput diagnostic on
+cards 7-8 through the same server during B3, and an MPS server is one process multiplexing every
+client of a user. A third possibility is that both contributed. Distinguishing them needs a repeat
+on an idle server, which is not worth a card today.
+
+
+### B3's energy check, and what it does to the four-run picture
+
+At B3's own `|u| = 286,783 kT` the G2-6b bounds are 0.1383 and 0.1043. Measured over **144 values**
+(12 states, the largest sample of the four): absolute **0.0894**, INSIDE by 1.55x; cross
+**0.0996**, INSIDE by 1.05x -- barely. The wrong Hamiltonian misses by 12,215 kT, 117,149x the
+bound.
+
+| run | region | tau_max | N | cross discrepancy | against the bound |
+|---|---|---|---|---|---|
+| A | ligand | 0.5 | 64 | 0.093 | inside, 1.12x |
+| A2 | ligand | 0.3 | 64 | 0.080 | inside, 1.30x |
+| B | ligand + pocket | 0.25 | 64 | **0.121** | **OUTSIDE, 1.16x** |
+| B3 | ligand + pocket | 0.4 | 144 | 0.0996 | inside, 1.05x |
+
+**This weakens every explanation offered for ladder B's miss, including mine.** B3 shares B's
+region, box, start and sampling depth, and has 2.25x the sample -- a max over a LARGER sample
+should be larger, not smaller -- yet it comes in 18% below B's. Nor does tau explain it: within
+the ligand region the higher tau gave the higher discrepancy (A 0.093 > A2 0.080), and within the
+pocket region the higher tau gave the LOWER one (B3 0.0996 < B 0.121). Opposite directions in the
+two pairs.
+
+So across four runs the cross discrepancy wanders between 0.080 and 0.121 with no clean dependence
+on tau, on N, or on depth, and ladder B's 0.121 looks like the high end of that spread rather than
+a property of ladder B. **That is the strongest evidence yet that the ESTIMATOR is the defect**:
+`max |dU|` over whatever sample a run happens to produce is too noisy to sit under a 1.16x
+verdict. G2-6c's job is now concrete -- a quantile or RMS at a stated N and depth would give a
+statistic whose spread is known, and none of these four runs would be judged by whether its
+noisiest pair landed above a line.
+
+Nothing here is repaired retroactively: ladder B's row stays as measured and as FAILED, and B3's
+row is INSIDE by 1.05x, which is not a margin anyone should lean on.
