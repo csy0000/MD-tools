@@ -37,6 +37,22 @@ VALIDATED, and neither is released.
 | `62adec3` | merge released **0.6.0** (`dev-0.6.0` = `main` = `v0.6.0` → `3927105`): $MD_DATA test isolation, alias reporting, `--extend-from` refusal writes nothing, OPC 1-4 scale | fast lane: 2270 passed, 3 skipped, 2 known failures (build-top example; `--check` needs a device). `test_selective_rest2_integration.py`: 8 passed, **1 failed as expected** — `test_an_extension_of_the_0_6_0_run_onto_selective_states_is_refused_on_its_hamiltonian` reads `extended/REST2.out`, which a refused `--extend-from` no longer writes; S1 updates it |
 | `4c2002e` (+ handoff `4585d14`) | merge S1: caller-supplied ladder rungs (user decision) — `rung_source` declared with a reason, per-rung origins in `restart.json`, the `rungs` identity key with a legacy compatibility branch, run-time re-derivation refused; `solute.yaml` unchanged | fast lane (CUDA hidden, `MD_DATA` temp root, empty afterwards): 2288 passed, 2 environmental failures; ladder/rung/selective/saved-state files: 46 passed; both inventory guards PASS; S1 shows each of 8 guards failing when removed |
 
+## The road to a 0.6.1 release
+
+Six items, in order. Nothing here is optional and nothing is secretly done.
+
+| | what | who | needs |
+|---|---|---|---|
+| R1 | **G2-6b measured** against its registered two-sided prediction | S1 | one card, ~10 min (user grant) |
+| R2 | **Two tutorial datasets registered** -- `tyk2-ejm31-rest2-ligand-8x5ns` and `tyk2-ejm31-rest2-ligand-pocket-8x5ns`, ~1.1 GB | S1 | the user approving each `data_name` and its notes, told to S1 DIRECTLY |
+| R3 | **Tutorial cites the registered datasets** rather than a scratch path | S1 | R2 |
+| R4 | **Version bumped** from `0.6.1.dev0`, release notes finalised (the stale "no ladder has run on a GPU" banner is fixed at `812d5fd`) | S0 | R1 so the notes can state G2-6b's outcome |
+| R5 | **Full gate lane on the shipping commit**: `fast`, then `gpu or slow`, with the counts recorded. A fast lane is NOT evidence, and the lane is void if any commit lands after it starts | MD-tools-main | cards, and a quiet window |
+| R6 | **Merge to `main`, tag `v0.6.1`**, README status line updated with it | S0 | R1-R5 |
+
+`dev` was retired on 2026-09-22 (it was 105 commits behind `main` with nothing unique, and the
+README on `main` still said 0.5.4). Release lines branch from `main` and merge back at release.
+
 ## Blockers
 
 - Open for S0: the compact `L01: <path>` form, which needs an instance name in `md-tools-ligand-mapping/1`. The `--extend-from` defect is fixed in released 0.6.0, merged here (`62adec3`), and S1's extension test now asserts the new behaviour.
