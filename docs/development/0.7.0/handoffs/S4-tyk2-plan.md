@@ -22,6 +22,9 @@ Nothing here has run.
 the plain complex; **53,034 under the hybrid**, the difference being the 4 unique atoms of
 `ejm_42`), reports every 2 ps over 16 states:
 
+**Every rate below says which rate it is**, because a reader who assumes "whole window" would
+call the sizing optimistic and one who assumes "sustained" would call it pessimistic.
+
 | | ns/day |
 |---|---|
 | whole window, including plan build, Context creation and minimisation | 99.3 |
@@ -37,8 +40,11 @@ second, first half against second half.
 Memory: **697 MiB** on the 3080 (681 MiB on the A5000). The campaign fits a 10 GB card with room.
 
 For comparison, one granted **A5000** gave 138.7 ns/day whole-window against the 3080's 146.2 on
-the identical window — **the 3080 is the faster card for this work**, and it is the pool the
-campaign would run on. The A5000 figure is recorded because it is measured, and it sizes nothing.
+the identical window. **That 5 % is thin as a hardware claim** — one window, one system, and the
+0.6.0 session measured these two models within 6 % of each other when idle and 9.4× apart when
+one was contended. What it supports is the useful conclusion and no more: **card choice between
+these models is not a reason to delay or re-plan this campaign**, and the 3080 pool is adequate.
+The A5000 figure is recorded because it was measured, and it sizes nothing.
 
 This replaces the earlier table, which assumed ~40,000 particles and 80 ns/day and was then
 corrected to "roughly 2.7× more expensive" from S3's 2.0× per-step ratio. **Both were wrong, and
