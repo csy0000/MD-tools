@@ -223,3 +223,38 @@ tolerance is not revisited.
 | M2.6b | **INCONCLUSIVE — it measured a CONVENTION difference, not engine agreement.** pmemd (dual, unconstrained, 18 λ × 1 ns): MBAR +1.2520 ± 0.0002, BAR +1.2522 ± 0.0001, TI +1.2523 ± 0.0002 kcal/mol. MD-tools (`mode="dual"`, same grid, same lengths): **exactly 0.0000 ± 0.0000** by every estimator. Not a sampling accident: the dual vacuum Hamiltonian is λ-INDEPENDENT by construction — U(0) = U(0.5) = U(1) to all printed digits and all three dU/dλ are 0, because with no common atoms both whole-molecule dummies retain every internal term at both ends. AMBER scales each copy's whole potential with λ, so its vacuum leg IS the copies' internal free-energy difference. Both conventions are self-consistent and give the same ΔΔG; the per-leg number is convention-dependent, so this row cannot certify the engine. [evidence](S4-evidence-m26-pmemd.json) |
 | M2.6c | NOT RUN — a dual-topology prmtop with rigid water needs `noshakemask` over the TI region, and pmemd CPU on ~1 900 atoms is hours per window; it did not fit run 1's budget |
 | M2.6d | NOT RUN — needs M2.6c. **This is the row that would actually corroborate M2**, because ΔΔG is where the convention difference of M2.6b cancels |
+
+## A3b: replica exchange over lambda — the acceptance plan
+
+Written 2026-09-22, before S3's runtime is reviewed and before anything runs. S3 writes the
+runtime; S4 reviews it and owns its outputs, the acceptance test's consumption and the tutorial
+evidence (shared contracts §5). Registered now so the review has a target rather than an opinion.
+
+### The refusals, and the one that passes every obvious test
+
+| id | what must be refused | why this one is easy to get wrong |
+|---|---|---|
+| X1 | a per-rung `-s` on a lambda ladder, **even when all K paths are IDENTICAL** | the presence of the column is the error, not its contents. An implementation that compares the paths and refuses only when they differ passes every obvious test and is still wrong: a lambda ladder has ONE System, and a column that can only ever hold one value will eventually hold a wrong one. **The review test uses identical paths** |
+| X2 | a rung whose recorded state disagrees with `context_parameters(state)` | the lambda analogue of "tau 0 on a hot state": the record and the forces must not be able to diverge |
+| X3 | a plural launch that does not coordinate | `md_tools.remd` is the one MPI authority; a second `except ImportError: return` is a second policy |
+| X4 | velocity rescaling at an exchange | exchanges never rescale velocities (CLAUDE.md); the configuration moves as it is |
+| X5 | a rung addressed by lambda rather than by index | (S3's condition, accepted) `j` addresses a rung and `(lambda_j, tau_j)` is its content, so 0.7.1's tent ladder needs no re-indexing and no second addressing scheme |
+
+### What the outputs must show — S4's side
+
+| id | quantity | tolerance | why |
+|---|---|---|---|
+| A3b.1 | every series follows a **STATE**, with `walker_index` recorded, and rows on an exchange boundary are **pre-exchange** | exact | the REST2 convention, unchanged. My sample record keys by `origin_state`, so it composes only if this holds |
+| A3b.2 | step 0 and the final step appear exactly once per state, and an exchange attempt at step 0 records `exchange_attempt = -1` | exact | the ladder convention |
+| A3b.3 | acceptance uses **independently evaluated** reduced potentials, and the four terms of the Metropolis criterion are the ones the record carries | 1e-9 kT against a recomputation from the stored rows | if acceptance and the record disagree, the record describes a different simulation |
+| A3b.4 | **the reduction**: with exchange attempts disabled, the ladder reproduces independent fixed-lambda windows | free energies within the usual gate; the per-state streams identical in shape | a ladder that cannot reproduce the thing it generalises is not a generalisation |
+| A3b.5 | MBAR consumes the ladder's rows unchanged | exact: the same `md-tools-alchemical-samples/1` reader, no ladder-specific branch | if the estimator needs to know a ladder produced the data, the record is not the contract |
+
+### The question that makes it worth doing
+
+| id | comparison | verdict rule |
+|---|---|---|
+| A3b.6 | the SAME edge with and without exchange, **same total sampling**, same windows, same repeats: uncertainty (repeat spread, not the estimator's claim) and minimum neighbour overlap | reported, and **published either way**. If exchange buys nothing on this system that is a result for the tutorial, not a reason to omit the comparison. A campaign that only reports the configuration that won is not a comparison |
+
+Acceptance per neighbour pair and walker round trips are reported as the REST2 pages do, on CPU
+for development and on a granted card for anything claimed.

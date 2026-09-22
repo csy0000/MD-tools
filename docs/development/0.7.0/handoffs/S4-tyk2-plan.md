@@ -90,9 +90,27 @@ per-window set-up counted explicitly since P5 showed it is not negligible.
 | T4 second anchor set (restraint independence) | 2.45 |
 | **total** | **10.86**, about 2.7 days on four cards |
 
-The solvent-leg figure assumes ~1,900 particles run 8× faster than the complex; that factor is
-**assumed, not measured**, and it is 12 % of the total, so it is worth measuring inside T1's own
-solvent leg rather than in a separate grant.
+### The 8× solvent factor: how it gets MEASURED, not guessed
+
+The solvent-leg figure assumes ~1,900 particles run 8× faster than the 53,034-particle complex.
+That factor is **assumed**, it is the only unmeasured number in this sizing, and it is 12 % of
+the total. Today's lesson is that an unmeasured number is not made safer by a conservative guess:
+the "2.7× more expensive" correction was conservative and wrong by more than the optimism it
+replaced.
+
+So it is measured inside T1 rather than in a grant of its own:
+
+1. T1's solvent leg runs first, before its complex leg. Its **first window** reports the rate
+   curve the same way P5 did — whole-window, first half, second half — from the window's own
+   progress record, so no extra sampling is spent.
+2. The measured sustained solvent rate replaces the 8× assumption in this table before T2 and T3
+   are requested.
+3. **If the measured factor differs from 8× by more than 20 %, T2 and T3 are re-costed and the
+   difference is reported to S0 before their grants are asked for**, rather than after the cards
+   are booked.
+4. The same applies to the ABFE solvent decoupling leg, which carries the same assumption.
+
+The complex figure needs no such treatment: it is measured (163.0 ns/day sustained, P5).
 
 ### Runs 4+ — production, ONE GRANT PER RUN
 T1 (`ejm_31` → `ejm_42`), T2 (`ejm_31` → `ejm_43`), T3 (`ejm_42` → `ejm_43`, the closing edge),
