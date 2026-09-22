@@ -107,3 +107,101 @@ of `exp(-5*(0.49-0.25))` and `exp(-5*(0.72-0.56))`:
 
 If A2's hot rung samples as many crossings as A's, the user's instruction is a straight win. If it
 samples materially fewer, the trade is real and the recommendation has to say where it lies.
+
+
+## A2 measured, B2 terminated, and what the two together decided (2026-09-22)
+
+### A2: better mixing, and a hot rung that crosses nothing
+
+| quantity | predicted (registered at `6f682c6`) | measured | |
+|---|---|---|---|
+| acceptance, overall | 0.72, wrong outside 0.65-0.80 | **0.742** | INSIDE |
+| worst-pair acceptance | not predicted -- see below | 0.720 (spread 1.06x) | — |
+| round trips | 150-200, low confidence | **326** | **REFUTED, 1.63x above** |
+| ns/day per state | 90-97 | 90.7 (aggregate 725.7, 81m09s) | inside, low edge |
+| exchange discrepancy | 0.08-0.13 kT | abs 0.0809, cross 0.0804 | inside |
+
+Ladder A, for comparison: 0.549 overall, 0.483 worst pair (spread 1.25x), 105 round trips,
+93.5 ns/day, 0.077/0.093 kT.
+
+**Why the round-trip band failed, and the better model.** I predicted mixing roughly in proportion
+to acceptance. Mixing is governed by the WORST pair, not the mean (S0): ladder A's pairs spread
+0.483-0.602, a factor of 1.25, so a walker had a place to stick at the hot end; A2's spread
+0.720-0.764 is 1.06 and nearly uniform. Round trips respond to the bottleneck disappearing, which
+is why they tripled while the mean rose 1.35x. **Worst-pair acceptance is reported beside the
+overall figure from here on.**
+
+**The energy check at A2's own `|u| = 286,598 kT`**: bounds 0.1383 and 0.1042, measured 0.0809 and
+0.0804, inside by 1.71x and 1.30x, with the wrong Hamiltonian missing by 9,977 kT (95,718x the
+bound). Against ladder A the absolute barely moved (+5%) while the cross FELL 14% at half the tau.
+Depth is constant here -- both ladders ran 2,500,000 steps -- so this is the one comparison in
+which tau is the only variable, and it points away from the sampling-depth story. One pair of
+points; not a result.
+
+### The measurement that decided it: torsion transitions at the hot rung
+
+Method as registered above. **Rotors are separated**: a central bond whose either end has no heavy
+neighbour besides its partner is a methyl, hydroxyl or ammonium spin, not a conformational degree
+of freedom, and counting it drowns everything else.
+
+| | ligand non-rotor | sidechain non-rotor | rotor bonds (excluded) |
+|---|---|---|---|
+| A, tau 0.5 | **10.82 /ns** (C4-N1 28, C1-C5 24, C11-N3 2) | — | 76 |
+| A2, tau 0.3 | **0.00 /ns** -- all three bonds, zero in 5 ns | — | 71 |
+| B, tau 0.25 | 3.61 /ns | **250.5 /ns** over 33 bonds | 1,284 |
+| B2, tau 0.15 (PARTIAL) | 1.45 /ns | **184.7 /ns** over 33 bonds | 1,006 |
+
+**A2's zeros are physical, not a basin-cut artefact**: its two aryl/amide torsions have circular
+standard deviations of 15.2 and 19.6 degrees and span under 90 degrees of arc across the whole
+5 ns, where ladder A's same torsions have 55.1 and 53.7 degrees and visit the full circle.
+
+**The aggregate hid this completely.** Including rotors, A2 shows 66 transitions against A's 117 --
+a 1.77x ratio that looks like a modest cost. Every one of A2's 66 is a methyl spin. My registered
+prediction (A crosses 2-5x more often; A2 still crosses more than 1/ns) is **REFUTED IN
+SUBSTANCE**: the ratio landed below the band, and the absolute half held only on a methyl, which
+makes holding it worthless. Recorded as refuted rather than claimed on the letter.
+
+### The named pattern, once
+
+Three times in one day a SUMMARY STATISTIC stood in for a distribution it could not represent:
+the aggregate transition count over a methyl rotor; the mean acceptance over the worst pair that
+governs mixing; and a max over a sample whose N and depth were never stated (G2-6b). Each looked
+like a measurement and each hid the quantity that mattered. The rule this suggests: **report the
+distribution's governing feature beside any summary -- the bottleneck, the excluded trivial mode,
+the N.**
+
+### What it means, and the user's ruling
+
+Acceptance and round trips measure whether the ladder TRANSPORTS configurations; transitions
+measure whether the hot rung GENERATES anything worth transporting. A2 is a better transport
+system carrying nothing.
+
+**The user ruled: "back to tau 0.5 for A"** (2026-09-22, relayed by S0). Ladder A stands as the
+recommended ligand ladder, and **A2 is kept as the evidence for that choice**, not discarded: the
+sentence that justifies tau 0.5 to the next reader is "tau 0.3 gives 0.742 acceptance, 326 round
+trips and zero non-methyl transitions in 5 ns".
+
+The design rule it implies: **tau_max is set by barrier crossing at the hot rung, a physical
+criterion; acceptance is then a matter for the RUNG COUNT.** Ladder B's problem was never its
+tau_max -- 8 rungs to 0.25 gave a worst pair of 0.358 -- and the fix for that is more rungs at the
+same tau, not a colder top rung.
+
+### B2, terminated at 83% by the user's instruction
+
+**The user ruled: "we can terminate the tau=0.15 ladders because 0.15 doesn't give enough
+scaling. Also remove the data of the tau_max=0.15 REST2 simulations."** B2 was stopped at **2072
+of 2500 exchanges (83%)** and its data removed. These numbers are what the partial run showed and
+are **PARTIAL, not a result**:
+
+* acceptance overall 0.616, worst pair 0.578, spread 1.12x (my registered prediction was 0.60,
+  band 0.52-0.68 -- inside, on a partial run);
+* hot-rung transitions as tabulated above, over 4.13 ns.
+
+**And it answered the question it was run for, which is why the numbers are kept.** Sidechain chi
+torsions and ligand amide/aryl torsions do NOT behave alike: from tau 0.25 to 0.15 the sidechains
+lost only 26% of their crossings (250.5 -> 184.7 /ns) while the ligand's stiff torsions were
+already nearly silent at 0.25 (3.61 /ns) and the ones that cross changed identity at 0.15. So the
+recommendation is **per region, not global**: chi barriers are low enough to keep crossing at
+small tau, while a ligand's amide and aryl-carbonyl torsions need a genuinely hot rung. The user's
+judgement that 0.15 "doesn't give enough scaling" is consistent with the ligand side of that,
+which is the side the tutorial's ladder exists for.
