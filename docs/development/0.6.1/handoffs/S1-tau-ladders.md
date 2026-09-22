@@ -113,11 +113,22 @@ samples materially fewer, the trade is real and the recommendation has to say wh
 
 ### A2: better mixing, and a hot rung that crosses nothing
 
+**The criterion this page exists to establish, and the only part that transfers to another
+system: `tau_max` is set by BARRIER CROSSING at the hot rung; acceptance is set by the RUNG
+COUNT.** Everything else here is TYK2's numbers.
+
+**A2's acceptance and A2's zero never appear apart.** At tau 0.5 the ligand's three non-rotor
+torsions cross **54 times in 5 ns**; at tau 0.3 they cross **ZERO** times. The aggregate counts
+(117 against 66) hide it because a single methyl contributes 63 and 66 of them, and a methyl spin
+is not a conformational degree of freedom anyone wants sampled. A reader who meets 0.742 and 326
+first has already concluded the shorter ladder is better, so the two numbers travel together here,
+in the tutorial, and in any summary.
+
 | quantity | predicted (registered at `6f682c6`) | measured | |
 |---|---|---|---|
-| acceptance, overall | 0.72, wrong outside 0.65-0.80 | **0.742** | INSIDE |
+| acceptance, overall | 0.72, wrong outside 0.65-0.80 | **0.742 -- with ZERO non-methyl hot-rung crossings (A: 0.549 with 54)** | INSIDE |
 | worst-pair acceptance | not predicted -- see below | 0.720 (spread 1.06x) | — |
-| round trips | 150-200, low confidence | **326** | **REFUTED, 1.63x above** |
+| round trips | 150-200, low confidence | **326 -- transporting configurations the hot rung never generated** | **REFUTED, 1.63x above** |
 | ns/day per state | 90-97 | 90.7 (aggregate 725.7, 81m09s) | inside, low edge |
 | exchange discrepancy | 0.08-0.13 kT | abs 0.0809, cross 0.0804 | inside |
 
