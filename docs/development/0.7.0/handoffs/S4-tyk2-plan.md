@@ -14,15 +14,36 @@ Nothing here has run.
 | P2 | hybrid plans for the edges in both environments, pairing under `matched_legs` | S2 | **DONE** (automatic maps, `rdkit-fmcs-heavy/1`, 21-atom MCS; endpoint recovery recorded) |
 | P3 | a decoupling construction for ABFE | S2/S3 | **DONE** (`topology.build_decoupling_plan`) — A5 is no longer blocked on construction |
 | P4 | Boresch anchors: an equilibrated complex trajectory per ligand, ligand heavy-atom names, pocket residues | S2 prepares, S4 selects | **NOT STARTED** — needs GPU equilibration (run 3 below) |
-| P5 | measured ns/day for the SOLVATED COMPLEX under the alchemical Hamiltonian | S4 | **NOT RUN** — run 2 below, and every cost here is provisional until it lands |
+| P5 | measured ns/day for the SOLVATED COMPLEX under the alchemical Hamiltonian | S4 | **DONE 2026-09-22** — run 2. **163.0 ns/day sustained** on one granted RTX 3080; **697 MiB**, so a 10 GB card carries it and the campaign is not forced onto the one 24 GB card |
 
-## Why the earlier cost table is wrong, and by how much
+## The measured cost (P5, 2026-09-22), and what it replaces
 
-The matrix's cost table assumed ~40,000 particles and 80 ns/day. Two facts have since landed:
-the complex is **53,030** particles, and S3 measures the hybrid Hamiltonian at **2.0×** a plain
-end state per step. Taken together that is roughly 2.7× the per-window cost assumed there —
-a 3.3-day leg becomes ~9 days. **I am not requesting anything on that arithmetic.** P5 replaces
-both numbers with one measurement on the real system before any production grant is asked for.
+**Measured, one granted RTX 3080, one window of the real T1 complex leg** (53,030 particles in
+the plain complex; **53,034 under the hybrid**, the difference being the 4 unique atoms of
+`ejm_42`), reports every 2 ps over 16 states:
+
+| | ns/day |
+|---|---|
+| whole window, including plan build, Context creation and minimisation | 99.3 |
+| first half of sampling | 146.7 |
+| **second half — the sustained rate campaigns are sized from** | **163.0** |
+
+**A short window UNDER-reports here, by 39 %, and the direction matters.** S1's probe caveat runs
+the other way (a 100 ps probe read 26 % HIGH), so the caveat cannot simply be inherited: in this
+window set-up dominates, and sizing from the naive whole-window number would over-book the
+campaign by a third. The curve was measured rather than corrected for — one window polled every
+second, first half against second half.
+
+Memory: **697 MiB** on the 3080 (681 MiB on the A5000). The campaign fits a 10 GB card with room.
+
+For comparison, one granted **A5000** gave 138.7 ns/day whole-window against the 3080's 146.2 on
+the identical window — **the 3080 is the faster card for this work**, and it is the pool the
+campaign would run on. The A5000 figure is recorded because it is measured, and it sizes nothing.
+
+This replaces the earlier table, which assumed ~40,000 particles and 80 ns/day and was then
+corrected to "roughly 2.7× more expensive" from S3's 2.0× per-step ratio. **Both were wrong, and
+the pessimistic correction was wrong by more than the original optimism**: measurement gives
+163 ns/day sustained, so the campaign is about **10.9 GPU-days, not 22**.
 
 ## The sequence, and why this order
 
@@ -49,6 +70,23 @@ window); a placement chosen from a pilot is re-checked against production's own 
 production overlap below 0.03 **FAILS the campaign** rather than re-placing windows after the
 fact. M2's pilot chose placement from 40 samples and was optimistic; the campaign then failed at
 1 ns. A pilot too short to estimate overlap changes nothing.
+
+### The campaign, sized from the measurement
+
+Per leg: 16 windows × 3 repeats × 5.5 ns (0.5 ns equilibration + 5 ns production), plus ~60 s of
+per-window set-up counted explicitly since P5 showed it is not negligible.
+
+| campaign | GPU-days (one 3080) |
+|---|---|
+| one RBFE edge: complex leg 1.65 + solvent leg 0.24 | **1.89** |
+| T1, T2, T3 — the three edges | 5.67 |
+| T4 ABFE: complex decoupling, restraint attachment, solvent decoupling | 2.75 |
+| T4 second anchor set (restraint independence) | 2.45 |
+| **total** | **10.86**, about 2.7 days on four cards |
+
+The solvent-leg figure assumes ~1,900 particles run 8× faster than the complex; that factor is
+**assumed, not measured**, and it is 12 % of the total, so it is worth measuring inside T1's own
+solvent leg rather than in a separate grant.
 
 ### Runs 4+ — production, ONE GRANT PER RUN
 T1 (`ejm_31` → `ejm_42`), T2 (`ejm_31` → `ejm_43`), T3 (`ejm_42` → `ejm_43`, the closing edge),
