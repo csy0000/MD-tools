@@ -43,7 +43,7 @@ Six items, in order. Nothing here is optional and nothing is secretly done.
 
 | | what | who | needs |
 |---|---|---|---|
-| R1 | **G2-6b measured** against its registered two-sided prediction | S1 | one card, ~10 min (user grant) |
+| R1 | **G2-6b MEASURED** 2026-09-22 (S1 `5062924`): upper bound VALIDATED at a third size, lower bound REFUTED as written, floor not moved | S1 | DONE |
 | R2 | **Two tutorial datasets registered** -- `tyk2-ejm31-rest2-ligand-8x5ns` and `tyk2-ejm31-rest2-ligand-pocket-8x5ns`, ~1.1 GB | S1 | the user approving each `data_name` and its notes, told to S1 DIRECTLY |
 | R3 | **Tutorial cites the registered datasets** rather than a scratch path | S1 | R2 |
 | R4 | **Version bumped** from `0.6.1.dev0`, release notes finalised (the stale "no ladder has run on a GPU" banner is fixed at `812d5fd`) | S0 | R1 so the notes can state G2-6b's outcome |
@@ -130,7 +130,37 @@ against the 93.5 the 5 ns production ladder of the same shape sustained. Plan fr
 figure; the probes are evidence for the RELATIVE scaling between configurations and nothing else.
 S1 flagged this itself rather than leaving the two numbers to be read as a contradiction.
 
-**G2-6b is registered BEFORE measurement** (S1 `181e8c7`), derived rather than fitted:
+**G2-6b MEASURED 2026-09-22, and it changes what both ladders can claim.** Third size: the
+selective fixture at 10,972 particles, |u| = 64,994 kT, between the two calibration points and
+used for neither. Absolute 0.00766 kT (predicted band 0.00878-0.0659) -- **BELOW the floor**;
+cross 0.00988 kT (0.00662-0.0497) -- inside. Discrimination 3,478x against a 100x requirement.
+So **the UPPER bound, which is the half that gates, is VALIDATED at a third system size** with
+8.6x and 5.0x margin; the lower bound is **REFUTED AS WRITTEN** and was not moved, because it
+existed so the bound could not be unfalsifiable and it has now done that job by failing.
+
+**LADDER B IS OUTSIDE THE VALIDATED UPPER BOUND** (S1, found while checking both ladders against
+the new row; S0 re-derived it independently). `3*K_cross*sqrt(286,191)` = 0.104 kT against B's
+measured 0.121 -- **outside by 1.16x**. The registered row had said "both existing measurements
+fall inside it", and that sentence had been checked against ladder A ONLY. Ladder A is inside on
+both channels (1.79x, 1.12x); ladder B is inside on absolute (1.30x) and OUT on cross. Nothing was
+repaired: both ladders' G2-6 status stays FAIL -- A against the row as written, B against the row
+as written AND against the validated bound.
+
+**The margins order by sampling depth, which is the pattern to chase.** Fixture (200 steps) 3.98x,
+third size (200 steps) 8.60x/5.02x, ladder A (2,500,000 steps) 1.79x/1.12x, ladder B (2,500,000
+steps) 1.30x/0.86x. The two deepest-sampled runs have the two smallest margins and the only miss,
+so a K fitted on a near-minimised fixture plausibly under-predicts production coordinates
+systematically -- which is a statement about where the coordinates ARE, not about how the
+arithmetic rounds. This run cannot separate it from the estimator defect below.
+
+**The estimator is the defect, not the level.** A max over a finite sample is biased low, and the
+size of the bias is measured here: 9 values gave 0.00563 and 64 gave 0.00766 on the SAME system.
+So "max dU" at N=9, at N=64, and at N=64-after-2,500,000-steps are three statistics wearing one
+name, and no threshold is fair to all three. **G2-6c** must fix the estimator before any level is
+set again: a stated N, a stated stage, and a quantile or RMS rather than a max, with N recorded
+beside every number.
+
+The registration, kept because the prediction being visible is what made this evidence: (S1 `181e8c7`), derived rather than fitted:
 `dU ~ K*sqrt(|u|)` from independent single-precision rounding of M summed terms, with K taken from
 the 1,760-atom fixture ALONE; TYK2 then lands 1.7x/2.7x above that law, which is what partially
 correlated rounding predicts. Bound `3*K*sqrt(|u|)`, the >=100x discrimination check kept in the
