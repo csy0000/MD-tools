@@ -69,6 +69,14 @@ exclude_docs: |
   /README.md
   history/
   campaigns/
+  # The parallel-development record: aims, status, handoffs, shared contracts and campaign plans
+  # for 0.6.1 and 0.7.x. Same rule as the rest of this list -- kept in the repository because the
+  # reasoning is worth more than the deletion, kept off the site because a reader cannot tell a
+  # development record from documentation. It also carries in-flight decisions, unfinished
+  # evidence and session-coordination detail, none of which is a statement to a user. Added
+  # 2026-09-22, after a strict build showed these pages WERE being published and two of their
+  # repository-relative links (`../README.md`, `../../CLAUDE.md`) aborted the build.
+  development/
   integration/
   amber-like-fix/
   claudecode-instructions/
