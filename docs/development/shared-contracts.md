@@ -501,6 +501,16 @@ in `docs/development/0.7.0/lambda-exchange-design.md`; the part that binds both 
   second, unverifiable copy of committed evidence in `$MD_DATA`, leaving a reader two sources for
   one artefact and no rule saying which is authoritative. A tutorial cites the committed fixture
   and its rebuild script. **An opened sandbox is not a reason to find something to register.**
+- **The estimator must not be able to tell that a ladder produced the data** (S4's A3b acceptance
+  plan, 2026-09-22, adopted). With exchange disabled a lambda ladder must reproduce independent
+  fixed-lambda windows, and MBAR must consume its rows through NO ladder-specific branch. If the
+  estimator needs to know how the samples were generated, the record is not the contract -- the
+  sampler and the analysis have agreed privately about something the file does not say, and the
+  next reader of that file cannot reproduce the result.
+- **A comparison is published either way.** A3b.6 asks whether exchange over lambda is worth its
+  cost: the same edge with and without exchange, at the SAME total sampling, reported whichever
+  wins. A campaign that reports only the configuration that won is not a comparison, and it is the
+  shape that makes a feature look justified forever after.
 - **An exchange attempt uses `energy` only.** `derivative_components` is TI's consumer and is not
   part of an attempt: pairing a derivative at one state with energies at two is the class of error
   the AIS two-probe separation exists to prevent.
