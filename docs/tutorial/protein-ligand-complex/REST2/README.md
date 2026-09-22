@@ -247,6 +247,34 @@ the pocket has to move with the ligand; neither ladder is "better".
     53,030-atom box, which both ladders share: the hot region changes what is *sampled*, not what
     each step costs.
 
+### Both runs are registered datasets
+
+Every figure in the table above is read from these two, not retyped from a log:
+
+```text
+$MD_DATA/2026/tutorials/tyk2-ejm31-rest2-ligand-8x5ns          110 files, 545.8 MB   (ladder A)
+$MD_DATA/2026/tutorials/tyk2-ejm31-rest2-ligand-pocket-8x5ns   117 files, 546.0 MB   (ladder B)
+```
+
+Each holds the whole tree a reader needs to check the claim -- `build/` with the scaled states and
+`scaler.yaml`, the equilibration chain, and the ladder's own `REST2.nc`, `restart.json` and
+per-state trajectories -- and each verifies against its own inventory:
+
+```bash
+md-openmm data-register --verify-only -idata <the dataset> \
+    -project_name tutorials -data_name tyk2-ejm31-rest2-ligand-8x5ns -year 2026
+```
+
+!!! warning "Their energy check is a recorded FAIL, and the datasets say so"
+    Gate G2-6 recomputes a ladder's recorded exchange energies against its saved states. Both runs
+    FAIL it as originally written (0.077/0.093 kT and 0.106/0.121 kT against a 0.05 kT tolerance
+    that had been calibrated on a system 30x smaller). Against the size-aware replacement
+    `dU <= 3*K*sqrt(|u|)`, validated at a third system size, **ladder A is inside on both channels
+    and ladder B is outside by 1.16x on the cross channel**. A deliberately wrong Hamiltonian is
+    caught by four orders of magnitude more, so this is a question about a tolerance, not about
+    the scaling. Each dataset's notes carry its own numbers; the full account is
+    `docs/development/0.6.1/handoffs/S1.md`.
+
 ### How fast is eight rungs on four cards, really
 
 **The naive expectation:** one rank alone does 330 ns/day on this system, two ranks share a card,
