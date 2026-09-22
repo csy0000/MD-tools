@@ -346,3 +346,22 @@ noisiest pair landed above a line.
 
 Nothing here is repaired retroactively: ladder B's row stays as measured and as FAILED, and B3's
 row is INSIDE by 1.05x, which is not a margin anyone should lean on.
+
+## Open: a cheap experiment that would apportion B3's throughput shortfall
+
+B3 ran at 81.5 ns/day per state against the 8-rung ladders' 90.7-93.5, and the write-up names two
+candidates without choosing: a wider exchange barrier (twelve ranks synchronise where eight did)
+and MPS server contention (hpREST2 ran a throughput diagnostic through the same server during
+B3). Its own measurement quantifies the cross-effect in the other direction -- my twelve ranks
+cost its light client 13% at four processes and 27% at eight -- so contention is real, but a light
+client's penalty does not transfer to my ranks.
+
+**The experiment that separates them** (hpREST2's suggestion, 2026-09-22): run the SAME ladder at
+6 ranks and at 12 ranks through an otherwise-idle server. A shared-server penalty and an exchange
+barrier scale differently with rank count, so the difference between those two isolates them. It
+needs cards and an idle machine and nothing else, and nothing in this page depends on the answer.
+
+**Also open**: ladder A's region at tau 0.5 with 12 rungs -- whether the acceptance A2 bought can
+be had without giving up the ligand's barriers. B3 makes it likely (same spacing, same
+acceptance, hot rung unchanged) but likely is not measured, and the hot rung would be ladder A's
+exactly, so `selection_sha256` and the tau 0.5 states already exist.
