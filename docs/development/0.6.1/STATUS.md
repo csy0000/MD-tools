@@ -47,7 +47,8 @@ Six items, in order. Nothing here is optional and nothing is secretly done.
 | R2 | **Two tutorial datasets registered** -- `tyk2-ejm31-rest2-ligand-8x5ns` and `tyk2-ejm31-rest2-ligand-pocket-8x5ns`, ~1.1 GB | S1 | the user approving each `data_name` and its notes, told to S1 DIRECTLY |
 | R3 | **Tutorial cites the registered datasets** rather than a scratch path | S1 | R2 |
 | R4 | **Version bumped** from `0.6.1.dev0`, release notes finalised (the stale "no ladder has run on a GPU" banner is fixed at `812d5fd`) | S0 | R1 so the notes can state G2-6b's outcome |
-| R5 | **Full gate lane on the shipping commit**: `fast`, then `gpu or slow`, with the counts recorded. A fast lane is NOT evidence, and the lane is void if any commit lands after it starts | MD-tools-main | cards, and a quiet window |
+| R5 | **GATE PASSED on `c19988c`** 2026-09-22 (MD-tools-0.6.0): fast 2385/3/0 (no card), slow 438/7/0 (one card), gpu 123/1/0 (six 3080s then four + MPS). Every lane's SHA identical before and after; every skip named; both gpu counts reconciled against `--collect-only` (collection 124 = 121 + 3) rather than against an expectation; MPS torn down and the directory verified gone. **The gate says nothing about the TYK2 ladder rows** -- no lane touches them | MD-tools-0.6.0 | DONE |
+| ~~R5~~ | ~~Full gate lane on the shipping commit~~: `fast`, then `gpu or slow`, with the counts recorded. A fast lane is NOT evidence, and the lane is void if any commit lands after it starts | MD-tools-main | cards, and a quiet window |
 | R6 | **Merge to `main`, tag `v0.6.1`**, README status line updated with it | S0 | R1-R5 |
 
 `dev` was retired on 2026-09-22 (it was 105 commits behind `main` with nothing unique, and the
