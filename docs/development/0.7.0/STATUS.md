@@ -117,7 +117,31 @@ A2 — individual development does not.
     sufficient, and the campaign's ΔΔG stays uncorroborated until M2.6 exists.
   - Retain-all ran ~14% faster per water window, on a different card model, unpredicted: an
     OBSERVATION, not a benchmark, and it is not to be cited as a performance result.
-- **The TYK2 cost table is OPTIMISTIC by about 2.7x, and the plan says so rather than re-scaling
+- **RUN 2 IS DONE AND THE CAMPAIGN COSTS 10.86 GPU-DAYS, NOT 22** (S4 `e8fbcc0`, 2026-09-22, one
+  granted 3080). Nothing refused: the complex leg ran end to end on the real system -- automatic
+  map (31 common, 1 A-only, 4 B-only), NPT window with the barostat, 201 cross-state reports over
+  16 states, checkpointed, completed, verified. The cross-state self-check came out at 0.11-0.13
+  kJ/mol, ~2e-7 relative, **its first run on a 53k-atom protein**.
+  - **Throughput: 163.0 ns/day SUSTAINED**, 146.7 over the first half of sampling, 99.3 for the
+    whole window including set-up. Memory 697 MiB, so a 10 GB card carries it and the campaign is
+    not hostage to the single A5000. The A5000 measured 138.7 against the 3080's 146.2 on the
+    identical window: **the 3080 is the faster card for this work**, labelled and sizing nothing.
+  - **The caveat inverted, and S4 measured rather than inherited it.** A short window here
+    UNDER-reports sustained throughput by 39%, because plan build and Context creation dominate
+    it -- the OPPOSITE direction to S1's 100 ps probe reading 26% HIGH. Sizing from the naive
+    whole-window figure would have over-booked the campaign by a third. The lesson is not which
+    direction a short window errs in; it is that the direction is a property of the measurement
+    and has to be measured.
+  - **Sized from 163 ns/day with ~60 s per-window set-up counted explicitly**: one RBFE edge 1.89
+    GPU-days (complex 1.65 + solvent 0.24), T1+T2+T3 5.67, ABFE 2.75, the second anchor set 2.45.
+    **Total 10.86 GPU-days, about 2.7 days on four cards.** The solvent leg's 8x factor is ASSUMED
+    rather than measured; it is 12% of the total and is best measured inside T1's own solvent leg
+    instead of in a separate grant.
+  - **Both earlier tables were wrong, and the pessimistic correction was wrong by more.** The
+    matrix assumed ~40,000 particles at 80 ns/day; the correction below scaled it to ~22 GPU-days
+    on a 2.0x hybrid factor and a 53,030-particle system. The measurement says 10.86. A number
+    nobody has measured is not made safer by being conservative.
+- **(superseded, kept) The TYK2 cost table is OPTIMISTIC by about 2.7x, and the plan says so rather than re-scaling
   quietly** (S4 `fe965ec`, `handoffs/S4-tyk2-plan.md`). The matrix assumed ~40,000 particles at
   80 ns/day; the complex is **53,030** particles and S3 measures the hybrid Hamiltonian at **2.0x**
   a plain end state per step, which turns a 3.3-day leg into roughly 9. No request is made on that
