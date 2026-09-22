@@ -10,7 +10,7 @@ under `mpirun` when the protocol is parallel; moves a finished run into managed 
 verified, immutable dataset; and exports one as a bundle that runs on OpenMM alone, with nothing
 of this package in it.
 
-**Status:** `0.5.4`, on `dev` and `main`, tagged `v0.5.4`. Not on PyPI.
+**Status:** `0.6.0`, on `main`, tagged `v0.6.0`. Not on PyPI.
 
 📖 **[Documentation](https://csy0000.github.io/MD-tools/)** — installation, machine configuration,
 the methods, and the reference pages.
@@ -56,7 +56,8 @@ git pull && pip install --no-deps --force-reinstall .
 md-openmm --version        # must match `version` in pyproject.toml
 ```
 
-`--force-reinstall` because two `dev` commits usually share a `version`, and pip otherwise no-ops.
+`--force-reinstall` because two commits on a release branch usually share a `version`, and pip
+otherwise no-ops.
 
 ## The five commands
 
