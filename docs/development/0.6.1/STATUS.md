@@ -10,7 +10,7 @@ in [`handoffs/`](handoffs/) and never edit it.
 | contract commit | `a531ce7` on this branch — [shared contracts](../shared-contracts.md) |
 | aims | [AIMS.md](AIMS.md) |
 | worker branch | `work/0.6.1-selection` (session S1) |
-| release state | **not released, not merged, not tagged.** 0.6.0 beneath it is still under the user's testing |
+| release state | **gated green on `c604a81` and ready to tag as `v0.6.1`** (2026-09-22). Merged to `main` and tagged at release; this row is updated by the commit that does it |
 
 ## Milestones
 
@@ -46,7 +46,7 @@ Six items, in order. Nothing here is optional and nothing is secretly done.
 | R1 | **G2-6b MEASURED** 2026-09-22 (S1 `5062924`): upper bound VALIDATED at a third size, lower bound REFUTED as written, floor not moved | S1 | DONE |
 | R2 | **REGISTERED** 2026-09-22, authorised by the user in S1's own window: `2026/tutorials/tyk2-ejm31-rest2-ligand-8x5ns` (110 files, 545.8 MB) and `...-ligand-pocket-8x5ns` (117 files, 546.0 MB), each staged, verified, committed, re-verified, manifest-validated and re-checked with `--verify-only`; sources left as RELATIVE symlinks into `$MD_DATA` at the user's choice. Two tutorial datasets -- `tyk2-ejm31-rest2-ligand-8x5ns` and `tyk2-ejm31-rest2-ligand-pocket-8x5ns`, ~1.1 GB | S1 | the user approving each `data_name` and its notes, told to S1 DIRECTLY |
 | R3 | **DONE**: the tutorial cites the canonical path SHAPE plus the `--verify-only` command, so a reader resolves it through their own root; no path on this machine is in a committed file, and NO test reads `$MD_DATA`. Tutorial cites the registered datasets rather than a scratch path | S1 | R2 |
-| R4 | **Version BUMPED to 0.6.1** (pyproject and `__init__`), release notes finalised, release notes finalised (the stale "no ladder has run on a GPU" banner is fixed at `812d5fd`) | S0 | R1 so the notes can state G2-6b's outcome |
+| R4 | **Version BUMPED to 0.6.1** (pyproject and `__init__`), release notes finalised (the stale "no ladder has run on a GPU" banner is fixed at `812d5fd`) | S0 | R1 so the notes can state G2-6b's outcome |
 | R5 | **GATE PASSED on `c19988c`** 2026-09-22 (MD-tools-0.6.0): fast 2385/3/0 (no card), slow 438/7/0 (one card), gpu 123/1/0 (six 3080s then four + MPS). Every lane's SHA identical before and after; every skip named; both gpu counts reconciled against `--collect-only` (collection 124 = 121 + 3) rather than against an expectation; MPS torn down and the directory verified gone. **The gate says nothing about the TYK2 ladder rows** -- no lane touches them | MD-tools-0.6.0 | DONE |
 | ~~R5~~ | ~~Full gate lane on the shipping commit~~: `fast`, then `gpu or slow`, with the counts recorded. A fast lane is NOT evidence, and the lane is void if any commit lands after it starts | MD-tools-main | cards, and a quiet window |
 | R6 | **Merge to `main`, tag `v0.6.1`**, README status line updated with it | tag: MD-tools-0.6.0; merge and README: S0 | R1-R5, the user's go-ahead, **and a FINAL GATE on the shipping commit** |
