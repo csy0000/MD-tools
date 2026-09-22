@@ -205,3 +205,50 @@ recommendation is **per region, not global**: chi barriers are low enough to kee
 small tau, while a ligand's amide and aryl-carbonyl torsions need a genuinely hot rung. The user's
 judgement that 0.15 "doesn't give enough scaling" is consistent with the ligand side of that,
 which is the side the tutorial's ladder exists for.
+
+
+## B3: twelve rungs to tau 0.4 -- predictions registered BEFORE the run (2026-09-22)
+
+**The user's instruction**, verbatim: *"Use the GPUs to run 12-rungs tau_max=0.4 REST2"*, replacing
+the terminated tau 0.15 ladder.
+
+The region is ladder B's exactly -- `selection_sha256` equals ladder B's, checked -- and the start
+is ladder B's own `eq_3.xml` (md5 6a986690...). `Δτ = 0.036364` against B's `0.035714`: **the rung
+spacing is within 2% of B's while the top rung is 60% hotter.** That is the point of the design:
+if spacing governs acceptance and tau governs barrier crossing, B3 should keep B's acceptance and
+gain its transitions.
+
+| quantity | predicted | REFUTED if |
+|---|---|---|
+| acceptance, overall | **0.41** | outside 0.35-0.48 |
+| worst-pair acceptance | **0.38** (B's worst was 0.92 of its mean) | outside 0.32-0.45 |
+| round trips | **15-45** -- possibly FEWER than B's 45 despite better acceptance | outside that range |
+| hot-rung sidechain transitions | **300-450 /ns** (B: 250.5) | below B's figure |
+| hot-rung LIGAND non-rotor transitions | **5-12 /ns** (B: 3.61, A at tau 0.5: 10.82) | at or below B's 3.61 |
+| ns/day per state | 88-97, aggregate ~1,100 | the per-rank configuration is unchanged |
+| exchange discrepancy | 0.08-0.13 kT, inside the G2-6b bound at B3's own `\|u\|` | — |
+
+**Why acceptance is predicted slightly ABOVE B's rather than equal to it.** The neighbouring-rung
+energy gap scales as `d[(1-tau)^2]/dtau = 2(1-tau)Δτ`, so it depends on WHERE in tau the pair
+sits, not only on `Δτ`. B3 spans 0-0.4 (mean `1-tau` = 0.8) against B's 0-0.25 (mean 0.875), so at
+equal spacing its gaps are about 9% smaller and its acceptance a little higher. An acceptance that
+lands exactly on B's 0.388 would mean that second-order effect is absent; one outside 0.35-0.48
+would mean spacing does NOT govern acceptance, which is the assumption the whole "fix acceptance
+with rung count" rule rests on.
+
+**Why round trips may FALL while acceptance rises.** Round trips are a random walk over the
+ladder, and the walk is longer: 12 rungs against 8 needs roughly `(12/8)^2 = 2.25x` as many
+accepted steps to cross. At B's acceptance that predicts about `45/2.25 = 20`. **More rungs buy
+acceptance and cost diffusion**, and if that is right it is a second design trade to state
+explicitly rather than a disappointment.
+
+**The falsifiable heart of the run** is the transition row. The hot rung at tau 0.4 has barriers at
+36% of unscaled against B's 56%, so it must cross MORE than ladder B did. A B3 that mixes well and
+still crosses nothing would mean the sidechain and ligand barriers need more than tau 0.4, and the
+whole "set tau by barrier crossing, fix acceptance with rungs" rule would need rethinking rather
+than tuning.
+
+**Configuration**: 12 ranks, 2 per card on cards 1-6, MPS with `CUDA_DEVICE_ORDER=PCI_BUS_ID` on
+the daemon, placement verified by nvidia-smi before launch (six client contexts on cards 1-6,
+card 0 untouched). The daemon serves 1-8 so that hpREST2 can run its own MPS diagnostic on 7-8
+under the same server -- one server per user per node, so a second daemon cannot serve it.
