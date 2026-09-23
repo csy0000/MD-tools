@@ -1,8 +1,9 @@
 # REST2 on a protein–ligand complex: heating the ligand, and the pocket around it
 
-!!! note "Both ladders were run on 2026-09-21; every number here is copied from their files"
-    Four RTX 3080s, 8 ranks, 2 per card under MPS, CUDA mixed precision, md-tools 0.6.1 on
-    branch `work/0.6.1-selection`. The system is S2's prepared TYK2 fixture with `ejm_31`.
+!!! note "Four ladders were run on 2026-09-21 and 2026-09-22; every number here is copied from their files"
+    RTX 3080s, 2 ranks per card under MPS, CUDA mixed precision, md-tools 0.6.1 on branch
+    `work/0.6.1-selection`. The system is S2's prepared TYK2 fixture with `ejm_31`. Route A and
+    the comparison ladder used four cards; route B, at twelve rungs, used six.
 
     **One check on this page did not pass**: the recorded exchange energies were recomputed
     against the saved states and came out at 0.077–0.121 kT, against a 0.05 kT tolerance that had
@@ -11,18 +12,31 @@
     **unvalidated on systems of this size**. It is recorded rather than quietly widened. See
     `docs/development/0.6.1/handoffs/S1.md`.
 
-Two ladders on TYK2 with `ejm_31` bound, both eight states at 300 K, differing only in what is
-hot:
+**Two routes**, both starting from the same configuration with both selection lists EMPTY:
 
-| | hot region | τ range | why |
-|---|---|---|---|
-| **A** | the ligand instance alone | 0 → 0.5 | the ligand's own conformers, at the price of one small hot region |
-| **B** | the ligand **and** the sidechains lining the pocket | 0 → 0.25 | the pocket rearranges with the ligand; a smaller τ_max because the hot region is larger |
+```yaml
+backbone_scaling_list: []
+sidechain_scaling_list: []
+```
 
-The τ ranges differ on purpose. τ_max is not a free knob: a wider hot region at the same τ_max
-gives a worse overlap between neighbouring states, so B trades reach for acceptance.
+| | what you change | rungs | τ_max | what it buys |
+|---|---|---|---|---|
+| **Route A — the ligand alone** | nothing: leave both lists empty and name the ligand | 8 | 0.5 | the ligand's own conformers, one small hot region |
+| **Route B — add the pocket** | paste the pocket finder's residues into `sidechain_scaling_list` | **12** | **0.4** | the pocket rearranges with the ligand |
 
-!!! warning "B's τ_max of 0.25 is NOT the right trade, and the measurements say so"
+**Route B needs MORE rungs and a LOWER τ_max than route A, and both follow from the same two
+rules.** The hot region is six times larger, so at the same τ_max neighbouring states overlap
+worse — recovering the acceptance takes more rungs, not a colder top rung. And τ_max is set by the
+barriers you need crossed, which for this system are the ligand's: 0.4 crosses them, and the
+pocket's χ torsions are along for the ride either way.
+
+**`backbone_scaling_list` stays `[]` in both routes.** The pocket finder prints a
+`sidechain_scaling_list` line specifically, and the backbone key — a separate supported key taking
+the same mask grammar — is for a hinge or a loop you mean to reorganise. A pocket's χ torsions were
+never the constraint here: going from τ 0.25 to 0.4 gained **6x on the ligand's torsions and 11% on
+the χs**.
+
+!!! warning "Why route B is 12 rungs at τ 0.4, and not the 8 rungs at τ 0.25 that were tried first"
     Four ladders on this complex settle it. **Set τ_max by whether the hot rung crosses the
     barriers you care about; set acceptance by the number of rungs.** For this ligand:
 
@@ -162,32 +176,39 @@ Read the table before pasting the mask. The criterion is heavy-atom minimum dist
 inside the cutoff, and the report lists what lies just outside with its distance — if a residue
 you expect in the site is 0.02 nm beyond, that is a decision for you, not for the tool.
 
-## 2. The two scaled-state sets
+## 2. The scaled states, one set per route
 
-Ladder **A**, the ligand alone:
+**Route A — the ligand alone.** Both selection lists empty; only the ligand is named:
 
 ```yaml
 # build/scaler-ligand.config
 method: REST2
 schedule: {kind: linear, n_states: 8, tau_min: 0.0, tau_max: 0.5}
+backbone_scaling_list: []
+sidechain_scaling_list: []
 ligand_scaling_dict:
   L01:
     mask: ":<ligand residue index>"
     torsion_exclusions: auto
 ```
 
-Ladder **B**, the ligand and the pocket sidechains:
+**Route B — add the pocket.** The only edits are the sidechain list, the rung count and τ_max:
 
 ```yaml
 # build/scaler-pocket.config
 method: REST2
-schedule: {kind: linear, n_states: 8, tau_min: 0.0, tau_max: 0.25}
+schedule: {kind: linear, n_states: 12, tau_min: 0.0, tau_max: 0.4}
+backbone_scaling_list: []
 sidechain_scaling_list: "<the mask step 1 printed>"
 ligand_scaling_dict:
   L01:
     mask: ":<ligand residue index>"
     torsion_exclusions: auto
 ```
+
+An empty list and an absent key are not the same thing to read, but they resolve the same way: a
+category you name empty is a category you heat nothing of. Writing them explicitly is how the two
+routes stay one file apart.
 
 ```bash
 md-openmm build-top --rest2-scaler -s build/built.xml -p build/built.pdb \
@@ -199,13 +220,13 @@ and role — and `scaler.yaml` records the selection, its digest and the exact a
 was built with. Check the map against step 1's table before running anything.
 
 ```text
-ladder A   selection   EXPLICIT (md-tools-selective-rest2/1):  32 nonbonded atom(s),
+route A    selection   EXPLICIT (md-tools-selective-rest2/1):  32 nonbonded atom(s),
                        4 torsion central bond(s), 0 CMAP term(s) scaled
-ladder B   selection   EXPLICIT (md-tools-selective-rest2/1): 193 nonbonded atom(s),
+route B    selection   EXPLICIT (md-tools-selective-rest2/1): 193 nonbonded atom(s),
                        52 torsion central bond(s), 0 CMAP term(s) scaled
 ```
 
-The whole solute is 4,701 atoms, so ladder A heats 0.7% of it and ladder B 4.1%. No CMAP term is
+The whole solute is 4,701 atoms, so route A heats 0.7% of it and route B 4.1%. No CMAP term is
 scaled in either: CMAP couples backbone φ and ψ, and neither ladder selects a backbone.
 
 !!! note "Which sidechain bonds are actually scaled"
@@ -221,7 +242,7 @@ refuses a disagreement, naming the rebuild command. Claiming nothing is also all
 is then authoritative and `build-md.log` prints the region it found.
 
 ```yaml
-# REST2-ligand.config -- ladder A, exactly as it was run
+# REST2-ligand.config -- route A, exactly as it was run
 protocol: REST2
 solvent: explicit
 dynamics: {timestep_fs: 2.0, temperature_K: 300.0, seed: 20260921}
@@ -247,9 +268,12 @@ reporting: {crd_printout_solute: 5000, info_printout: 25000, checkpoint_printout
 interval is 2 ps. `L31` and `:291` are this complex's ligand label and residue index -- step 1
 printed them; substitute your own.
 
-For ladder B, the same file with `tau_max: 0.25` and the pocket added:
+For route B, the same file with three changes — the pocket, twelve rungs and τ_max 0.4:
 
 ```yaml
+rest2:
+  number_of_replicas: 12
+  tau_max: 0.4
   sidechain_scaling_list: ":15-18,23,40,72,90-96,139-140,142,152-153"
 ```
 
@@ -257,7 +281,7 @@ For ladder B, the same file with `tau_max: 0.25` and the pocket added:
 md-openmm build-md -odir ./REST2-ligand-run1 --config REST2-ligand.config
 ```
 
-## 4. Run them, eight states on four cards
+## 4. Run them: route A on four cards, route B on six
 
 ```bash
 cd REST2-ligand-run1
@@ -301,21 +325,9 @@ The tail of `remd_records/REST2_prod1.out` is the completion summary:
 run_status: completed
 ```
 
-### The 12-rung ladder the recommendation above is based on
+### Route B's group file, and why it is six cards
 
-Ladder B3 is ladder B's region at `tau_max: 0.4` over twelve rungs. Its scaler config:
-
-```yaml
-# build/scaler-pocket-12.config
-method: REST2
-schedule: {kind: linear, n_states: 12, tau_min: 0.0, tau_max: 0.4}
-ligand_scaling_dict:
-  L31: {mask: ":291", torsion_exclusions: auto}
-sidechain_scaling_list: ":15-18,23,40,72,90-96,139-140,142,152-153"
-```
-
-and its protocol differs from ladder B's in two lines, `number_of_replicas: 12` and
-`tau_max: 0.4`. `build-md` then writes a group file with twelve lines rather than eight:
+`build-md` writes one line per rung, so route B's group file has twelve rather than eight:
 
 ```text
 -i _protocol.py -p ../build/built.pdb -s ../build/REST2/system_state0.xml  -c eq/eq_3.xml --group-index 0
@@ -330,36 +342,58 @@ outright.
 
 ## 5. What these runs measure
 
-| quantity | ladder A | ladder B |
-|---|---|---|
-| hot atoms (of 4,701 solute atoms) | 32 | 193 |
-| scaled torsion central bonds | 4 | 52 |
-| scaled CMAP terms | 0 | 0 |
-| ns/day per state | 93.5 | 96.3 |
-| ns/day aggregate, 8 rungs on 4 cards | 748 | 771 |
-| neighbouring-pair acceptance | 0.483–0.602, overall 0.549 | 0.358–0.408, overall 0.388 |
-| walker round trips (8 walkers, 5 ns) | 105 | 45 |
-| wall clock | 83 min | 81 min |
+| quantity | route A (ligand, 8 rungs, τ 0.5) | route B (pocket, 12 rungs, τ 0.4) | comparison (pocket, 8 rungs, τ 0.25) |
+|---|---|---|---|
+| hot atoms (of 4,701 solute atoms) | 32 | 193 | 193 |
+| scaled torsion central bonds | 4 | 52 | 52 |
+| scaled CMAP terms | 0 | 0 | 0 |
+| **ligand torsion crossings, hot rung** | **10.4 /ns** | **23.1 /ns** | **3.8 /ns** |
+| sidechain χ crossings, hot rung | — | 264 /ns | 238 /ns |
+| neighbouring-pair acceptance | 0.483–0.602, overall 0.549 | 0.344–0.415, overall 0.373 | 0.358–0.408, overall 0.388 |
+| worst pair | 0.483 | 0.341 | 0.358 |
+| walker round trips (5 ns) | 105 | 2 | 45 |
+| diffusion, states²/exchange | 0.240 | 0.171 | 0.170 |
+| ns/day per state | 93.5 | 81.5 | 96.3 |
+| ns/day aggregate | 748 (4 cards) | 978 (6 cards) | 771 (4 cards) |
+| wall clock | 83 min | 91 min | 81 min |
 
-**The finding: six times the hot region, at half the τ_max, costs about a third of the acceptance
-and half the mixing.** That is the trade, measured. Which side of it you want depends on whether
-the pocket has to move with the ligand; neither ladder is "better".
+Crossings exclude methyl and hydroxyl rotors, which spin freely at any τ and would otherwise
+supply most of the count.
 
-!!! warning "B is not evidence that a bigger hot region is free"
-    B's 96.3 ns/day against A's 93.5 is **not** a measurement that heating 193 atoms costs less
-    than heating 32. The two ladders did not run against identical background load on a shared
-    machine. What the numbers do support is that the per-step cost here is dominated by the
-    53,030-atom box, which both ladders share: the hot region changes what is *sampled*, not what
-    each step costs.
+**The finding: τ_max buys barrier crossing and rungs buy acceptance, and the two are separable.**
+Route B heats six times the region of route A and still crosses the ligand's torsions twice as
+often, at a τ_max 0.2 lower, because the rung count — not a colder top rung — is what pays for the
+acceptance. Against the 8-rung comparison at τ 0.25 it is a 6x gain in ligand crossings for a
+10 ns/day cost and an acceptance that is the same to within 4%.
 
-### Both runs are registered datasets
+!!! warning "Two numbers on this table that do not mean what they look like"
+    **Round trips: 2 for route B against 45 for the comparison.** Per-exchange diffusion is
+    identical (0.171 against 0.170) — transport did not degrade at all. A 12-rung ladder simply
+    takes `N²` longer to traverse (354 exchanges against 144), and a round-trip *count* collapses
+    once the crossing time approaches the run length. Judge mixing by the diffusion constant and
+    by the worst pair, not by a count that a longer ladder cannot help but lose.
 
-Every figure in the table above is read from these two, not retyped from a log:
+    **ns/day: 81.5 for route B.** Twelve ranks synchronise at every exchange where eight did, and
+    a second session was running a diagnostic through the same MPS server during that run. The
+    two causes are not separated here, so do not read 81.5 as the price of twelve rungs.
+
+### Every run here is a registered dataset
+
+Every figure in the table above is read from these, not retyped from a log:
 
 ```text
-$MD_DATA/2026/tutorials/tyk2-ejm31-rest2-ligand-8x5ns          110 files, 545.8 MB   (ladder A)
-$MD_DATA/2026/tutorials/tyk2-ejm31-rest2-ligand-pocket-8x5ns   117 files, 546.0 MB   (ladder B)
+$MD_DATA/2026/tutorials/tyk2-ejm31-rest2-ligand-8x5ns                110 files, 545.8 MB   route A
+$MD_DATA/2026/tutorials/tyk2-ejm31-rest2-ligand-pocket-12x0.4-5ns    108 files, 693.9 MB   route B
+$MD_DATA/2026/tutorials/tyk2-ejm31-rest2-ligand-pocket-8x5ns         117 files, 546.0 MB   the COMPARISON
 ```
+
+**The third is not a route you should follow.** `...-pocket-8x5ns` is the 8-rung τ 0.25 pocket
+ladder that route B replaced, kept because it is the measurement that justifies route B's twelve
+rungs: without it, "12 rungs at 0.4" is advice rather than a result. A registered dataset is
+write-once, so it stays where it is and is labelled rather than removed.
+
+Only the 12-rung dataset carries the source structure and the ligand package, so it is the only
+one `export-reference` can read; see the warning in section 6.
 
 Each holds the whole tree a reader needs to check the claim -- `build/` with the scaled states and
 `scaler.yaml`, the equilibration chain, and the ladder's own `REST2.nc`, `restart.json` and
@@ -371,14 +405,20 @@ md-openmm data-register --verify-only -idata <the dataset> \
 ```
 
 !!! warning "Their energy check is a recorded FAIL, and the datasets say so"
-    Gate G2-6 recomputes a ladder's recorded exchange energies against its saved states. Both runs
-    FAIL it as originally written (0.077/0.093 kT and 0.106/0.121 kT against a 0.05 kT tolerance
-    that had been calibrated on a system 30x smaller). Against the size-aware replacement
-    `dU <= 3*K*sqrt(|u|)`, validated at a third system size, **ladder A is inside on both channels
-    and ladder B is outside by 1.16x on the cross channel**. A deliberately wrong Hamiltonian is
-    caught by four orders of magnitude more, so this is a question about a tolerance, not about
-    the scaling. Each dataset's notes carry its own numbers; the full account is
-    `docs/development/0.6.1/handoffs/S1.md`.
+    Gate G2-6 recomputes a ladder's recorded exchange energies against its saved states. Every run
+    here FAILS it as originally written — 0.077/0.093, 0.106/0.121 and 0.089/0.100 kT against a
+    0.05 kT tolerance calibrated on a system thirty times smaller. Against the size-aware
+    replacement `dU <= 3*K*sqrt(|u|)`, validated at a third system size, route A and route B are
+    inside on both channels (route B's cross margin is only 1.05x) and **the 8-rung comparison
+    ladder is outside by 1.16x**.
+
+    Across four ladders the cross discrepancy wanders between 0.080 and 0.121 kT with no clean
+    dependence on τ, on sample size or on sampling depth — a larger sample even gave a *smaller*
+    maximum — so the estimator, a max over whatever sample a run produces, is the thing being
+    fixed rather than any one ladder. A deliberately wrong Hamiltonian is caught by four to five
+    orders of magnitude more, so this is a question about a tolerance, not about the scaling. Each
+    dataset's notes carry its own numbers; the full account is
+    `docs/development/0.6.1/handoffs/S1.md` and `S1-tau-ladders.md`.
 
 ### How fast is eight rungs on four cards, really
 
