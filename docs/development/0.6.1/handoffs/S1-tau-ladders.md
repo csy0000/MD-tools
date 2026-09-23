@@ -376,3 +376,23 @@ needs cards and an idle machine and nothing else, and nothing in this page depen
 be had without giving up the ligand's barriers. B3 makes it likely (same spacing, same
 acceptance, hot rung unchanged) but likely is not measured, and the hot rung would be ladder A's
 exactly, so `selection_sha256` and the tau 0.5 states already exist.
+
+
+## Data disposition, at the user's instruction (2026-09-22/23)
+
+| run | data | why |
+|---|---|---|
+| A (tau 0.5, 8 rungs) | **registered**, `2026/tutorials/tyk2-ejm31-rest2-ligand-8x5ns` | the tutorial's route A |
+| A2 (tau 0.3, 8 rungs) | **DELETED**, row kept | *"keep the row but delete the data"*. Its numbers are the measurement that keeps route A at tau 0.5, and they are all in this page: acceptance 0.742, worst pair 0.720, 326 round trips, D = 0.3248, 90.7 ns/day, cross 0.0804 kT, and **0.00/ns non-methyl crossings against A's 10.82**. Deleted by literal path from S1's scratch after checking it held no symlink into any registered dataset |
+| B (tau 0.25, 8 rungs) | **registered**, `...-pocket-8x5ns` | superseded as a route by B3, kept as the COMPARISON that justifies route B's twelve rungs. Write-once, so it is labelled rather than removed |
+| B2 (tau 0.15, 8 rungs) | **DELETED** at 83%, partial numbers kept | *"0.15 doesn't give enough scaling"* |
+| B3 (tau 0.4, 12 rungs) | **registered**, `...-pocket-12x0.4-5ns`, 108 files, 693.9 MB | the tutorial's route B |
+
+**B3's dataset is the only one of the three that `export-reference` can read.** It carries
+`complex.pdb` beside `build/` and `build/ligands/<backend-id>/param_<id>/` with its `molecule.sdf`,
+which the exporter verifies by digest, plus a copy of the stage log at `REST2-run1/REST2.log`
+because the exporter reads `<run>/<stage>.log` while `run.sh` writes
+`remd_records/REST2_prod1.log`. **The export was run against the assembled tree BEFORE registering
+it, and again against the REGISTERED copy afterwards** -- 47 files, 12 rungs, tau 0..0.4 -- so the
+dataset is defined by what the tool reads rather than by what happened to be lying around. The two
+8-rung datasets were registered without those files and cannot be exported; that is permanent.
