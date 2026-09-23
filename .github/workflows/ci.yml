@@ -190,7 +190,6 @@ jobs:
               "sys/build-top.config",
               "md/cMD.config",
               "md/REST2.config",
-              "md/rREST2.config",
               "md/AIS.config",
           }
           assert {str(r) for r in EXAMPLES} == expected, sorted(str(r) for r in EXAMPLES)
@@ -198,10 +197,10 @@ jobs:
           assert not missing, f"declared but not shipped: {missing}"
 
           resolve_build_config(example("sys/build-top.config"))
-          for name in ("cMD", "REST2", "rREST2", "AIS"):
+          for name in ("cMD", "REST2", "AIS"):
               resolved = resolve_md_config(example(f"md/{name}.config"))
               assert resolved["protocol"] == name, (name, resolved["protocol"])
-          print("six shipped examples present and resolving")
+          print("five shipped examples present and resolving")
           PY
 
       - name: the documented examples, through the same resolvers
@@ -215,10 +214,10 @@ jobs:
           from md_tools.data_contract.model import Dataset
 
           docs = Path("docs")
-          for name in ("cMD", "REST2", "rREST2", "AIS"):
+          for name in ("cMD", "REST2", "AIS"):
               path = docs / "openmm_methods" / name / "example.config"
               assert resolve_md_config(path)["protocol"] == name, path
-          print("four documented method examples resolve")
+          print("three documented method examples resolve")
 
           Dataset.model_validate(
               yaml.safe_load((docs / "data_register" / "dataset.yaml.example").read_text()))
@@ -283,7 +282,7 @@ jobs:
                                  "info_printout": 10, "checkpoint_printout": 10}}
           # A BUILT SYSTEM FIRST, because 0.5.3 moved rung scaling to build time: `build-md` for a
           # ladder deserialises `../build/built.xml`, scales it to every rung and serialises the
-          # result, so REST2 and rREST2 cannot be generated from an empty directory any more. Two
+          # result, so REST2 cannot be generated from an empty directory any more. Two
           # Systems are enough -- one explicit, one implicit -- and they are built with the REAL
           # `build-top` rather than a hand-parameterised stand-in, because this step is the one
           # that claims the shipped commands work together. ALA is small: ~2.5 s each, tleap
@@ -328,12 +327,6 @@ jobs:
                          "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 10,
                                    "number_of_exchanges": 2}}, [],
                {"REST2.py", "run.sh", "resolved.config", "eq", "remd0", "remd1",
-                "remd_groupfile.1", "remd_records", "rank", "build_states.log"}),
-              ("rREST2", "explicit", {"protocol": "rREST2", "solvent": "explicit", **SHORT,
-                          "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 10,
-                                    "number_of_exchanges": 2},
-                          "reservoir": {"enabled": True, "path": "./reservoir"}}, [],
-               {"rREST2.py", "run.sh", "resolved.config", "eq", "remd0", "remd1",
                 "remd_groupfile.1", "remd_records", "rank", "build_states.log"}),
               ("AIS", "explicit", {"protocol": "AIS", "solvent": "explicit",
                        "ais": {"number_of_paths": 2, "switching_steps": 20,
