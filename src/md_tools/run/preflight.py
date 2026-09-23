@@ -677,6 +677,37 @@ class LadderPreflight(ExecutionPreflight):
     #: The validated collective-variable definition, parsed before any output exists so a
     #: malformed cv.yaml refuses the run rather than failing at the first observation.
     cv_definition: Any = None
+    #: The selection document of the saved states' `scaler.yaml` (md-tools-solute-selection/2.0),
+    #: or None for a record older than 0.6.1. Consumed by the ladder's Hamiltonian identity.
+    selection: Any = None
+    #: WHERE THE RUNGS CAME FROM (shared contract §3, "The ladder's direct Python API").
+    #: `saved-states` is set by `preflight_ladder` itself and cannot be claimed by a caller;
+    #: a hand-built plan that supplies `rung_systems` declares `caller-supplied` with a reason, or
+    #: it is refused here, at construction, before anything exists.
+    rung_source: str = ""
+    rung_source_reason: str = ""
+    #: The `scaler.yaml` a caller's rungs are verified against. Optional: without it the driver
+    #: looks for the record naming `files.system`, then for `<dir>/REST2/scaler.yaml`.
+    saved_states_record: Any = None
+    #: Per rung, its canonical digest and origin, when the preflight established them itself.
+    rung_origins: tuple = ()
+    #: Only `preflight_ladder` holds this; it is what makes `rung_source='saved-states'` true.
+    saved_state_seal: Any = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self):
+        from ..rest2.rungs import RungProvenanceError, check_declaration
+
+        try:
+            check_declaration(rung_systems=self.rung_systems, rung_source=self.rung_source,
+                              rung_source_reason=self.rung_source_reason,
+                              sealed=self.saved_state_seal is _SAVED_STATE_SEAL)
+        except RungProvenanceError as refusal:
+            raise PreflightError(f"LadderPreflight: {refusal}") from None
+
+
+#: Held only by `preflight_ladder`: a plan carrying it built its rungs from the saved states it
+#: verified. Private by design -- importing it to claim `saved-states` is circumventing the rule.
+_SAVED_STATE_SEAL = object()
 
 
 @dataclass(frozen=True)
@@ -1021,6 +1052,7 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
     from ..rest2.states import ScaledStateError, scaled_state_identity
 
     unscaled_impropers = True
+    selection = None
     if name != "min":
         try:
             identity = scaled_state_identity(loaded.system_path)
@@ -1036,10 +1068,12 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
                     f"from the one it integrates.")
             from ..rest2.states import load_scaler_record
 
-            section = load_scaler_record(identity["record"])["unscaled_torsions"]
+            scaler_record = load_scaler_record(identity["record"])
+            section = scaler_record["unscaled_torsions"]
             excluded = [tuple(int(a) for a in bond)
                         for bond in section.get("unscaled_central_bonds", [])]
             unscaled_impropers = bool(section.get("unscaled_impropers", True))
+            selection = scaler_record.get("selection")
         elif tau > 0.0:
             raise PreflightError(
                 f"{where} claims tau = {tau}, but -s {Path(loaded.system_path).name} is not a "
@@ -1074,7 +1108,7 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
         hamiltonian_identity = identity_record(
             system, tau=tau, temperature_k=float(stage["temperature_K"]),
             ensemble=stage.get("ensemble"), solute_indices=solute, excluded_bonds=excluded,
-            unscaled_impropers=unscaled_impropers)
+            unscaled_impropers=unscaled_impropers, selection=selection)
 
     add_positional_restraint(system, loaded.pdb.positions, solute)
     if not implicit:
@@ -1464,6 +1498,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
             f"`md-openmm build-top --rest2-scaler`, and `build-md` writes such a group file.")
     solute_indices = list(saved_states["solute_indices"])
     excluded_bonds = list(saved_states["excluded_bonds"])
+    selection = saved_states["selection"]
     if loaded is not None:
         solute_record = saved_states["solute_record"](loaded)
     if loaded is not None:
@@ -1535,6 +1570,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
 
     rung_systems = ()
     rungs_tau = ()
+    rung_origins = ()
     if saved_states is not None:
         from ..remd.protocol import apply_ladder_restraints
 
@@ -1544,6 +1580,15 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
             for system_ in systems:
                 apply_ladder_restraints(system_, ladder_restraints)
         rung_systems = tuple(systems)
+        # The origin was verified on the saved state; the digest recorded is the rung AS IT WILL
+        # BE INTEGRATED, restraints included, so the driver can check it received these rungs.
+        from ..rest2.identity import system_fingerprint
+
+        rung_origins = tuple(
+            dict(entry, system_digest=system_fingerprint(system_),
+                 origin=entry["origin"] + ("; ladder restraints added" if ladder_restraints
+                                           else ""))
+            for entry, system_ in zip(saved_states["rung_origins"], rung_systems))
 
     # -- per-tau equilibration, checked HERE ---------------------------------------------------
     #
@@ -1658,6 +1703,14 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                            excluded_bonds=tuple(tuple(int(a) for a in b) for b in excluded_bonds),
                            cv_definition=cv_definition,
                            ladder_restraints=tuple(ladder_restraints),
+                           selection=selection,
+                           rung_source="saved-states" if rung_systems else "",
+                           rung_source_reason=("every rung is the saved state its group-file line "
+                                               "names, verified against scaler.yaml"
+                                               if rung_systems else ""),
+                           saved_states_record=(saved_states or {}).get("record"),
+                           rung_origins=rung_origins,
+                           saved_state_seal=_SAVED_STATE_SEAL,
                            notes={"solute_document": solute_record} if solute_record else {})
 
 
@@ -1744,8 +1797,22 @@ def _saved_state_ladder(groupfile, *, replicas: int, ladder, where: str, out_dir
                                              "states": [i["system_sha256"] for i in identities]}
         return document
 
+    # Each rung IS saved state i: `scaled_state_identity` verified the file's sha256 against the
+    # record, state i on line i. Recorded by canonical digest, before any ladder restraint is
+    # added to the System.
+    from ..rest2.identity import system_fingerprint
+
+    origins = tuple({"rung": index, "system_digest": system_fingerprint(system),
+                     "origin": f"saved-state {int(identity['state'])} (verified)"}
+                    for index, (system, identity) in enumerate(zip(systems, identities)))
     return {"taus": taus, "systems": systems, "solute_indices": solute,
-            "excluded_bonds": excluded, "solute_record": solute_record}
+            "excluded_bonds": excluded, "solute_record": solute_record,
+            "rung_origins": origins, "record": identities[0]["record"],
+            # The md-tools-solute-selection/2.0 document the states were built under (0.6.1), or
+            # None for a record written before it existed. The ladder's Hamiltonian identity
+            # hashes it: from the solute list alone a selective region is indistinguishable from
+            # the whole solute.
+            "selection": record.get("selection")}
 
 
 def _cv_interval_of(document) -> int:

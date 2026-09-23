@@ -396,6 +396,16 @@ def test_off_leaves_every_generated_file_as_it_was(tmp_path, solvent):
         # The `.in` files and `resolved.config` gain exactly one line when the setting exists but
         # is off. The preparation inputs are the exception: they carry no `&remd` at all now, so
         # there is no `equilibration_per_tau` line in them to take out.
+        if name.endswith("resolved.config"):
+            # 0.6.1 added the three selective-REST2 claim keys to `rest2:`. Off, they are null,
+            # and they are the ONLY other new lines: stripping them must give 0.6.0's bytes.
+            selectors = ("backbone_scaling_list:", "sidechain_scaling_list:",
+                         "ligand_scaling_dict:")
+            claimed = [line for line in text.splitlines() if line.strip().startswith(selectors)]
+            assert len(claimed) == 3 and all(line.rstrip().endswith("null")
+                                             for line in claimed), (name, claimed)
+            text = "".join(line for line in text.splitlines(keepends=True)
+                           if not line.strip().startswith(selectors))
         if name.endswith("resolved.config") or name in ("input/REST2.in",):
             added = [line for line in text.splitlines() if "equilibration_per_tau" in line]
             assert len(added) == 1 and "false" in added[0], (name, added)

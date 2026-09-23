@@ -423,6 +423,24 @@ type: number · default: `0.5` · minimum 0.0; maximum 0.95
 
 The hottest rung's tau. The ladder is linear from 0.0 to this value. tau = 0 is the unscaled physical Hamiltonian.
 
+#### `rest2.backbone_scaling_list`
+
+type: string or null · default: `null`
+
+Selective REST2: a CLAIM about the saved states, not a way to make them. The residues whose BACKBONE is hot, as a quoted AMBER residue mask of one-based topology residue indices (":45,46,59", ":45-50"). The region is chosen when `md-openmm build-top --rest2-scaler` builds the states; build-md resolves this claim and refuses it unless it is the region that build/REST2/scaler.yaml records, as it does for number_of_replicas and tau_max. Masks are compared as resolved regions, not as text. Leave all three selector keys out to accept whatever region the record holds; build-md.log then prints it. A claim is checked at generation and is not carried into resolved.config or the generated input: it is not a run setting, and `md-run` refuses it in an input.
+
+#### `rest2.sidechain_scaling_list`
+
+type: string or null · default: `null`
+
+Selective REST2: a claim, as for backbone_scaling_list, naming the residues whose SIDECHAIN is hot. Chi1 belongs to the sidechain.
+
+#### `rest2.ligand_scaling_dict`
+
+type: mapping or null · default: `null`
+
+Selective REST2: a claim naming hot ligand INSTANCES, as `{label: {mask: ":201", torsion_exclusions: <file> or auto}}`. The label is a name only; the instance is the residue the mask resolves to, and an exclusion file is compared by its contents, not its path (relative paths are read from this configuration's directory). The compact form `label: <file>` is refused: no instance name is recorded for it to resolve against yet.
+
 #### `rest2.exchange_interval_steps`
 
 type: integer · default: `5000` · minimum 1; unit: steps

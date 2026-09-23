@@ -105,6 +105,188 @@ the previous set aside rather than deleting it.
 this `built.xml`, and holds exactly the configured taus. Every run integrates those files as they
 are; a state is never scaled a second time.
 
+## Selective REST2: choosing the hot region (0.6.1, in development)
+
+> **Not in a release.** This section describes branch `0.6.1` work.
+
+With no selector, the hot region is the whole solute: every atom that is not solvent or a
+counter-ion. The states are byte-identical to 0.6.0's. Three optional `scaler.config` keys choose
+a region instead:
+
+```yaml
+backbone_scaling_list: ":45,46,59"     # quoted AMBER residue mask
+sidechain_scaling_list: ":45-50"
+ligand_scaling_dict:
+  L01:                                 # a label, not an identity
+    mask: ":201"                       # exactly ONE residue: this copy, not its twins
+    torsion_exclusions: auto           # or an md-tools-torsion-exclusions/1 file
+```
+
+A complete, commented example for ACE-ALA-NME is
+[`selective-scaler.config`](selective-scaler.config) beside this page. It is resolved, and states
+are built from it, by a test.
+
+**The region is chosen in `scaler.config`, and only there.** In a `build-md` REST2 configuration
+the same three keys, under `rest2:`, are **claims** about the saved states, not settings. They
+work the way `rest2.number_of_replicas` and `rest2.tau_max` already do:
+
+* **A claim** is resolved by the same resolver and compared with the region recorded in
+  `build/REST2/scaler.yaml`. The comparison is of resolved regions, not text, so `":2,3"` and
+  `":2-3"` agree. Mask spelling, ligand labels and file paths are never compared. A disagreement
+  is refused, with the `build-top --rest2-scaler` command that would rebuild the states.
+* **No claim** accepts the recorded region, and `build-md.log` prints it, so a selective ladder
+  never runs unannounced.
+* **A verified claim is not carried into the run.** It is reset to null before `resolved.config`
+  and the `.in` files are written, like `collective_variables.generate`. An `.in` file naming a
+  claim key is refused by `md-run`.
+* **Another protocol** that sets the keys is refused by name, and so is the compact ligand form
+  `L01: <path>`.
+
+```yaml
+# REST2.config (build-md): a claim about build/REST2/, checked, never applied
+rest2:
+  number_of_replicas: 4
+  tau_max: 0.5
+  backbone_scaling_list: ":2"
+  sidechain_scaling_list: ":2"
+```
+
+**If any selector is present, the selection is explicit.** Only the named categories and instances
+are hot. An omitted category means *none*, not *all*. An explicit region that heats nothing is
+refused. Selective scaling is **explicit solvent only**: any selector on an implicit (GB) System is
+refused, because a generalised-Born energy is not separable per atom. `unscaled_torsions: false`
+is refused with a selector, because an improper has no central bond for a region to own.
+
+**Masks** use a documented *subset* of the AMBER grammar (`md-tools-residue-mask/1`): `":45"`,
+`":45,46,59"`, `":45-50"`, `":45,48-52"`. The numbers are **one-based topology residue indices**,
+counted across every chain without a reset. They are not PDB author numbers and not Python
+indices. Everything else is refused by name, with the supported subset printed: atom selectors
+(`@`), chain and molecule selectors (`::`, `^`), operators, wildcards, residue names, zero, and
+descending ranges. Chain qualifiers are not supported. `scaler.log` prints the resolved residue
+map (index, name, chain, author id, role), so you can see what each number matched.
+
+**Two questions, answered separately** (policy `md-tools-selective-rest2/1`):
+
+| question | answer |
+|---|---|
+| which atoms carry `(1−τ)` / `(1−τ)²` nonbonded | backbone atoms of backbone-selected residues, sidechain atoms of sidechain-selected residues, every atom of a selected ligand instance |
+| which torsions carry `(1−τ)²` | every eligible **proper** term across a selected **central bond** |
+
+A central bond is selected when the region that **owns** it is selected:
+
+| central bond | owner |
+|---|---|
+| N–CA (φ), CA–C (ψ) | the residue's backbone |
+| any bond with a sidechain atom, one residue (CA–CB is χ1) | the residue's sidechain |
+| peptide C(i)–N(i+1) (ω_i) | residue *i*'s backbone |
+| disulfide SG–SG | **both** sidechains jointly. Scaled only when both are selected; reported when one is |
+| inside a ligand | that instance |
+| anything else between residues | undefined, and refused when either side is selected |
+
+The four atoms of a scaled torsion need not all be hot. χ1 (N–CA–CB–CG) is scaled by a sidechain
+selection although N and CA are backbone atoms it does not heat. φ reaches into the previous
+residue's C. Ordinary amide ω, aromatic ring and double-bond torsions, and every improper, stay
+unscaled whoever owns them. A proline-like ω is scaled when residue *i*'s backbone is selected.
+
+### Choosing the residues around a ligand
+
+The configuration always carries an explicit mask. To find out *which* residues line a site, ask,
+and paste the answer:
+
+```bash
+python -m md_tools.rest2.pocket build/built.pdb --ligand ":201" --cutoff-nm 0.5
+```
+
+It prints the criterion it used, the structure and its digest, a table (index, chain, author
+residue id, name, minimum distance) and a ready-to-paste mask. The criterion
+(`md-tools-pocket-selection/1`) is: **heavy atoms only** on both sides, the **minimum distance**
+over all pairs rather than a centroid distance, **strictly less than** the cutoff (a residue
+exactly at it is out — and the report lists what lies just beyond, with its distance, so a
+borderline residue is visible), the **minimum image** when the topology has a box, and **no
+solvent or ions** unless `--include-solvent` is given.
+
+It resolves nothing at run time. A pocket that were re-derived when a run started would mean the
+record said "whatever was within 5 Å on the day"; the mask you paste says which residues were hot.
+
+### Which sidechain bonds are scalable
+
+The amino acids are a small fixed set, so this is a table, not a perception problem:
+`md_tools.rest2.sidechains` (`md-tools-sidechain-rotatability/1`) lists, per residue, every
+central bond inside the sidechain — each chi with its torsion, each terminal rotation (methyl,
+hydroxyl, thiol, ammonium), and each bond that is never scaled with its class:
+
+| never scaled | where | class |
+|---|---|---|
+| the sidechain amide C–N | ASN, GLN | `amide_omega` |
+| the guanidinium, three bonds | ARG | `double_bond` |
+| the aromatic ring | PHE, TYR, TRP, HIS (HID/HIE/HIP) | `aromatic_ring` |
+
+A carboxylate (ASP, GLU) is not a central bond at all: both oxygens are terminal, so no torsion
+runs across it. CYX's chi2 exists only once its disulfide does, and the SG–SG bond itself is owned
+by both sidechains. `python -c "from md_tools.rest2.sidechains import describe_residue;
+print(describe_residue('TYR'))"` prints one residue.
+
+**The table and the torsion classifier must agree**, and a region resolution checks it: if they
+disagreed about a selected sidechain, the build is refused rather than scaling a region nobody
+predicted. A residue the table does not define — a modified or unsupported one — is refused by
+name.
+
+**Membership.** Backbone is N, H, H1–H3, CA, HA, HA2, HA3, C, O and OXT. Everything else in a
+supported protein residue is sidechain. So glycine has no sidechain, proline's ring (CB, CG, CD)
+is sidechain, a CYX's SG is sidechain, and a cap (ACE, NME, NHE, NMA) is backbone throughout.
+Nucleic acids and residues outside the supported protein set are refused by name.
+
+**CMAP.** A CMAP term is scaled when *both* its φ and ψ central bonds are selected, and left
+unchanged and reported when only one is. Under the ownership above, a standard residue's φ and ψ
+belong to the same backbone, so a mask cannot produce a mixed term; the rule matters for records
+written by hand. A map shared with an unselected residue is duplicated, never scaled in place.
+Note that **ff19SB has no periodic term across N–CA or CA–C**: a backbone selection there scales
+its CMAP and nonbonded terms only. Under ff14SB, φ and ψ torsions are scaled directly.
+
+**Ligand instances.** `mask` names one residue, and two copies of a compound are two entries. The
+compact form `L01: <file>` is **refused** for now: the ligand mapping record has no instance
+alias, and a residue name cannot say which copy is meant (deferred to the coordinator). With
+`torsion_exclusions: auto`, the instance is classified from its bond orders like any
+non-standard residue. A file **adds** protected central bonds and never un-protects one:
+
+```yaml
+format: md-tools-torsion-exclusions/1
+parameters: CHEMBL112/param_0123456789ab   # required: the package the names belong to
+residue_name: TYL                          # optional; checked when present
+central_bonds:
+  - [C4, N1]                               # package-local atom names
+```
+
+The file is refused when:
+
+* the instance has no recorded package in `ligand_mapping.json`;
+* `parameters` differs from the instance's package;
+* it names an atom the residue does not have;
+* a listed bond is not the central bond of a proper torsion.
+
+Its contents and sha256 are saved in the record, and so is each named bond's topology-index pair.
+A later edit to the file does not change a built state. It does change the next resolution, and
+`md_tools.rest2.regions.exclusion_file_changes` reports it.
+
+**The record.** `scaler.yaml` gains the following, while `solute` stays the whole solute that
+trajectories and restraints are about:
+
+* `selection`: `md-tools-solute-selection/2.0`, carrying the mode, the masks as written, the
+  residue map, the nonbonded atoms, the owned central bonds, per-term CMAP decisions, and the
+  ligand instances;
+* `selection_sha256`: the identity, over only what determines the Hamiltonian;
+* `selection_provenance_sha256`: over the whole record, provenance included;
+* `scaler_arguments`: exactly the arguments `build_scaled_system` takes besides τ, so every state
+  rebuilds from the record alone.
+
+Hamiltonian identity is `md-tools-hamiltonian-identity/v3`. Its `selection_sha256` hashes only
+what determines the Hamiltonian: the hot atoms, the scaled and protected torsion bonds, each CMAP
+decision, the improper policy and rule versions, and each ligand instance's residue, package and
+resolved exclusions. Mask spelling, instance labels, file paths and an exclusion file's comments
+are **provenance**. They are recorded, but they never make a run unresumable. A 0.6.0 (v2)
+identity is still accepted, but only for a legacy selection and only when every v2 field
+matches.
+
 ## What MD-tools implements
 
 * a linear τ ladder from 0 to `tau_max`, one Context per **thermodynamic state**;

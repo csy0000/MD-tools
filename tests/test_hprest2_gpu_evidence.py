@@ -1,6 +1,6 @@
 """GPU evidence for 0.5.3: a ladder exchanges, an extension JOINS its parent, restraints run.
 
-Asked for by `docs/claudecode-instructions/20260913_gpu-tests-for-0.5.3.md`. The three fixes in
+Asked for by `docs/history/claudecode-instructions/20260913_gpu-tests-for-0.5.3.md`. The three fixes in
 0.5.3 have CPU tests that prove a parser and a naming rule; none of them proves that a ladder still
 runs on a GPU, that an extension continues rather than restarts, or that a restrained ladder is
 sound. That is what this file is for, and every test here prints the numbers it measured rather

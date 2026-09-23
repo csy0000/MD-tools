@@ -63,7 +63,10 @@ Each method page carries a minimal, runnable `example.config` beside it.
 
 | page | |
 |---|---|
-| [v0.5.3](release-notes/v0.5.3.md) | the current cycle: the run directory layout, an extension that can run its own group file, and the output work |
+| [v0.6.1](release-notes/v0.6.1.md) | selective explicit-solvent REST2, validated on CUDA with one energy check recorded FAIL: — residue masks for backbone and sidechains, individually chosen ligand instances, and the two helpers that make a pocket selectable |
+| [v0.6.0](release-notes/v0.6.0.md) | released 2026-09-19: reusable ligand parameter packages, protonation as a stated choice, assemblies and missing atoms, placement measured on real cards |
+| [v0.5.4](release-notes/v0.5.4.md) | one shape of generated run, the whole chain checked before it is written, and AIS as a transformation between two topologies |
+| [v0.5.3](release-notes/v0.5.3.md) | the run directory layout, an extension that can run its own group file, and the output work |
 | [v0.5.2](release-notes/v0.5.2.md) | a finished run can leave this package behind: `export-reference` for cMD and REST2, and the correction that is the reason to trust it |
 | [v0.5.1](release-notes/v0.5.1.md) | one fix: an interrupted CV-enabled REST2 ladder could not be resumed on any ladder whose tau is not exactly representable at six decimal places |
 | [v0.5.0](release-notes/v0.5.0.md) | the interface, torsion collective variables, the dataset contract and the stable import API |
@@ -72,10 +75,21 @@ Each method page carries a minimal, runnable `example.config` beside it.
 
 ## Development roadmap
 
-The [0.6.1–0.7.2 development instruction](claudecode-instructions/20260918_parallel-0.6.1-0.7.x-development.md)
-defines the requested branch aims, references, documentation cleanup, and separate Claude Code
-sessions for concurrent selective REST2 and alchemical development. These are planned features;
-0.6.0 remains under testing, and this roadmap does not announce a release.
+Work that is **planned or under construction**, on its own branches. Nothing here describes what
+the installed package does today; that is everything above.
+
+| page | |
+|---|---|
+| [Development index](development/README.md) | the four branches, what each is for, and where each one stands |
+| [Shared contracts](development/shared-contracts.md) | the records 0.6.1 and 0.7.0 must agree on: selection identity, topology plans, Hamiltonian state coordinates |
+| [0.6.1 aims](development/0.6.1/AIMS.md) | selective explicit-solvent REST2: residue masks and individually chosen ligand instances |
+| [0.7.0 aims](development/0.7.0/AIMS.md) | conventional alchemy: TI and FEP, `combine-topology`, Amber18 softcore |
+| [0.7.1 aims](development/0.7.1/AIMS.md) | **planning only**: FEP–REST2, EDS, RE-EDS, ATM |
+| [0.7.2 aims](development/0.7.2/AIMS.md) | **planning only**: grand-canonical and nonequilibrium water sampling |
+
+The [20260918 parallel development instruction](claudecode-instructions/20260918_parallel-0.6.1-0.7.x-development.md)
+is the shared roadmap those branches specialize. 0.6.0 itself remains under the user's testing;
+none of this announces a release.
 
 ## History
 

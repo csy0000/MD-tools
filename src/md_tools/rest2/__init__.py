@@ -83,9 +83,9 @@ class REST2Scaler:
 
     def scaled_system(self, tau: float):
         """A new System at this tau. The base System is never mutated."""
-        arguments = self.selection.as_scaler_arguments()
-        return build_scaled_system(self.base_system, arguments["solute_indices"], float(tau),
-                                   excluded_bonds=arguments["excluded_bonds"])
+        arguments = dict(self.selection.as_scaler_arguments())
+        return build_scaled_system(self.base_system, arguments.pop("solute_indices"),
+                                   float(tau), **arguments)
 
     def ladder(self, n_states: int, tau_max: float) -> list[float]:
         """The linear tau ladder. State 0 is always the unmodified physical Hamiltonian."""
@@ -108,7 +108,11 @@ class REST2Scaler:
         return identity_record(self.scaled_system(tau), tau=float(tau),
                                temperature_k=float(temperature_k), ensemble=str(ensemble),
                                solute_indices=arguments["solute_indices"],
-                               excluded_bonds=arguments["excluded_bonds"], extra=extra)
+                               excluded_bonds=arguments["excluded_bonds"],
+                               unscaled_impropers=arguments["unscaled_impropers"],
+                               selection=(self.selection.to_document()
+                                          if self.selection.explicit else None),
+                               extra=extra)
 
     def scaling_factors(self, tau: float) -> tuple[float, float]:
         """`(s, sqrt(s))` for this tau. Derived on demand; never persisted."""
