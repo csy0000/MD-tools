@@ -23,7 +23,8 @@ precision.
 | [chignolin](REST2/chignolin.md) | REST2 | 10-residue peptide from 1UAO, explicit TIP3P, 6 states, 10 ns per state, 6 GPUs | ~8 min | `0.5.4` |
 | [alanine dipeptide](AIS/alanine.md) | AIS | from a sequence, explicit TIP3P, 2 ns source + 64 switching paths, 1 GPU | ~12 min | `0.5.4` |
 | [paracetamol](AIS/paracetamol.md) | AIS | explicit TIP3P, 2 ns source + 64 switching paths, 1 GPU | ~13 min | `0.5.4` |
-| [TYK2 + ejm_31](protein-ligand-complex/REST2/README.md) | REST2 | protein–ligand complex from OpenFE's TYK2 benchmark, selective scaling of the ligand and of the ligand plus its pocket sidechains; four ladders run on CUDA, 8 and 12 states, 4 and 6 GPUs | 93.5 ns/day per state (8 rungs, 4 cards), 81.5 (12 rungs, 6 cards); two registered datasets | `0.6.1` |
+| [TYK2 + ejm_31](protein-ligand-complex/README.md) | the system, and how it is prepared: structures, the ligand package, the complex build | — | — | `0.6.1` |
+| [TYK2 + ejm_31, selective REST2](protein-ligand-complex/REST2/README.md) | REST2 | protein–ligand complex from OpenFE's TYK2 benchmark, selective scaling of the ligand and of the ligand plus its pocket sidechains; four ladders run on CUDA, 8 and 12 states, 4 and 6 GPUs | 93.5 ns/day per state (8 rungs, 4 cards), 81.5 (12 rungs, 6 cards); two registered datasets | `0.6.1` |
 
 Start with **cMD: paracetamol**. It explains each step, and it is where the ligand parameters the
 other paracetamol pages reuse are made; the others refer back to it.
