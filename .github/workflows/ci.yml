@@ -235,7 +235,6 @@ jobs:
                                    run_stage)
           from md_tools.remd import (NeighborExchangeRule, REMDRunner, run_generated_remd,
                                      run_remd)
-          from md_tools.remd.reservoir import ReservoirRefreshRule
           from md_tools.rest2 import REST2Scaler, ScalingSelection
 
           print("every documented public name imports")
