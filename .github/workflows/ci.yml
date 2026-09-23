@@ -325,8 +325,12 @@ jobs:
               ("REST2", "explicit", {"protocol": "REST2", "solvent": "explicit", **SHORT,
                          "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 10,
                                    "number_of_exchanges": 2}}, [],
-               {"REST2.py", "run.sh", "resolved.config", "eq", "remd0", "remd1",
-                "remd_groupfile.1", "remd_records", "rank", "build_states.log"}),
+               # `remd0`/`remd1` and `build_states.log` were the 0.5.x layout, when build-md
+               # scaled the rungs itself and wrote a directory per replica. The states are now
+               # built by `build-top --rest2-scaler` into `build/REST2/` and the run directory
+               # holds the entry point, the declarations and the per-rank tree.
+               {"REST2.py", "run.sh", "resolved.config", "run.config", "build-md.log",
+                "eq", "remd_groupfile.1", "remd_records", "rank"}),
               ("AIS", "explicit", {"protocol": "AIS", "solvent": "explicit",
                        "ais": {"number_of_paths": 2, "switching_steps": 20,
                                "observation_interval_steps": 10},
