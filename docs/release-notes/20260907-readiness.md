@@ -321,7 +321,7 @@ a study, not of an engine, and they belong to MD-project.
 
 ## 8. Deferred issues and limitations
 
-Tracked in [`docs/backlog.md`](../backlog.md), with impact and a concrete trigger for each. In
+Tracked in the backlog, with impact and a concrete trigger for each. In
 short:
 
 1. **Aggregate CV-cost metadata is not cross-checked against the prefix costs it sums.**
@@ -363,7 +363,8 @@ here with the checkpoint and the series attached.
 
 ## Cross-references
 
-- [`docs/backlog.md`](../backlog.md) — the deferred items above, with triggers.
+- The backlog — the deferred items above, with triggers — is kept in the `MD-tools-archive`
+  repository.
 - [`20260907-cv-validation-final-evidence.md`](20260907-cv-validation-final-evidence.md) — the
   preceding CV validation evidence, including its own open item for the MPI failure.
 - [`docs/md-run.md`](../md-run.md) — the public `md-run` surface used by the workflow above.
