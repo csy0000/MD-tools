@@ -264,7 +264,7 @@ attempted and died halfway. These exit **2**.
 Existing outputs are refused the same way, unless `--overwrite` is passed: a build that silently
 replaced a System would leave any trajectory already produced against the old one unexplainable.
 
-**A chemistry mismatch discovered during parameterisation is different**, and today it behaves
+**A chemistry mismatch discovered during parameterisation is different**, and it behaves
 less well. `solute.kind: peptide-like` over a molecule that is not a peptide gets as far as the
 map before failing:
 

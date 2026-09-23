@@ -1,5 +1,8 @@
 # REST2: paracetamol in explicit water, 10 ns per state
 
+**Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
+run executed as written, at that version. It has not been re-run for 0.6.1.
+
 !!! note "Requires the md-tools release after 0.5.4"
     This page builds its box from a **registered parameter package** rather than parameterising
     the molecule again, which needs the release after 0.5.4. It was run with md-tools at commit

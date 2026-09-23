@@ -1,5 +1,8 @@
 # cMD: a bromodomain with paracetamol, from a reused parameter package
 
+**Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
+run executed as written, at that version. It has not been re-run for 0.6.1.
+
 !!! note "Requires the md-tools release after 0.5.4"
     This page uses `solute.kind: complex`, a `ligands:` entry selecting by `resname` with the
     package given as a path, `input.assembly`, `input.missing_atoms` and

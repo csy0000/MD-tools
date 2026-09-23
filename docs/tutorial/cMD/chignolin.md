@@ -1,5 +1,8 @@
 # cMD: chignolin in explicit water
 
+**Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
+run executed as written, at that version. It has not been re-run for 0.6.1.
+
 !!! note "Requires md-tools 0.5.4 or later"
     `build-md` validates the whole stage chain when it generates it, so the built System has to
     exist first. Earlier releases generated a run in an empty directory.

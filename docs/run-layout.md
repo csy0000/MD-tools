@@ -67,7 +67,7 @@ resolving, whichever order the runs go in. So the choice is real and narrow:
 * **the cadence becomes a per-run value beside the seed**, which widens `RUN_CONFIG_ALLOWED` --
   a deliberately one-key schema, on the reasoning that an override able to set everything is a
   second configuration authority; or
-* **such runs take separate `<system>` roots**, which is what the tests do today, at the cost
+* **such runs take separate `<system>` roots**, which is what the tests do, at the cost
   that a CV-on and a CV-off run on the same molecule are no longer one comparable dataset.
 
 The migration scripts under `data/reference/` are deliberately THROWAWAY and untracked: the point
@@ -179,7 +179,7 @@ seed with each stage and replica name, so every stream in a run descends from th
 two runs sharing an identical input and an identical seed would be bit-identical, not repeats.
 The migrated reference run carries `dynamics.seed: 700501` here.
 
-It is a file rather than a command-line flag (`md-run` has no seed override today, and adding one
+It is a file rather than a command-line flag (`md-run` has no seed override, and adding one
 would leave the seed living only in a shell history until `resolved.config` was written — a re-run
 typed without it would silently repeat run 1), and rather than a number parsed out of the
 directory name, which would make a filename load-bearing data.
@@ -252,7 +252,7 @@ lack it, and the migration records its absence rather than synthesising it.
 ### `remd_records/` — the ladder's own records, per segment
 
 ```text
-remd_records/  ledger_prod<x>.nc            the exchange ledger  (today: REST2.nc)
+remd_records/  ledger_prod<x>.nc            the exchange ledger  (in 0.6.1: REST2.nc)
                ledger_prod<x>.solute.nc
                checkpoint_prod<x>.nc        configurations, mapping, RNG states, rule state
                rem_prod<x>.log              Amber-format, cpptraj-readable as type Hamiltonian
@@ -302,9 +302,9 @@ its **own copy** of what it needs from `build/` and `min/`, because standing alo
 
 ---
 
-## 2. What moves, from today
+## 2. What moves
 
-| today | target |
+| in 0.6.1 | target |
 |---|---|
 | `build/` beside the run (three levels up from `md_script/`) | `<system>/build/` — same names, one level up from a run |
 | `min.{xml,out,log}`, `min.checkpoints/` (per run) | `<system>/min/` — shared |

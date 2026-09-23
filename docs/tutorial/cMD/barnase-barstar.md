@@ -1,5 +1,8 @@
 # cMD: barnase–barstar from a deposited crystal structure
 
+**Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
+run executed as written, at that version. It has not been re-run for 0.6.1.
+
 !!! note "Requires the md-tools release after 0.5.4"
     This page uses `input.assembly`, `input.missing_atoms` and `protonation.method: propka`,
     which are not in 0.5.4. It was run with md-tools at commit `cbc617a` (as `52499b0`, before a

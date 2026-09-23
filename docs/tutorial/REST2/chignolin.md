@@ -1,5 +1,8 @@
 # REST2: chignolin in explicit water, six states on six GPUs
 
+**Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
+run executed as written, at that version. It has not been re-run for 0.6.1.
+
 !!! note "Requires md-tools 0.5.4 or later"
     The scaled states are **files**, built once by `md-openmm build-top --rest2-scaler`. Earlier
     releases scaled at run time; their tutorials are [archived](../archived/README.md).

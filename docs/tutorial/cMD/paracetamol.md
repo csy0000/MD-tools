@@ -1,5 +1,8 @@
 # cMD: paracetamol in explicit water, parameterised once
 
+**Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
+run executed as written, at that version. It has not been re-run for 0.6.1.
+
 !!! note "Requires the md-tools release after 0.5.4"
     This page uses `build-top --parameterize` and `solute.parameters` naming a package **path**,
     neither of which is in 0.5.4. It was run with md-tools at commit `e9a89db`, on one NVIDIA

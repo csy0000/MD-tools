@@ -76,7 +76,7 @@ Each method page carries a minimal, runnable `example.config` beside it.
 ## Development roadmap
 
 Work that is **planned or under construction**, on its own branches. Nothing here describes what
-the installed package does today; that is everything above.
+the installed package does; that is everything above.
 
 | page | |
 |---|---|

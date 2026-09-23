@@ -536,7 +536,7 @@ it reproduces the published relaxation behaviour, and then documenting that its 
 used for any fluctuation-derived quantity — work that is not justified when
 `MonteCarloBarostat` is available, correct, and already the default.
 
-If Berendsen-style relaxation is wanted for equilibration specifically, the honest route today is
+If Berendsen-style relaxation is wanted for equilibration specifically, the honest route is
 the existing restrained-NPT stages under the Monte Carlo barostat, which relax the box without
 claiming a different ensemble.
 
@@ -662,7 +662,7 @@ matches it.
 #### Constraint tolerance
 
 The tolerance is the relative accuracy the solver works to, and it is **not uniform across
-protocols today**:
+protocols in 0.6.1**:
 
 | protocol | constraint tolerance |
 |---|---|
