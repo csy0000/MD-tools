@@ -348,6 +348,26 @@ jobs:
                   source = Path(f"sys-{system}") / artefact
                   if source.is_file():
                       shutil.copy2(source, root / "build" / artefact)
+              # A HOT LADDER NEEDS ITS SAVED STATES FIRST. Since 0.6.0 `build-md` refuses a
+              # REST2 run until `build/<method>/scaler.yaml` exists: every scaled Hamiltonian is
+              # written as a file by `build-top --rest2-scaler` and never re-derived at run time.
+              # This step generated the bundle straight from `build-md` and had been failing on
+              # that refusal -- the CI reporting a contract it had not been taught.
+              if name == "REST2":
+                  scaler = Path(f"scaler-{name}.config")
+                  scaler.write_text(yaml.safe_dump(
+                      {"method": "REST2",
+                       "schedule": {"n_states": 2, "tau_min": 0.0, "tau_max": 0.5}},
+                      sort_keys=False), encoding="utf-8")
+                  states = subprocess.run(
+                      ["md-openmm", "build-top", "--rest2-scaler",
+                       "-s", str(root / "build" / "built.xml"),
+                       "-p", str(root / "build" / "built.pdb"),
+                       "--config", str(scaler)],
+                      capture_output=True, text=True)
+                  assert states.returncode == 0, f"{name} scaler: {states.stdout}{states.stderr}"
+                  assert (root / "build" / "REST2" / "scaler.yaml").is_file(), f"{name}: no scaler.yaml"
+
               out = root / f"{name}-run1"
               result = subprocess.run(
                   ["md-openmm", "build-md", "-odir", str(out), "--config", str(config), *extra],
