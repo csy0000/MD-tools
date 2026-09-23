@@ -480,7 +480,7 @@ steps**, not in time, so its physical meaning depends on the timestep:
 The requested value is recorded in `resolved.config` as `dynamics.barostat_interval_steps`, and
 each stage's machine record carries what the built System actually received. (This paragraph named
 `resolved_stage.yaml` and `MD/provenance.yaml`, neither of which is written by anything — see
-`docs/backlog.md` entry 10.)
+a known gap.)
 
 **Not claimed:** that 25 steps is optimal. It is frequent enough that the volume equilibrates
 quickly and infrequent enough that the cost of the extra energy evaluations is small; it is not

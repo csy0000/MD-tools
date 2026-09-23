@@ -142,4 +142,4 @@ python -m pytest tests -m "gpu or slow"             # builds systems and integra
 GPU tests run on CUDA and are never satisfied by CPU execution.
 
 Working on the code: [`CLAUDE.md`](CLAUDE.md) holds the invariants that must not be broken; open
-and closed gaps, each with its reasoning, are in [`docs/backlog.md`](docs/backlog.md).
+and closed gaps, each with its reasoning, are kept in the `MD-tools-archive` repository.

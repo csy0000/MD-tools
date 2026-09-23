@@ -273,8 +273,7 @@ build-top: PeptideMapError: no amide bond was found; this is not a peptide
 ```
 
 That is a statement about the input just as much as a bad suffix is, but it exits **1** rather
-than 2 and leaves a `built.log` in the output directory. See `docs/backlog.md` entry 19 in the
-repository. Until it is fixed: a `build-top` that exits 1 has left a directory behind, and the
+than 2 and leaves a `built.log` in the output directory. Until it is fixed: a `build-top` that exits 1 has left a directory behind, and the
 `.log` in it describes an attempt rather than a System.
 
 ## Next

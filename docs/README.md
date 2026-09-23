@@ -46,13 +46,6 @@ Each method page carries a minimal, runnable `example.config` beside it.
 | [Data registration](data_register/README.md) | how to register a finished run, with worked examples |
 | [The dataset contract](data-contract.md) | the schema-level authority: paths, records, immutability |
 
-## Reference campaigns
-
-| page | |
-|---|---|
-| [ALA, 2026-09](campaigns/ala-2026-09/README.md) | the alanine-dipeptide reference campaign: configurations, built Systems, what was registered and what was withdrawn |
-| [Validation throughput, 2026-08](reports/20260831_validation_matrix_speed.md) | measured ns/day for the 2026-08 validation matrix, with its CSVs |
-
 ## Contributing a method
 
 | page | |
@@ -73,26 +66,10 @@ Each method page carries a minimal, runnable `example.config` beside it.
 | [Runtime closure and CV evidence](release-notes/20260904-cv-and-runtime-closure-evidence.md) | the measured lanes, hardware, wheel and CUDA coverage behind the collective-variable and runtime-closure work |
 | [CUDA coverage matrix](release-notes/cuda-coverage-matrix.md) | every CUDA-relevant source site and the lane that exercises it, generated from a real run |
 
-## Development roadmap
 
-Work that is **planned or under construction**, on its own branches. Nothing here describes what
-the installed package does; that is everything above.
+## Development records
 
-| page | |
-|---|---|
-| [Development index](development/README.md) | the four branches, what each is for, and where each one stands |
-| [Shared contracts](development/shared-contracts.md) | the records 0.6.1 and 0.7.0 must agree on: selection identity, topology plans, Hamiltonian state coordinates |
-| [0.6.1 aims](development/0.6.1/AIMS.md) | selective explicit-solvent REST2: residue masks and individually chosen ligand instances |
-| [0.7.0 aims](development/0.7.0/AIMS.md) | conventional alchemy: TI and FEP, `combine-topology`, Amber18 softcore |
-| [0.7.1 aims](development/0.7.1/AIMS.md) | **planning only**: FEP–REST2, EDS, RE-EDS, ATM |
-| [0.7.2 aims](development/0.7.2/AIMS.md) | **planning only**: grand-canonical and nonequilibrium water sampling |
+The campaign logs, release history, per-release aims and status, session handoffs and the backlog
+are kept in a separate repository, `MD-tools-archive`, on the `development-records-20260923`
+branch. They describe how the package came to work as it does, not how to use it.
 
-The [20260918 parallel development instruction](claudecode-instructions/20260918_parallel-0.6.1-0.7.x-development.md)
-is the shared roadmap those branches specialize. 0.6.0 itself remains under the user's testing;
-none of this announces a release.
-
-## History
-
-| page | |
-|---|---|
-| [Development history](history/README.md) | the instructions and execution journals behind the REST2, rREST2 and file-interface work, kept as evidence. Not a description of how the package works now |

@@ -9,7 +9,7 @@ parameters -- with one measured exception: in OPC water, the ligand's 1-4 Coulom
 `0.833333` rather than 5/6 (see *Nonbonded conventions* below).
 
 This is not only a matter of speed. The OpenFF toolkit computes AM1-BCC charges on a conformer it
-generates itself, without a seed (`docs/backlog.md`, entry 6), so a flexible molecule parameterised
+generates itself, without a seed, so a flexible molecule parameterised
 twice can get two different sets of charges. Before packages, a ligand build ran AM1-BCC again at
 each preparation step: hydrogens, solvent and System.
 
