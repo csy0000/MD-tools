@@ -284,6 +284,17 @@ across a 60% change in tau_max. My prediction of a small RISE from the `2(1-tau)
 wrong in direction: the acceptance fell slightly instead. The rule "acceptance is set by the rung
 count" survives; my second-order correction to it did not.
 
+**State-space diffusion, all four ladders, measured from the exchange records** (states² per
+exchange; crossing time is `(N-1)²/2D` exchanges, and `K/τ_cross` says how many ladder crossings
+the 2500-exchange run had room for):
+
+| | N | D | crossing time | K/τ_cross | round trips |
+|---|---|---|---|---|---|
+| A, tau 0.5 | 8 | 0.2401 | 102 | 24.5 | 105 |
+| A2, tau 0.3 | 8 | **0.3248** | 75 | 33.1 | 326 |
+| B, tau 0.25 | 8 | 0.1696 | 144 | 17.3 | 45 |
+| B3, tau 0.4, 12 rungs | 12 | 0.1709 | 354 | 7.1 | 2 |
+
 **Round trips: refuted, and the underlying quantity was not.** State-space diffusion per exchange
 is `D = 0.1709` states²/exchange for B3 against `0.1696` for ladder B -- **identical**. Per-step
 transport did not degrade at all. What changed is the ladder got longer, and crossing time scales
