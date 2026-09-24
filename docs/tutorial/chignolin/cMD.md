@@ -195,4 +195,4 @@ anything real raise `production_steps` — or use the ladder, which is what
 
 * the same peptide across six scaled states: [REST2: chignolin](../chignolin/REST2.md)
 * the same steps for a small molecule, explained in more detail: [cMD: paracetamol](../paracetamol/cMD.md)
-* what every configuration key means: [Configuration](../../md-configuration.md)
+* what every configuration key means: [Configuration](../../basics/build-md/configuration.md)

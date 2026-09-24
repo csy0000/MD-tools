@@ -301,4 +301,4 @@ the saved states (`detection_route: saved-state`, and the sha256 of each).
   [cMD: a bromodomain with paracetamol](../bromodomain-paracetamol/cMD.md)
 * a ladder over a peptide: [REST2: chignolin](../chignolin/REST2.md)
 * register the finished directory as a dataset:
-  [Registering a finished run](../../data_register/README.md)
+  [Registering a finished run](../../basics/data-register/index.md)

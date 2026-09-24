@@ -85,7 +85,7 @@ def finished(tmp_path_factory):
     # value given explicitly resolves against the working directory instead.
     #
     # THE PARENT IS THE RESTART THE STAGE IS FILED UNDER. A stage filed as `eq_1` writes
-    # `eq/eq_1.xml`, which is what `run.sh` chains and what docs/run-layout.md specifies. The
+    # `eq/eq_1.xml`, which is what `run.sh` chains and what docs/basics/run-layout.md specifies. The
     # runtime used to name it from the STAGE instead, so the two disagreed and no chain driven by
     # `run.sh` could complete.
     for stage, source, odir, parent in (
@@ -136,7 +136,7 @@ def test_input_holds_what_the_user_supplied_each_one_proven(finished):
     # THE LAYOUT NAMES, because the records name the shared file the stage read: the
     # equilibration stage ran `-i ../input/eq_1.in`. The bundle therefore no longer says which
     # STAGE read an input, only which input was read -- a real change in what it records about
-    # itself, noted in docs/run-layout.md.
+    # itself, noted in docs/basics/run-layout.md.
     assert [entry["file"] for entry in recorded["stage_inputs"]] == [
         "input/eq_1.in", "input/cMD.in"], "the stage inputs, in the order they ran"
     assert recorded["structure_origin"]["sequence"] == ["ACE", "ALA", "NME"]

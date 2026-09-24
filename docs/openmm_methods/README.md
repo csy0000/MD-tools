@@ -4,7 +4,7 @@ One page per protocol MD-tools generates. Each page states what the method is fo
 repository implements and does not implement, and what the generated directory contains.
 
 How any of these is actually launched — the Amber-like flags, the platform policy, the MPI rules —
-is [Running](../md-run.md).
+is [Running](../basics/md-run.md).
 
 | method | ensemble | what it is for | page |
 |---|---|---|---|
@@ -65,10 +65,10 @@ Choosing between enhanced-sampling methods: [REST2](REST2/README.md) →
 rREST2 (REST2 with a Boltzmann reservoir refresh) is archived as of 0.5.4: it is refused by name,
 and the git tag `rREST2-final` is the last commit where it runs.
 
-Registering what you produced: [data registration](../data_register/README.md).
+Registering what you produced: [data registration](../basics/data-register/index.md).
 
 ## Related
 
 * [Scientific defaults and their evidence](../scientific-defaults.md) — why each default is what it is
 * [Support matrix](../support-matrix.md) — what is supported, experimental, or unsupported
-* [The dataset contract](../data-contract.md) — the schema-level authority for records
+* [The dataset contract](../structure/project-data.md) — the schema-level authority for records

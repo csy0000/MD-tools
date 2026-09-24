@@ -24,13 +24,13 @@ this release.
 * **[Installing](install.md)** — the NVIDIA driver, the conda environment, the package. Step 0
   needs root; the rest is a normal user install.
 
-* **[Machine configuration](machine-configuration.md)** — one file per machine: which platform it
+* **[Machine configuration](structure/machine-config.md)** — one file per machine: which platform it
   runs on, and where registered data goes. CUDA is the default and there is no silent fallback.
 
 * **[Methods](openmm_methods/README.md)** — cMD, REST2, AIS and umbrella sampling. Each
   page carries a runnable `example.config` and the commands that use it.
 
-* **[Running](md-run.md)** — the Amber-like flags, the `.in` language, the MPI rules, and what
+* **[Running](basics/md-run.md)** — the Amber-like flags, the `.in` language, the MPI rules, and what
   each protocol writes.
 
 </div>
@@ -58,7 +58,7 @@ MMFF-minimised; a `.sdf` supplies its own coordinates and they are used **as giv
 or crystallographic pose survives.
 
 Where the files land, and what is shared between runs on one system, is
-[the run layout](run-layout.md).
+[the run layout](basics/run-layout.md).
 
 ## `md-tools` and `md-openmm`
 
@@ -72,11 +72,11 @@ sampling method imports the package.
 
 ## Reference
 
-* [Configuration reference](md-configuration.md) — every key, generated from the schemas.
+* [Configuration reference](basics/build-md/configuration.md) — every key, generated from the schemas.
 * [Scientific defaults](scientific-defaults.md) — every consequential default, its evidence, and
   the limits of that evidence.
 * [Support matrix](support-matrix.md) — supported, experimental and unsupported combinations.
-* [The dataset contract](data-contract.md) — the schema-level authority for records.
+* [The dataset contract](structure/project-data.md) — the schema-level authority for records.
 
 Nothing in this repository has been validated against experiment; every benchmark cited in the
 rationale was run by someone else, on their systems, with their protocol.

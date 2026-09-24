@@ -641,4 +641,4 @@ unscaled, the solute region and its excluded omega bonds, `system_sha256`, that 
 never rescaled on a swap (one beta across the ladder), and a TIMINGS block with elapsed time,
 per-replica and aggregate throughput, and cost per step.
 
-Per-state and per-segment filenames are documented in `docs/run-layout.md`.
+Per-state and per-segment filenames are documented in `docs/basics/run-layout.md`.

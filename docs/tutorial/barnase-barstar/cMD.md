@@ -75,7 +75,7 @@ solvent:
 * `input.missing_atoms: add` builds the missing heavy atoms. The default, `refuse`, stops the build
   and lists them.
 * `protonation.method: propka` predicts pKa values with PROPKA 3.5.1 on the prepared structure and
-  assigns residue variants by one stated rule (see [Building a system](../../build-top.md)).
+  assigns residue variants by one stated rule (see [Building a system](../../basics/build-top/index.md)).
   The default, `openmm`, is what earlier releases did.
 * The 90 crystal waters of assembly 3 are kept, and placed after the protein in the topology.
 
@@ -217,4 +217,4 @@ interface; for either, the run length and the analysis are a study of their own.
 
 * a protein with a bound ligand, from its parameter package:
   [cMD: a bromodomain with paracetamol (4A9K)](../bromodomain-paracetamol/cMD.md)
-* register the finished directory as a dataset: [Registering a finished run](../../data_register/README.md)
+* register the finished directory as a dataset: [Registering a finished run](../../basics/data-register/index.md)

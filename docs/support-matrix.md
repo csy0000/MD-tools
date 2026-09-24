@@ -37,7 +37,7 @@ to the workflow matrix and seeing it pass first.
    `<method>-run<N>/` beside the shared `min/` and `input/`, addressing them by relative paths.
    Moving the whole root to another machine needs no edit; moving a run directory *alone* does
    not work, because `input/` and `min/` are shared siblings rather than copies — see
-   [the layout](run-layout.md). The only absolute path written is the recorded interpreter in
+   [the layout](basics/run-layout.md). The only absolute path written is the recorded interpreter in
    `run.sh`, which falls back to whatever `python3` provides.
 
 2. **The generated scripts do not depend on this package.** They import OpenMM, PyYAML and the two

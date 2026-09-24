@@ -169,7 +169,7 @@ A `.pdb` or `.cif` holding protein chains and ligand instances. Each ligand inst
 `ligands` with a selector (`chain`, `resid`, `insertion_code`) and the parameter package it takes.
 The package is loaded as saved and no charge is computed. Every non-standard residue must be listed,
 and the ligands' hydrogens come from their packages. See
-[Ligand parameter packages](ligand-packages.md).
+[Ligand parameter packages](../ligand-packages.md).
 
 A single-molecule build (`ligand`, `peptide-like`) now also works through a package. It either
 reuses the one `solute.parameters` names, or creates one from the prepared molecule and writes it to
@@ -184,7 +184,7 @@ md-openmm build-top --parameterize -i MOLECULE.{sdf,mol2,smi} --resname NAME \
 
 The third mode of this command, beside the build and `--rest2-scaler`. It writes ONE directory
 holding a reusable ligand parameter package and the readable copies named for `--resname`. No
-box, no solvent and no System to integrate: see [Ligand parameter packages](ligand-packages.md).
+box, no solvent and no System to integrate: see [Ligand parameter packages](../ligand-packages.md).
 
 **The input must carry BOND ORDERS.** `.sdf` and `.mol2` supply coordinates as well; a `.smi`
 states the chemistry and the conformer is embedded. A structure alone — a `.pdb`, a `.cif` — is
@@ -251,7 +251,7 @@ state's tau and sha256, the solute, every unscaled central bond and improper) an
 `unscaled_torsions: true` a torsion that cannot be classified is refused. `--check` validates and
 writes nothing; `--overwrite` moves an existing set aside. The structure flags `-i`, `-os`, `-op`
 and `-log` are refused in this mode, and `-s`/`-p`/`--check` without it. See
-[REST2](openmm_methods/REST2/README.md#the-scaled-states-build-top-rest2-scaler).
+[REST2](../../openmm_methods/REST2/README.md#the-scaled-states-build-top-rest2-scaler).
 
 ## Refusals
 
@@ -278,8 +278,8 @@ than 2 and leaves a `built.log` in the output directory. Until it is fixed: a `b
 
 ## Next
 
-* [Configuration reference](md-configuration.md) — every `build-top` key, generated from the
+* [Configuration reference](../build-md/configuration.md) — every `build-top` key, generated from the
   schemas: force fields, solvent, box, ions, constraints, hydrogen-mass repartitioning.
-* [Scientific defaults](scientific-defaults.md) — why each default is what it is, and the limits of
+* [Scientific defaults](../../scientific-defaults.md) — why each default is what it is, and the limits of
   the evidence for it.
-* [Methods](openmm_methods/README.md) — what to generate next, from the System you just built.
+* [Methods](../../openmm_methods/README.md) — what to generate next, from the System you just built.

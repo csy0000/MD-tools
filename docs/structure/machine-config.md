@@ -131,5 +131,5 @@ $MD_DATA/{year}/{project_name}/{data_name}/          # role: project
 $MD_DATA/common/{year}/{project_name}/{data_name}/   # role: common
 ```
 
-See [data registration](data_register/README.md) for the transaction itself, and
-[the dataset contract](data-contract.md) for the schema-level authority.
+See [data registration](../basics/data-register/index.md) for the transaction itself, and
+[the dataset contract](project-data.md) for the schema-level authority.

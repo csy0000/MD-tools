@@ -350,8 +350,8 @@ def test_the_mps_refusal_names_a_section_that_exists():
                        throughput={"node": [100.0]})
     with pytest.raises(PlacementError) as refused:
         refuse_unverified_sharing(plan, ABSENT, rank=0)
-    quoted = str(refused.value).split('docs/md-run.md, "')[1].split('"')[0]
-    headings = (REPO_ROOT / "docs" / "md-run.md").read_text(encoding="utf-8")
+    quoted = str(refused.value).split('docs/basics/md-run.md, "')[1].split('"')[0]
+    headings = (REPO_ROOT / "docs" / "basics" / "md-run.md").read_text(encoding="utf-8")
     assert f"## {quoted}" in headings, quoted
 
 

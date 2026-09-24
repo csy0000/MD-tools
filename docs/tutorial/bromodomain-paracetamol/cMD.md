@@ -231,9 +231,9 @@ A package is a folder, and `parameter:` above points straight at it -- nothing n
 registered for this build to run. Registering it in the shared catalog under
 `$MD_DATA/parameters/ligands` is what makes it reusable by NAME from anywhere
 (`parameters: CHEMBL112/param_e932f4c4f371`, with no path); see
-[Ligand parameter packages](../../ligand-packages.md).
+[Ligand parameter packages](../../basics/ligand-packages.md).
 
 ## Next
 
 * the protein–protein counterpart, with no ligand: [cMD: barnase–barstar](../barnase-barstar/cMD.md)
-* register the finished directory as a dataset: [Registering a finished run](../../data_register/README.md)
+* register the finished directory as a dataset: [Registering a finished run](../../basics/data-register/index.md)

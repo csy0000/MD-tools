@@ -643,7 +643,7 @@ against an independent evaluation before the row is written.
 ```
 
 `min/` and `eq/` hold METHOD-NEUTRAL declarations, because the scripts in them read the shared
-`input/*.in`, which carry no protocol. See `docs/run-layout.md`.
+`input/*.in`, which carry no protocol. See `docs/basics/run-layout.md`.
 
 `run.sh` calls the installed command rather than `python <stage>.py`, because that is the interface
 a person types by hand, and a script using a different one would be a second way to run the same

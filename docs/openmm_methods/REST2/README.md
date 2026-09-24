@@ -425,7 +425,7 @@ by scaling, which is not how a restraint is applied, so `export-reference` refus
 ## Generated files
 
 `build/`, `min/` and `input/` belong to the SYSTEM and are shared by every run beside them; only
-`REST2-run1/` belongs to this run. See [the layout](../../run-layout.md).
+`REST2-run1/` belongs to this run. See [the layout](../../basics/run-layout.md).
 
 ```text
 ALA/                          the dataset root -- this is what you register
@@ -561,7 +561,7 @@ and every state's sha256. It is a **record, not an input**: the selection is mad
 
 `REST2.log` is the machine record. The per-state trajectories and `rem.log` are what an analysis
 reads; `cpptraj` parses both. Register the finished tree with `md-openmm data-register` — see
-[data registration](../../data_register/README.md).
+[data registration](../../basics/data-register/index.md).
 
 ## Limitations
 

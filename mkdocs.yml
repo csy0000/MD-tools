@@ -8,7 +8,7 @@
 # more than the deletion would be; they are not published because a reader cannot tell an
 # evidence note from an instruction.
 #
-# `docs/md-configuration.md` IS GENERATED (`md_tools.build.manual.render()`) and
+# `docs/basics/build-md/configuration.md` IS GENERATED (`md_tools.build.manual.render()`) and
 # `tests/test_configuration_manual.py` fails on a hand-edit. The site renders the committed file;
 # it must never be authored here.
 #
@@ -110,7 +110,6 @@ nav:
   - Home: index.md
   - Getting started:
       - Installing: install.md
-      - Machine configuration: machine-configuration.md
   - Tutorials:
       - tutorial/README.md
       - Alanine dipeptide:
@@ -140,15 +139,28 @@ nav:
           - 0.5.3 cMD paracetamol: tutorial/archived/0.5.3/cMD/paracetamol.md
           - 0.5.3 cMD Chinolin: tutorial/archived/0.5.3/cMD/chinolin.md
           - 0.5.3 REST2 paracetamol: tutorial/archived/0.5.3/REST2/paracetamol.md
-  - Running a simulation:
-      - The commands:
-          - Building a system (build-top): build-top.md
-          - Running a stage or ladder (md-run): md-run.md
-      - What a run writes:
-          - The run layout: run-layout.md
-          - Collective variables: collective_variables/README.md
-      - Configuration:
-          - Every key, generated: md-configuration.md
+  - Basics:
+      - basics/README.md
+      - Building a system:
+          - build-top: basics/build-top/index.md
+          - Parameterising a ligand: basics/build-top/parameterization.md
+      - Generating a run:
+          - build-md: basics/build-md/index.md
+          - Every configuration key: basics/build-md/configuration.md
+      - Running it:
+          - md-run: basics/md-run.md
+          - The run layout: basics/run-layout.md
+          - Collective variables: basics/collective-variables.md
+      - Registering:
+          - What registration is: basics/data-register/index.md
+          - A ligand parameter package: basics/data-register/ligand-parameter.md
+          - A dataset: basics/data-register/dataset.md
+      - Ligand parameter packages: basics/ligand-packages.md
+  - Structure:
+      - structure/README.md
+      - Project data: structure/project-data.md
+      - Registered data: structure/registered-data.md
+      - Machine configuration: structure/machine-config.md
   - Methods:
       - openmm_methods/README.md
       - Equilibrium:
@@ -160,8 +172,6 @@ nav:
               - openmm_methods/AIS/README.md
               - Implementation: openmm_methods/AIS/AIS_implementation.md
   - Data:
-      - Registering a finished run: data_register/README.md
-      - The dataset contract: data-contract.md
   - Reference:
       - Scientific defaults: scientific-defaults.md
       - Support matrix: support-matrix.md

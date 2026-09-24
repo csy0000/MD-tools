@@ -80,7 +80,7 @@ explicitly is taken against the working directory instead.
 ## Generated files
 
 `build/`, `min/` and `input/` belong to the SYSTEM and are shared by every run beside them; only
-`cMD-run1/` belongs to this run. See [the layout](../../run-layout.md) for why.
+`cMD-run1/` belongs to this run. See [the layout](../../basics/run-layout.md) for why.
 
 ```text
 ALA/                          the dataset root -- this is what you register
@@ -141,7 +141,7 @@ The stage logs are the machine records `data-register` reads. Completion is take
 md-openmm data-register -idata ./data/ALA-cMD -project_name ALA -data_name ALA-cMD -year 2026
 ```
 
-See [data registration](../../data_register/README.md).
+See [data registration](../../basics/data-register/index.md).
 
 ## Limitations
 

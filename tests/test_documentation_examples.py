@@ -20,7 +20,7 @@ from md_tools.build.strict import ConfigError
 
 DOCS = Path(__file__).resolve().parents[1] / "docs"
 METHODS = DOCS / "openmm_methods"
-REGISTER = DOCS / "data_register"
+REGISTER = DOCS / "basics" / "data-register"
 PROTOCOLS = ("cMD", "REST2", "AIS")  # rREST2 is archived (0.5.4)
 
 
@@ -64,7 +64,7 @@ def test_a_documented_example_is_not_a_copy_of_the_shipped_one(protocol, tmp_pat
     THE DISTINCTION IS PURPOSE, NOT SIZE. It used to be asserted as "the documented one is
     smaller", which worked only while `configs/md/*.config` carried every key's documentation
     inline and ran to 18-20 KB. That documentation now lives once, generated, in
-    `docs/md-configuration.md`, so both files are short and a byte count no longer distinguishes
+    `docs/basics/build-md/configuration.md`, so both files are short and a byte count no longer distinguishes
     them -- AIS's quick-start is in fact the larger of the two.
 
     What separates them is what they are FOR, and that is directly checkable:
@@ -172,9 +172,9 @@ def test_the_documented_extension_validates_against_the_model():
 
 
 def test_the_registration_page_links_the_contract_rather_than_restating_it():
-    """`docs/data-contract.md` stays the schema-level authority; this page is how to use it."""
-    page = (REGISTER / "README.md").read_text(encoding="utf-8")
-    assert "data-contract.md" in page
+    """`docs/structure/project-data.md` stays the schema-level authority; this page is how to use it."""
+    page = (REGISTER / "index.md").read_text(encoding="utf-8")
+    assert "project-data.md" in page
 
 
 # --- the documentation tree -------------------------------------------------------------------

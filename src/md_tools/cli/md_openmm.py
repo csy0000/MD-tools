@@ -368,7 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
                           "parameter package, written into the directory that -op and -os name, "
                           "with readable <RESNAME>.sdf/.pdb/.xml copies beside it. Charges are "
                           "generated once, or an existing package is reused when the catalog "
-                          "holds a matching one. See docs/ligand-packages.md.")
+                          "holds a matching one. See docs/basics/ligand-packages.md.")
     top.add_argument("--resname", default=None, metavar="NAME",
                      help="with --parameterize: the three-character residue name the molecule "
                           "takes, which also names the readable copies")

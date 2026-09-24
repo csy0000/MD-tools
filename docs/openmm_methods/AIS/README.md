@@ -235,9 +235,9 @@ the work distribution does.
 
 The four cadences are independent and each must divide `switching_steps` exactly. Work every 10
 steps with frames every 50 is an ordinary thing to want. A fifth, collective-variable observations,
-is described in [Collective variables](../../collective_variables/README.md); it is on the
+is described in [Collective variables](../../basics/collective-variables.md); it is on the
 parameter-update grid and also divides `switching_steps`. See
-[Running](../../md-run.md#ais) for the resume contract.
+[Running](../../basics/md-run.md#ais) for the resume contract.
 
 ### The observation potentials
 

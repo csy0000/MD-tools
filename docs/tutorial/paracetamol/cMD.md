@@ -19,7 +19,7 @@ It takes about a minute: the AM1-BCC charge calculation is most of it, and the 2
 
 * md-tools installed, with CUDA — see [Installing](../../install.md). CUDA is the default and is
   mandatory; nothing here falls back to the CPU.
-* a machine configuration — see [Machine configuration](../../machine-configuration.md).
+* a machine configuration — see [Machine configuration](../../structure/machine-config.md).
 
 ## 1. The dataset root
 
@@ -170,7 +170,7 @@ the REST2 ladder, the bromodomain complex — reads those same numbers.
 
 Everything not stated is the documented default (Sage 2.2.1, TIP3P, a 1.5 nm dodecahedron, 0.15 M
 NaCl, HBonds constraints), and the build log lists each with `(default)` beside it. See
-[Building a system](../../build-top.md).
+[Building a system](../../basics/build-top/index.md).
 
 ## 4. Generate the run
 
@@ -211,7 +211,7 @@ PARA/
 ```
 
 `input/` and `min/` belong to the system, not to this run. See
-[The run layout](../../run-layout.md).
+[The run layout](../../basics/run-layout.md).
 
 ## 5. Run it
 
@@ -291,6 +291,6 @@ PARA/
 * the same molecule with enhanced sampling: [REST2: paracetamol](../paracetamol/REST2.md)
 * the same parameters in a protein pocket:
   [cMD: a bromodomain with paracetamol](../bromodomain-paracetamol/cMD.md)
-* what a package is, in full: [Ligand parameter packages](../../ligand-packages.md)
+* what a package is, in full: [Ligand parameter packages](../../basics/ligand-packages.md)
 * register the finished directory as a dataset:
-  [Registering a finished run](../../data_register/README.md)
+  [Registering a finished run](../../basics/data-register/index.md)

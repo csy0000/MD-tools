@@ -26,7 +26,7 @@ from md_tools.build.manual import documented_keys, render
 from md_tools.build.md import MD_SCHEMA
 from md_tools.build.top import BUILD_SCHEMA
 
-MANUAL = Path(__file__).resolve().parents[1] / "docs" / "md-configuration.md"
+MANUAL = Path(__file__).resolve().parents[1] / "docs" / "basics" / "build-md" / "configuration.md"
 
 
 def test_the_shipped_manual_is_exactly_what_the_renderer_emits():
@@ -39,7 +39,7 @@ def test_the_shipped_manual_is_exactly_what_the_renderer_emits():
         first = next((i for i, (a, b) in enumerate(zip(shipped_lines, fresh_lines)) if a != b),
                      min(len(shipped_lines), len(fresh_lines)))
         pytest.fail(
-            f"docs/md-configuration.md no longer matches md_tools.build.manual.render().\n"
+            f"docs/basics/build-md/configuration.md no longer matches md_tools.build.manual.render().\n"
             f"  shipped has {len(shipped_lines)} lines, rendered has {len(fresh_lines)}.\n"
             f"  first difference at line {first + 1}:\n"
             f"    shipped:  {shipped_lines[first] if first < len(shipped_lines) else '<end>'!r}\n"

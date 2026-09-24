@@ -16,7 +16,7 @@ own minimal example documenting 12 of 52 keys. Nobody can keep five hand-written
 step, so this one is rendered and drift-checked instead -- the same treatment
 `md_tools.data_contract` gives its published JSON schemas.
 
-`render()` is the whole interface. `docs/md-configuration.md` is its output, and a test asserts
+`render()` is the whole interface. `docs/basics/build-md/configuration.md` is its output, and a test asserts
 the two agree, so the document cannot go stale without the suite saying so.
 """
 from __future__ import annotations
@@ -208,12 +208,12 @@ unscaled, the solute region and its excluded omega bonds, `system_sha256`, that 
 never rescaled on a swap (one beta across the ladder), and a TIMINGS block with elapsed time,
 per-replica and aggregate throughput, and cost per step.
 
-Per-state and per-segment filenames are documented in `docs/run-layout.md`.
+Per-state and per-segment filenames are documented in `docs/basics/run-layout.md`.
 """
 
 
 def render() -> str:
-    """The whole manual, as Markdown. `docs/md-configuration.md` is exactly this."""
+    """The whole manual, as Markdown. `docs/basics/build-md/configuration.md` is exactly this."""
     lines = [
         "# Configuration reference",
         "",

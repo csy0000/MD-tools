@@ -367,4 +367,4 @@ here with the checkpoint and the series attached.
   repository.
 - [`20260907-cv-validation-final-evidence.md`](20260907-cv-validation-final-evidence.md) — the
   preceding CV validation evidence, including its own open item for the MPI failure.
-- [`docs/md-run.md`](../md-run.md) — the public `md-run` surface used by the workflow above.
+- [`docs/basics/md-run.md`](../basics/md-run.md) — the public `md-run` surface used by the workflow above.

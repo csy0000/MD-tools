@@ -13,7 +13,7 @@ validated in the test suite against the same model the command itself uses.
 | [`dataset.yaml.example`](dataset.yaml.example) | the manifest registration **writes**, shown so you know what to expect |
 | [`extension.yaml.example`](extension.yaml.example) | the declaration **you write** when a dataset continues another |
 
-The schema-level authority is [`docs/data-contract.md`](../data-contract.md). This page is how to
+The schema-level authority is [project data](../../structure/project-data.md). This page is how to
 use it.
 
 ## First, once per machine
@@ -152,5 +152,5 @@ disagree. `md_data` is never imported at run time.
 
 ## Related
 
-* [The dataset contract](../data-contract.md) — the schema-level authority
-* [Method pages](../openmm_methods/README.md) — what produces the data in the first place
+* [The dataset contract](../../structure/project-data.md) — the schema-level authority
+* [Method pages](../../openmm_methods/README.md) — what produces the data in the first place

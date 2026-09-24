@@ -200,7 +200,7 @@ def test_a_cv_disabled_overwrite_leaves_no_stale_cv_output(root, tmp_path):
     # adds no Force, and the System, force inventory and single-point energy are asserted
     # identical with it on and off -- so making them comparable on ONE system means making the
     # cadence a per-run value beside the seed. That widens `RUN_CONFIG_ALLOWED`, which is a
-    # deliberate one-key schema, so it is recorded in docs/run-layout.md as open rather than
+    # deliberate one-key schema, so it is recorded in docs/basics/run-layout.md as open rather than
     # decided here.
     off_root = root.parent / "cv-ownership-off"
     if not (off_root / "build" / "built.xml").is_file():

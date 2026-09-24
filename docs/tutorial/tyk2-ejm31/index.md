@@ -97,7 +97,7 @@ same molecule from a different pose produces the same package id.
 !!! tip "Give the package aliases before you register it"
     `solute.aliases` defaults to empty and registration is **write-once**. A package registered
     without aliases can only ever be found by its compound id, never by the name you think of it
-    by, and that cannot be corrected afterwards. See [ligand packages](../../ligand-packages.md).
+    by, and that cannot be corrected afterwards. See [ligand packages](../../basics/ligand-packages.md).
 
 ## 2. Build the complex
 

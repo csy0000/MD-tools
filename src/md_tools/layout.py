@@ -1,6 +1,6 @@
 """Where every file of a run lives. One authority, so no caller invents a path.
 
-THE LAYOUT, as `docs/run-layout.md` specifies it:
+THE LAYOUT, as `docs/basics/run-layout.md` specifies it:
 
     <dataset>/                    one dataset is a system and every run on it
       build/                      the built system: shared by every method and every repeat

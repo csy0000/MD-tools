@@ -22,14 +22,14 @@ Each method page carries a minimal, runnable `example.config` beside it.
 
 | page | |
 |---|---|
-| [Running](md-run.md) | `md-run`: the flags, the `.in` language, the platform policy, the MPI rules |
-| [Configuration reference](md-configuration.md) | every key of every configuration, generated from the schemas |
-| [The run layout](run-layout.md) | what `build-md` writes, and what is shared between runs |
-| [Ligand parameter packages](ligand-packages.md) | one compound, one saved parameter set: package format, reuse, `kind: complex` ligand mapping, the catalog |
+| [Running](basics/md-run.md) | `md-run`: the flags, the `.in` language, the platform policy, the MPI rules |
+| [Configuration reference](basics/build-md/configuration.md) | every key of every configuration, generated from the schemas |
+| [The run layout](basics/run-layout.md) | what `build-md` writes, and what is shared between runs |
+| [Ligand parameter packages](basics/ligand-packages.md) | one compound, one saved parameter set: package format, reuse, `kind: complex` ligand mapping, the catalog |
 
 | page | |
 |---|---|
-| [Collective variables](collective_variables/README.md) | torsion CV reporting: the `cv.yaml` schema, conventions, cadences and outputs |
+| [Collective variables](basics/collective-variables.md) | torsion CV reporting: the `cv.yaml` schema, conventions, cadences and outputs |
 
 ## Science
 
@@ -43,8 +43,8 @@ Each method page carries a minimal, runnable `example.config` beside it.
 
 | page | |
 |---|---|
-| [Data registration](data_register/README.md) | how to register a finished run, with worked examples |
-| [The dataset contract](data-contract.md) | the schema-level authority: paths, records, immutability |
+| [Data registration](basics/data-register/index.md) | how to register a finished run, with worked examples |
+| [The dataset contract](structure/project-data.md) | the schema-level authority: paths, records, immutability |
 
 ## Contributing a method
 
