@@ -3,12 +3,6 @@
 **Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
 run executed as written, at that version. It has not been re-run for 0.6.1.
 
-!!! note "Requires the md-tools release after 0.5.4"
-    This page uses `build-top --parameterize` and `solute.parameters` naming a package **path**,
-    neither of which is in 0.5.4. It was run with md-tools at commit `e9a89db`, on one NVIDIA
-    RTX A5000 (CUDA, mixed precision). Every command below was run exactly as written and every
-    number is copied from the files that run produced.
-
 A complete conventional MD run of one small molecule, from a SMILES string to 200 ps of NPT
 production — and, on the way, **the parameter package every other paracetamol tutorial reuses**.
 This is the page to read first if you want to know where ligand parameters come from.

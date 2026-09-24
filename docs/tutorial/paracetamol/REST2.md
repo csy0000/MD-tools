@@ -3,11 +3,6 @@
 **Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
 run executed as written, at that version. It has not been re-run for 0.6.1.
 
-!!! note "Requires the md-tools release after 0.5.4"
-    This page builds its box from a **registered parameter package** rather than parameterising
-    the molecule again, which needs the release after 0.5.4. It was run with md-tools at commit
-    `e9a89db`, on ONE NVIDIA RTX A5000 shared by the four replicas through CUDA MPS.
-
 A four-state REST2 ladder over paracetamol, 10 ns of production **per state**. Every command below
 was run exactly as written, and every number is copied from the files that run produced.
 
@@ -17,22 +12,13 @@ ligand parameters come from. The charge calculation happens once, there.
 
 The ladder took 19.5 min on one shared GPU, plus a few seconds to build and scale.
 
-!!! info "What changed since 0.5.3"
-    In 0.5.3 the ladder scaled its states itself, at run time, and `run.sh` refused this molecule.
-    In 0.5.4 the scaled states are **built once, as files**, by `md-openmm build-top --rest2-scaler`,
-    and every run integrates exactly those files. You can look at them, and at a picture of what
-    was left unscaled, before a single step runs. Compare [the archived 0.5.3 page](../archived/0.5.3/REST2/paracetamol.md).
+## What this runs
 
-## What REST2 does here
-
-Four copies of the system — **states** — run side by side at 300 K. They differ only in how strongly
-the solute interacts: state *i* scales solute–solute terms by (1−τ)² and solute–water terms by
-(1−τ), with τ = 0, 0.167, 0.333, 0.5. State 0 is the real molecule. Every 2 ps, neighbouring states
-try to swap configurations, so something found where barriers are low can reach state 0.
-
-Some torsions are **never scaled**, because a hot state that bent them would sample geometries state
-0 never visits: the ordinary amide ω, every aromatic ring bond, other double bonds, and every
-improper. See [REST2](../../openmm_methods/REST2/README.md).
+Four copies at 300 K, differing only in how strongly the solute interacts: state *i* scales
+solute–solute terms by (1−τ)² and solute–water by (1−τ), τ = 0, 0.167, 0.333, 0.5. State 0 is the
+real molecule, and neighbours swap configurations every 2 ps. Amide ω, aromatic rings, other double
+bonds and impropers are never scaled. The method:
+[REST2](../../openmm_methods/REST2/README.md).
 
 ## 1. The dataset root
 

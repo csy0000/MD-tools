@@ -3,18 +3,6 @@
 **Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
 run executed as written, at that version. It has not been re-run for 0.6.1.
 
-!!! note "Requires the md-tools release after 0.5.4"
-    This page uses `solute.kind: complex`, a `ligands:` entry selecting by `resname` with the
-    package given as a path, `input.assembly`, `input.missing_atoms` and
-    `protonation.method: propka`, none of which are in 0.5.4.
-
-    The 10 ns run below was produced at commit `fa288ff`, whose configuration differed in two
-    ways that have since changed: it deleted the crystallisation additives through a retired
-    `input.remove` section, and it named the ligand by chain and residue id. Both commands on this
-    page were re-executed on the current tree and build the same System **byte for byte** --
-    `built.xml` sha256 `f5908732...4e9c0df0`, the System the production run integrated -- so every
-    number here still stands.
-
 A protein–ligand complex from a deposited crystal structure: the **CREBBP bromodomain with
 paracetamol** ([PDB 4A9K](https://www.rcsb.org/structure/4A9K), 1.81 Å), 10 ns of production. The
 paracetamol parameters are **not generated here**: the run loads the same parameter package a

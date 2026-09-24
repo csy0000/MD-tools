@@ -3,10 +3,6 @@
 **Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
 run executed as written, at that version. It has not been re-run for 0.6.1.
 
-!!! note "Requires md-tools 0.5.4 or later"
-    The scaled states are **files**, built once by `md-openmm build-top --rest2-scaler`. Earlier
-    releases scaled at run time; their tutorials are [archived](../archived/README.md).
-
 A six-state REST2 ladder over **chignolin**, the designed ten-residue miniprotein
 ([PDB 1UAO](https://www.rcsb.org/structure/1UAO), sequence GYDPETGTWG), from the deposited NMR
 structure to 10 ns of production **per state**. Every command below was run exactly as written and
@@ -21,18 +17,13 @@ differs is that a peptide needs no SDF — its unscaled torsions come from the r
 bond orders — and that the ladder has to be spaced more tightly, which
 [step 6](#6-why-tau_max-is-03-and-not-05) measures rather than asserts.
 
-## What REST2 does here
+## What this runs
 
-Six copies of the system — **states** — run side by side at 300 K, one per GPU. They differ only in
-how strongly the solute interacts: state *i* scales solute–solute terms by (1−τ)² and solute–water
-terms by (1−τ), with τ = 0, 0.06, 0.12, 0.18, 0.24, 0.3. State 0 is the real peptide. Every 2 ps,
-neighbouring states try to swap configurations, so a conformation found where barriers are low can
-reach state 0.
-
-Some torsions are **never scaled**, because a hot state that bent them would sample geometries state
-0 never visits: the backbone amide ω bonds, aromatic rings, and every improper. For chignolin that
-is Tyr2 and Trp9's rings and the eight ordinary amides. **Pro4 is the exception** — a proline-like
-amide has no N–H to protect, so it stays scalable, and the scaler says so.
+Six copies at 300 K, one per GPU, differing only in how strongly the solute interacts: τ = 0, 0.06,
+0.12, 0.18, 0.24, 0.3. State 0 is the real peptide, and neighbours swap every 2 ps. Backbone amide
+ω, aromatic rings and impropers are never scaled — for chignolin that is Tyr2 and Trp9's rings and
+eight amides, with Pro4 the exception, since a proline-like amide has no N–H to protect. The
+method: [REST2](../../openmm_methods/REST2/README.md).
 
 ## 1. The dataset root and the structure
 
@@ -273,30 +264,11 @@ Each state has its own trajectory, `solute_state<i>_prod1.nc`, 5000 frames of th
 The index is the **state's**, not the walker's: `solute_state0_prod1.nc` is the unscaled ensemble,
 which is the one to analyse.
 
-## 6b. Why `tau_max` is 0.3 and not 0.5 {#6-why-tau_max-is-03-and-not-05}
+## Where this τ span comes from
 
-The [paracetamol ladder](../paracetamol/REST2.md) spans τ 0 → 0.5 in four states and accepts 0.223. The same
-span over chignolin, in six states, does not work:
-
-| ladder | solute atoms | states | τ span | overall acceptance |
-|---|---|---|---|---|
-| paracetamol | 20 | 4 | 0 → 0.5 | 0.223 |
-| chignolin | 138 | 6 | 0 → 0.5 | **0.010** |
-| chignolin | 138 | 6 | 0 → 0.3 | **0.133** |
-
-Both chignolin runs took the same 8 minutes and the same 1935 ns/day per replica — the cost is
-identical and only the spacing differs. The middle row is a ladder that completes, reports, and
-exchanges almost nothing: at 1% the six states are close to six independent simulations, and the
-whole point of REST2 is lost while every file still looks right.
-
-The reason is size. The energy difference between neighbouring states grows with the solute, so the
-τ spacing that works for a 20-atom molecule is far too coarse for a 138-atom peptide. Halving the
-span halves the gap and acceptance rises thirteenfold.
-
-md-tools **reports acceptance and does not enforce it**, and the ladder is linear in τ with no
-spacing optimisation ([REST2](../../openmm_methods/REST2/README.md)). So this is a number to read
-every time: if the pairs are much below ~0.1, tighten `tau_max` or add states, and remember that
-adding states means adding GPUs.
+τ_max is 0.3 because 0.5 was tried and gave 1% acceptance — a ladder that completes, reports
+and exchanges almost nothing while every file still looks right. The comparison:
+[choosing τ_max](choosing-tau.md).
 
 ## See also
 

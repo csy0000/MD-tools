@@ -3,12 +3,6 @@
 **Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
 run executed as written, at that version. It has not been re-run for 0.6.1.
 
-!!! note "Requires the md-tools release after 0.5.4"
-    This page uses `input.assembly`, `input.missing_atoms` and `protonation.method: propka`,
-    which are not in 0.5.4. It was run with md-tools at commit `cbc617a` (as `52499b0`, before a
-    rebase that changed only the build-log text of protein-ligand builds, which this page does not
-    use).
-
 Ordinary molecular dynamics on **barnase–barstar**
 ([PDB 1BRS](https://www.rcsb.org/structure/1BRS)), the ribonuclease and its inhibitor, from the
 deposited crystal structure to 10 ns of production. This is the first protein–protein tutorial:

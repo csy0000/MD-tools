@@ -124,6 +124,7 @@ nav:
           - The system: tutorial/chignolin/index.md
           - cMD: tutorial/chignolin/cMD.md
           - REST2: tutorial/chignolin/REST2.md
+          - Choosing tau_max: tutorial/chignolin/choosing-tau.md
       - Bromodomain + paracetamol:
           - The system: tutorial/bromodomain-paracetamol/index.md
           - cMD: tutorial/bromodomain-paracetamol/cMD.md

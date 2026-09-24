@@ -3,10 +3,6 @@
 **Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
 run executed as written, at that version. It has not been re-run for 0.6.1.
 
-!!! note "Requires md-tools 0.5.4 or later"
-    In 0.5.3, AIS switched a scaling coordinate τ inside one System. In 0.5.4 it is a linear
-    transformation between **two** Systems, and the older behaviour is retired.
-
 Annealed importance sampling (AIS) for alanine dipeptide (ACE-ALA-NME), starting from the sequence
 and ending with a reweighted φ/ψ distribution, with md-tools **0.5.4**. Every command below was run
 exactly as written, and every number is copied from the files that run produced. The run used

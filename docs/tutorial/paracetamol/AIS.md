@@ -3,16 +3,6 @@
 **Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
 run executed as written, at that version. It has not been re-run for 0.6.1.
 
-!!! note "Requires md-tools 0.5.4 or later"
-    In 0.5.3, AIS switched a scaling coordinate τ inside one System. In 0.5.4 it is a linear
-    transformation between **two** Systems, and the older behaviour is retired.
-
-    The build below **reuses** the parameter package made by
-    [cMD: paracetamol](../paracetamol/cMD.md), which needs the release after 0.5.4. The run itself
-    is unchanged: reusing the package produces the same `built.xml` (sha256 `1a7c9faa...`) and the
-    same coordinates as the build that generated the charges here, so every number on this page is
-    the one that run produced.
-
 The AIS chain of [AIS: alanine dipeptide](../ALA/AIS.md), applied to a small molecule given as SMILES.
 Read that page first: it explains each step, and this page shows only where the ligand route differs
 and what the run produced. Every command below was run exactly as written, and every number is
