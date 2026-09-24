@@ -99,14 +99,16 @@ settings match.
 
 ```yaml
 # para.config
-parameters:
-  small_molecule_forcefield: openff-2.2.1   # SMIRNOFF
-  charge_method: am1bcc                     # AmberTools sqm
+solute:
+  kind: ligand
+  ligand_forcefield: openff-2.2.1        # SMIRNOFF; the default is sage-2.2.1
+  ligand_charge_method: am1bcc           # through AmberTools sqm
+  aliases: [ejm_31]                      # searchable names — set them now, see below
 ```
 
-The package records both, and the implementation that produced the charges
-(`backend_id: ambertools-sqm`), so a later build can tell whether a package it found was made the
-same way it would make one.
+The package records the force field, the charge method **and the implementation that produced the
+charges** (`backend_id: ambertools-sqm`), so a later build can tell whether a package it found was
+made the same way it would make one.
 
 AM1-BCC through AmberTools `sqm` takes about 70 seconds for a ligand this size. The package that
 comes out is identified by its **chemical state and its parameters, not by its conformer** — the

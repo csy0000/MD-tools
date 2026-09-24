@@ -1,8 +1,12 @@
 # Barnase and barstar
 
-**Tested against md-tools `0.5.4`.** A protein–protein complex: barnase (an RNase) bound to its
-inhibitor barstar, from PDB 1BRS — one of the best-characterised protein–protein interfaces there
-is.
+**Provenance.** This page uses `input.assembly`, `input.missing_atoms` and
+`protonation.method: propka`, none of which exist in 0.5.4: it was executed at commit `cbc617a`,
+between 0.5.4 and 0.6.0. **It has not been re-run for 0.6.1**, and its counts predate changes to
+crystal-solvent retention and box geometry — see the note under *Build it*.
+
+A protein–protein complex: barnase (an RNase) bound to its inhibitor barstar, from PDB 1BRS — one
+of the best-characterised protein–protein interfaces there is.
 
 ![Barnase and barstar](images/barnase-barstar.png)
 
@@ -101,6 +105,19 @@ Counts
   waters                      8847
   ions                        {'NA': 28, 'CL': 24}
 ```
+
+!!! note "The solute is reproducible; the water count is not a fixed number"
+    Re-running this build at **0.6.1** gives the same solute exactly — 3132 solute atoms, the same
+    44 atoms added to the same 15 residues, the same 28 Na⁺ and 24 Cl⁻, the same 90 crystal waters
+    kept — and a slightly larger box: 317.9 nm³ against 315.5, and 8823 added waters against 8757,
+    for 29923 atoms rather than 29725. That is a 0.8 % change in box volume between `cbc617a` and
+    0.6.1, and the waters follow it.
+
+    Treat every solvent count on this page as a record of one build, not a target. The number of
+    waters a box takes depends on the box the padding rule produces and on where the packing
+    happens to place them; two builds of the same structure can differ by a handful even at one
+    version. What must match, and does, is the solute: its atoms, its completed side chains, its
+    protonation and its net charge.
 
 **Reading the protonation.** PROPKA predicts every titratable group; md-tools prints the ones worth
 a second look. Barnase His18 (pKa 6.04) and Glu73 (6.69) are within one pH unit of 7, so their

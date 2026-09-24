@@ -1,7 +1,8 @@
 # cMD: barnase–barstar from a deposited crystal structure
 
-**Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
-run executed as written, at that version. It has not been re-run for 0.6.1.
+**Provenance.** Every command and number comes from a run executed as written at commit
+`cbc617a`, between 0.5.4 and 0.6.0 — the flags this page uses do not exist in 0.5.4. It has not
+been re-run for 0.6.1.
 
 Ordinary molecular dynamics on **barnase–barstar**
 ([PDB 1BRS](https://www.rcsb.org/structure/1BRS)), the ribonuclease and its inhibitor, from the
