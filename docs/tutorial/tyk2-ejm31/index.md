@@ -72,10 +72,28 @@ environment — complex, solvent box, vacuum — so that every leg of every late
 identical intramolecular Hamiltonian.
 
 ```bash
-md-openmm build-top --parameterize -i ejm_31.sdf --config para.config \
-    -op build/parameter/L31.pdb -os build/parameter/L31.xml \
-    -log build/parameterize.log --resname L31
+mkdir -p tyk2 && cd tyk2
+md-openmm build-top --parameterize -i ../ejm_31.sdf --config para.config \
+    -op packages/L31.pdb -os packages/L31.xml \
+    -log packages/parameterize.log --resname L31
 ```
+
+It writes a **package directory** — that directory is the thing later builds point at:
+
+```text
+tyk2/
+└── packages/
+    └── LOCAL-DKNAYSZNMZIMIZ/
+        └── param_bd1388e5fe3e/
+            ├── molecule.sdf       the exact chemical state
+            ├── parameters.ffxml   the parameters themselves
+            ├── metadata.json      identities, charges, provenance
+            └── parameter.config   what a build must match to REUSE it
+```
+
+The two names are derived, not chosen: `LOCAL-…` is the compound id from the molecule's InChIKey,
+and `param_…` is a digest of the parameters. Yours will match these if the chemistry and the
+settings match.
 
 `para.config` states the small-molecule force field and the charge method:
 
@@ -104,14 +122,14 @@ same molecule from a different pose produces the same package id.
 With the package in hand, the complex build reuses it rather than re-parameterising:
 
 ```yaml
-# complex.config -- the fixture's own build configuration
+# complex.config -- written in tyk2/, beside packages/
 solute:
   kind: complex
 ligands:
   - select: {chain: B, resid: "1"}
-    parameters: LOCAL-DKNAYSZNMZIMIZ/param_bd1388e5fe3e
+    parameters: LOCAL-DKNAYSZNMZIMIZ/param_bd1388e5fe3e   # <compound-id>/<parameter-id>
 ligand_catalog:
-  path: ./packages          # where the package from step 1 lives
+  path: ./packages        # the directory step 1 wrote into, relative to THIS file
 forcefield:
   protein: ff14SB
 solvent:
@@ -125,9 +143,19 @@ constraints:
 ```
 
 ```bash
-md-openmm build-top -i complex_ejm_31.pdb --config complex.config \
+md-openmm build-top -i ../complex_ejm_31.pdb --config complex.config \
     -os build/built.xml -op build/built.pdb -log build/built.log
 ```
+
+**The two lines work together.** `ligand_catalog.path` says which directory to look in — here the
+one step 1 wrote, relative to `complex.config` itself — and `parameters` names the package inside
+it as `<compound-id>/<parameter-id>`, the two directory levels in the tree above. If the package is
+already in the machine catalog under `$MD_DATA`, drop `ligand_catalog` and keep the `parameters`
+line; if you would rather not name the id at all, write `parameters: search` and let the build find
+a package whose recorded criteria match.
+
+`built.log` says which route ran — `reused (stated reference)`, `reused (catalog search)` or
+`created` — so no build can quietly regenerate charges without saying so.
 
 Built this way the system is **53,030 particles**, 16,462 residues, ff14SB and TIP3P in a 1.2 nm
 cubic box. Everything downstream — plain MD, selective REST2, and later the alchemical methods —
