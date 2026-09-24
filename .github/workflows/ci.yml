@@ -220,9 +220,9 @@ jobs:
           print("three documented method examples resolve")
 
           Dataset.model_validate(
-              yaml.safe_load((docs / "data_register" / "dataset.yaml.example").read_text()))
+              yaml.safe_load((docs / "basics" / "data-register" / "dataset.yaml.example").read_text()))
           Extension.model_validate(
-              yaml.safe_load((docs / "data_register" / "extension.yaml.example").read_text()))
+              yaml.safe_load((docs / "basics" / "data-register" / "extension.yaml.example").read_text()))
           print("registration examples validate against their models")
           PY
 

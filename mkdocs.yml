@@ -171,7 +171,6 @@ nav:
           - AIS:
               - openmm_methods/AIS/README.md
               - Implementation: openmm_methods/AIS/AIS_implementation.md
-  - Data:
   - Reference:
       - Scientific defaults: scientific-defaults.md
       - Support matrix: support-matrix.md
