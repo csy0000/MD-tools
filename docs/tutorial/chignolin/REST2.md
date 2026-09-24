@@ -1,16 +1,16 @@
-# REST2: chignolin in explicit water, six states on six GPUs
+# REST2: chignolin in explicit water, six states
 
-**Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
-run executed as written, at that version. It has not been re-run for 0.6.1.
+**Tested against md-tools `0.6.1`.** Every command and every number on this page comes from a
+run executed as written, at that version.
 
 A six-state REST2 ladder over **chignolin**, the designed ten-residue miniprotein
 ([PDB 1UAO](https://www.rcsb.org/structure/1UAO), sequence GYDPETGTWG), from the deposited NMR
 structure to 10 ns of production **per state**. Every command below was run exactly as written and
-every number is copied from the files that run produced. md-tools **0.5.4** at commit `afb537f`, on
-six NVIDIA RTX 3080 cards with CUDA and mixed precision.
+every number is copied from the files that run produced, on NVIDIA RTX 3080 cards with CUDA and
+mixed precision.
 
-The whole thing took **8 min 3 s**: building took 4 s, scaling 2 s, and minimisation through the
-last exchange 7 min 57 s.
+The ladder took **22 min 55 s** on one shared card, plus a few seconds to build and scale. On six
+cards it is about 7 min 30 s — the same physics either way; see step 5.
 
 This is the peptide counterpart of [REST2: paracetamol](../paracetamol/REST2.md). The steps are the same; what
 differs is that a peptide needs no SDF — its unscaled torsions come from the residue table, not from
@@ -207,27 +207,35 @@ per line:
 
 ## 5. Run it
 
+Six states need six workers. Give each one its own GPU if you have them:
+
 ```bash
 cd REST2-run1
 CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1,2,3,4,5,6 ./run.sh
 ```
 
 `run.sh` minimises and equilibrates once on the unscaled system (`min`, `eq_1`, `eq_2`, `eq_3` —
-400 ps in total), then launches the ladder with one MPI rank per state and one GPU per rank.
-
-!!! tip "Six identical cards"
-    The six states are one job: a slow card holds up every exchange it takes part in, and mixed
-    hardware makes the acceptance ratios below hard to read. These ran on six RTX 3080s.
-    `CUDA_DEVICE_ORDER=PCI_BUS_ID` makes CUDA's numbering agree with `nvidia-smi`'s, so
-    `CUDA_VISIBLE_DEVICES=1,2,3,4,5,6` means the cards you think it does.
-
-Each rank records the device it got, and they are six different ones:
+400 ps in total), then launches the ladder with one MPI rank per state. Each rank records the
+device it got, and with six cards they are six different ones:
 
 ```text
 # platform           : CUDA device=0 (machine.openmm.device_policy: local_rank (rank 0 of 6)), precision mixed
 …
 # platform           : CUDA device=5 (machine.openmm.device_policy: local_rank (rank 5 of 6)), precision mixed
 ```
+
+!!! tip "Six identical cards"
+    The six states are one job: a slow card holds up every exchange it takes part in, and mixed
+    hardware makes the acceptance ratios below hard to read. `CUDA_DEVICE_ORDER=PCI_BUS_ID` makes
+    CUDA's numbering agree with `nvidia-smi`'s, so `CUDA_VISIBLE_DEVICES=1,2,3,4,5,6` means the
+    cards you think it does.
+
+**The numbers below came from one card**, with all six workers sharing it under NVIDIA MPS — the
+same arrangement [REST2: paracetamol](../paracetamol/REST2.md) describes in full, including why a
+private pipe directory matters and why the client then addresses the card as device `0`. Sharing
+costs wall time and nothing else: 628 ns/day per replica here, against about 1935 measured on six
+separate cards in an earlier run of this ladder, with the acceptance ratios unchanged (0.133
+overall in both).
 
 It ended with `run.sh: all stages reported completion`.
 
@@ -238,26 +246,30 @@ It ended with `run.sh: all stages reported completion`.
 ```text
 # steps completed       : 2500000 of 2500000
 # exchanges             : 5000 (every 500 steps = 2.0 ps)
+# whole frames          : 100 (every 25000 steps)
 # solute frames         : 5000 (every 500 steps)
 # production per replica: 10000.0 ps
-# final state->walker   : [1, 5, 2, 3, 4, 0]
+# exchange rule         : neighbouring
+# final state->walker   : [5, 4, 3, 2, 1, 0]
 # NEIGHBOURING-PAIR acceptance:
-#   state 0 <-> state 1   389/2500   0.156
-#   state 1 <-> state 2   345/2500   0.138
-#   state 2 <-> state 3   300/2500   0.120
-#   state 3 <-> state 4   330/2500   0.132
-#   state 4 <-> state 5   298/2500   0.119
-#   overall               1662/12500   0.133
+#   basis: cumulative over every committed exchange row in the authoritative NetCDF, exchanges 0-4999
+#   state 0 <-> state 1   382/2500   0.153
+#   state 1 <-> state 2   350/2500   0.140
+#   state 2 <-> state 3   338/2500   0.135
+#   state 3 <-> state 4   308/2500   0.123
+#   state 4 <-> state 5   287/2500   0.115
+#   overall               1665/12500   0.133
 # REST2:
 #   tau ladder            0, 0.06, 0.12, 0.18, 0.24, 0.3   (6 state(s), one temperature 300.0 K, NVT)
 #   solute region         138 atom(s), 24 unscaled central bond(s), impropers unscaled
+#   velocities on swap    never rescaled (one beta across the ladder)
 # TIMINGS:
-#   elapsed               446.4 s
-#   throughput            1935.34 ns/day per replica, 11612.07 ns/day aggregate over 6 state(s)
+#   elapsed               1374.9 s
+#   throughput            628.42 ns/day per replica, 3770.52 ns/day aggregate over 6 state(s)
 ```
 
-Acceptance is even across all five pairs — 0.119 to 0.156 — which is what a well-spaced linear
-ladder looks like. `final state->walker` is `[1, 5, 2, 3, 4, 0]`: no walker ended where it started,
+Acceptance is even across all five pairs — 0.115 to 0.153 — which is what a well-spaced linear
+ladder looks like. `final state->walker` is `[5, 4, 3, 2, 1, 0]`: no walker ended where it started,
 so configurations did travel.
 
 Each state has its own trajectory, `solute_state<i>_prod1.nc`, 5000 frames of the 138 solute atoms.

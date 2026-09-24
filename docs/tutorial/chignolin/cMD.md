@@ -1,9 +1,9 @@
 # cMD: chignolin in explicit water
 
-**Tested against md-tools `0.5.4`.** Every command and every number comes from a run executed as
-written, at that version, on one RTX 3080. It has not been re-run for 0.6.1.
+**Tested against md-tools `0.6.1`.** Every command and every number comes from a run executed as
+written, at that version, on one RTX 3080.
 
-1 ns of ordinary MD on the folded NMR structure of [chignolin](index.md). **Total time: 1 min 3 s.**
+1 ns of ordinary MD on the folded NMR structure of [chignolin](index.md). **Total time: 1 min 4 s.**
 
 **Starts from a built system.** Do [the system page](index.md) first: it takes the first NMR
 model of 1UAO and writes `CHI/build/built.xml`, `built.pdb` and `built.log`.
@@ -83,8 +83,8 @@ From `cMD.out`:
   steps                        250000 (1000 ps)
   ensemble                     NPT
   platform                     CUDA
-  Speed (ns/day)               mean 2349.4   rms fluctuation 251.236
-  elapsed                      36.6 s
+  Speed (ns/day)               mean 2328     rms fluctuation 249.339
+  elapsed                      37.1 s
 ```
 
 `mdout.csv` opens at step 102500, not at zero: the step counter is absolute across the chain.

@@ -1,6 +1,6 @@
 # Paracetamol
 
-**Tested against md-tools `0.5.4`.** A single small molecule in water: 20 atoms, one rotatable
+**Tested against md-tools `0.6.1`.** A single small molecule in water: 20 atoms, one rotatable
 amide, one ring. The system to use when the question is about a LIGAND rather than about a protein.
 
 ![Paracetamol](images/paracetamol.png)

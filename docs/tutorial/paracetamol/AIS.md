@@ -1,7 +1,7 @@
 # AIS: paracetamol in explicit water
 
-**Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
-run executed as written, at that version. It has not been re-run for 0.6.1.
+**Tested against md-tools `0.6.1`.** Every command and every number on this page comes from a
+run executed as written, at that version.
 
 The AIS chain of [AIS: alanine dipeptide](../ALA/AIS.md), applied to a small molecule given as SMILES.
 Read that page first: it explains each step, and this page shows only where the ligand route differs
@@ -9,9 +9,9 @@ and what the run produced. Every command below was run exactly as written, and e
 copied from the files that run produced. The run used md-tools at commit `3da35d0` on one NVIDIA RTX
 3080, with CUDA and mixed precision.
 
-It took about 12 minutes. Building took **3.1 s** — the charges are not calculated here, they are
+It took about 10 minutes. Building took **3.1 s** — the charges are not calculated here, they are
 read from the package — scaling took 1 s, and the chain from minimisation to the last switching
-path took 11 min 34 s.
+path took 9 min 42 s.
 
 ## 1. The system, with a residue name
 
@@ -136,10 +136,10 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1 ./run.sh
 
 | stage | what | wall time |
 |---|---|---|
-| `min` | 1000 iterations, unscaled System | 2.1 s |
-| `eq_1`, `eq_2`, `eq_3` | 100 ps each on V0 | 11.1, 11.6, 10.8 s |
-| `source` | 2 ns on V0, 1101 ns/day | 152.1 s |
-| `AIS` | 64 paths × 20 ps | 468.2 s |
+| `min` | 1000 iterations, unscaled System | 0.9 s |
+| `eq_1`, `eq_2`, `eq_3` | 100 ps each on V0 | 7.7, 7.6, 7.9 s |
+| `source` | 2 ns on V0, 1278 ns/day | 136.0 s |
+| `AIS` | 64 paths × 20 ps | 422.1 s |
 
 The generated torsion list has 40 entries, named `TYL1_<atom>_<atom>_<atom>_<atom>`. From `AIS.log`:
 
@@ -175,13 +175,13 @@ python ais_reweight.py AIS-run1 TYL1_C2_N1_C3_C4 TYL1_C1_C2_N1_C3 TYL1_C5_C6_O2_
 
 ```text
 paths                    64
-work  mean / min / max   -226.69 / -229.94 / -222.54 kJ/mol
-dF (Jarzynski, V0 -> V1) -227.28 kJ/mol  (-91.12 kT)
-Kish effective samples   44.4 of 64
+work  mean / min / max   -226.57 / -229.82 / -221.03 kJ/mol
+dF (Jarzynski, V0 -> V1) -227.24 kJ/mol  (-91.10 kT)
+Kish effective samples   42.4 of 64
 ```
 
-The work values span 7.4 kJ/mol, about 3 kT, narrower than for alanine dipeptide, so more of the
-paths count: 44 effective samples.
+The work values span 8.8 kJ/mol, about 3.5 kT, narrower than for alanine dipeptide, so more of the
+paths count: 42 effective samples.
 
 **The amide, unscaled, looks the same in every curve.** This is the expected result. V0 and V1 share
 this torsion's potential, so switching has nothing to change:
@@ -195,7 +195,7 @@ this torsion's potential, so switching has nothing to change:
 ![ring rotation about N–C: source, unweighted and reweighted endpoints](images/paracetamol-ring.png)
 
 The grey source ensemble on V0 is smooth: 2001 rows over 2 ns, with four symmetric populations,
-because the ring's two faces are equivalent. The red estimate of V1 rests on 44 effective endpoints
+because the ring's two faces are equivalent. The red estimate of V1 rests on 42 effective endpoints
 spread over 36 bins, and most of its spikes are single paths. It cannot show whether V1's
 distribution differs from V0's for this torsion. For that, run more paths (`NPROC=4 ./run.sh` splits
 them over four GPUs), or histogram with fewer bins (`--bins 12`).

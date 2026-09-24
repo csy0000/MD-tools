@@ -1,9 +1,7 @@
 # Barnase and barstar
 
-**Provenance.** This page uses `input.assembly`, `input.missing_atoms` and
-`protonation.method: propka`, none of which exist in 0.5.4: it was executed at commit `cbc617a`,
-between 0.5.4 and 0.6.0. **It has not been re-run for 0.6.1**, and its counts predate changes to
-crystal-solvent retention and box geometry — see the note under *Build it*.
+**Tested against md-tools `0.6.1`.** Every command and every number on this page comes from a
+run executed as written, at that version.
 
 A protein–protein complex: barnase (an RNase) bound to its inhibitor barstar, from PDB 1BRS — one
 of the best-characterised protein–protein interfaces there is.
@@ -96,31 +94,30 @@ Command
 Preparation
   protonation  : pH 7.0, 0 -> 1730 hydrogens
   protonation  : method propka, PROPKA 3.5.1
-    A:18 HIS pKa 6.04 -> HID (propka (neutral) + openmm hydrogen-bond heuristic for HID/HIE) [near_ph]
+    A:18 HIS pKa 6.08 -> HID (propka (neutral) + openmm hydrogen-bond heuristic for HID/HIE) [near_ph]
     A:73 GLU pKa 6.69 -> GLU (propka) [near_ph]
-  solvation    : 8757 waters, ions {'NA': 28, 'CL': 24}, box dodecahedron (315.5 nm^3)
+  solvation    : 8823 waters, ions {'NA': 28, 'CL': 24}, box dodecahedron (317.9 nm^3)
 Counts
-  atoms                       29725
+  atoms                       29923
   solute atoms                3132
-  waters                      8847
+  waters                      8913
   ions                        {'NA': 28, 'CL': 24}
 ```
 
 !!! note "The solute is reproducible; the water count is not a fixed number"
-    Re-running this build at **0.6.1** gives the same solute exactly — 3132 solute atoms, the same
-    44 atoms added to the same 15 residues, the same 28 Na⁺ and 24 Cl⁻, the same 90 crystal waters
-    kept — and a slightly larger box: 317.9 nm³ against 315.5, and 8823 added waters against 8757,
-    for 29923 atoms rather than 29725. That is a 0.8 % change in box volume between `cbc617a` and
-    0.6.1, and the waters follow it.
+    An earlier version of this page, built at a commit between 0.5.4 and 0.6.0, reported the same
+    solute exactly — 3132 solute atoms, the same 44 atoms added to the same 15 residues, the same
+    28 Na⁺ and 24 Cl⁻, the same 90 crystal waters kept — in a box 0.8 % smaller: 315.5 nm³ and
+    8757 added waters, for 29725 atoms.
 
-    Treat every solvent count on this page as a record of one build, not a target. The number of
-    waters a box takes depends on the box the padding rule produces and on where the packing
-    happens to place them; two builds of the same structure can differ by a handful even at one
-    version. What must match, and does, is the solute: its atoms, its completed side chains, its
-    protonation and its net charge.
+    Treat every solvent count on this page as a record of one build, not a target. How many waters
+    a box takes depends on the box the padding rule produces and on where the packing happens to
+    place them, and both can shift between releases without anything being wrong. What must match,
+    and did, is the solute: its atoms, its completed side chains, its protonation and its net
+    charge. (PROPKA's His18 pKa moved 6.04 → 6.08 between the two, which changes no assignment.)
 
 **Reading the protonation.** PROPKA predicts every titratable group; md-tools prints the ones worth
-a second look. Barnase His18 (pKa 6.04) and Glu73 (6.69) are within one pH unit of 7, so their
+a second look. Barnase His18 (pKa 6.08) and Glu73 (6.69) are within one pH unit of 7, so their
 assigned states -- neutral His, deprotonated Glu -- should be read as uncertain. The other two
 histidines, barnase His102 (4.83) and barstar His17 (4.24), are predicted neutral too. PROPKA does
 not decide between the neutral tautomers HID and HIE; OpenMM's hydrogen-bond heuristic chose HID for

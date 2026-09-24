@@ -1,8 +1,7 @@
 # cMD: barnase–barstar from a deposited crystal structure
 
-**Provenance.** Every command and number comes from a run executed as written at commit
-`cbc617a`, between 0.5.4 and 0.6.0 — the flags this page uses do not exist in 0.5.4. It has not
-been re-run for 0.6.1.
+**Tested against md-tools `0.6.1`.** Every command and every number on this page comes from a
+run executed as written, at that version.
 
 Ordinary molecular dynamics on **barnase–barstar**
 ([PDB 1BRS](https://www.rcsb.org/structure/1BRS)), the ribonuclease and its inhibitor, from the
@@ -48,7 +47,7 @@ cd cMD-run1
 CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=8 ./run.sh
 ```
 
-It finished in 39 min 51 s:
+It finished in 40 min 42 s:
 
 ```text
 run.sh: all stages reported completion
@@ -61,9 +60,9 @@ From `cMD-run1/cMD.out`:
 ```text
 Averages
   over                         1000 report(s) in mdout.csv
-  Temperature (K)              mean 300.29   rms fluctuation 1.71354
-  Density (g/mL)               mean 1.02756   rms fluctuation 0.00270213
-  Speed (ns/day)               mean 375.622   rms fluctuation 12.6314
+  Temperature (K)              mean 300.31   rms fluctuation 1.6943
+  Density (g/mL)               mean 1.02756   rms fluctuation 0.00277362
+  Speed (ns/day)               mean 356.876   rms fluctuation 12.0968
 ```
 
 The structure of the complex over the run, from
@@ -71,17 +70,26 @@ The structure of the complex over the run, from
 
 ```text
 frames 1000, time 310-10300 ps
-complex CA RMSD (A): mean 0.86, last 1 ns 0.88, max 1.13
-chain index 0 (108 CA): CA RMSD mean 0.68 A, last 1 ns 0.67 A
-chain index 1 (89 CA): CA RMSD mean 0.83 A, last 1 ns 0.86 A
-interface heavy-atom contacts <4.5 A: start 311, mean 297, last 1 ns 286
-fraction of initial contacts kept: mean 0.64, last 1 ns 0.64
+complex CA RMSD (A): mean 0.84, last 1 ns 0.97, max 1.22
+chain index 0 (108 CA): CA RMSD mean 0.72 A, last 1 ns 0.85 A
+chain index 1 (89 CA): CA RMSD mean 0.73 A, last 1 ns 0.79 A
+interface heavy-atom contacts <4.5 A: start 311, mean 269, last 1 ns 218
+fraction of initial contacts kept: mean 0.63, last 1 ns 0.50
 ```
 
-Both proteins stay within 1 Å of the prepared structure and the complex as a whole within 1.1 Å;
-the interface keeps its size (311 heavy-atom contacts at the start, 286 in the last nanosecond),
-while about a third of the individual contacts exchange for others -- side chains at an interface
-move even when the complex does not.
+Both proteins stay within 1 Å of the prepared structure and the complex as a whole within 1.3 Å,
+so the fold and the assembly are stable. The interface is the looser number: it starts at 311
+heavy-atom contacts, averages 269 over the run and is at 218 in the last nanosecond, with about
+half the *individual* starting contacts still made — side chains at an interface move even when
+the complex does not.
+
+!!! note "The contact counts are one realisation, and they are the numbers to trust least here"
+    An earlier run of this page — a different build, 66 waters and 0.8 % of box volume apart —
+    gave 297 mean and 286 last-nanosecond contacts against the 269 and 218 above, from the same
+    commands. The CA RMSDs barely moved between the two; the contact counts moved by a quarter.
+    That is what a single 10 ns trajectory of a flexible interface is worth: enough to say the
+    complex did not come apart, not enough to quantify how the interface loosens. For that, run
+    several independent replicates and report a spread.
 
 !!! warning "Image the trajectory before measuring anything between the chains"
     The solute trajectory holds the chains as the periodic simulation holds them, so barnase and

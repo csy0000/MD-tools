@@ -1,16 +1,18 @@
 # Choosing τ_max for chignolin
 
-**Tested against md-tools `0.5.4`.** Background for [REST2: chignolin](REST2.md). Nothing here is
-needed to RUN that page; it is the measurement behind the τ span it uses.
+**Measured with md-tools `0.5.4`; not re-run for 0.6.1.** Background for
+[REST2: chignolin](REST2.md). Nothing here is needed to RUN that page — it is the measurement
+behind the τ span it uses, and the τ = 0.3 ladder it justifies was re-run at 0.6.1 with the same
+overall acceptance of 0.133.
 
 ## Why 0.3 and not 0.5
 
-The [paracetamol ladder](../paracetamol/REST2.md) spans τ 0 → 0.5 in four states and accepts 0.223. The same
+The [paracetamol ladder](../paracetamol/REST2.md) spans τ 0 → 0.5 in four states and accepts 0.222. The same
 span over chignolin, in six states, does not work:
 
 | ladder | solute atoms | states | τ span | overall acceptance |
 |---|---|---|---|---|
-| paracetamol | 20 | 4 | 0 → 0.5 | 0.223 |
+| paracetamol | 20 | 4 | 0 → 0.5 | 0.222 |
 | chignolin | 138 | 6 | 0 → 0.5 | **0.010** |
 | chignolin | 138 | 6 | 0 → 0.3 | **0.133** |
 

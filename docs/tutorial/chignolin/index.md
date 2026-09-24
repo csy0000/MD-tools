@@ -1,6 +1,6 @@
 # Chignolin
 
-**Tested against md-tools `0.5.4`.** A ten-residue designed peptide that folds into a β-hairpin —
+**Tested against md-tools `0.6.1`.** A ten-residue designed peptide that folds into a β-hairpin —
 the smallest system in this set with a real folding equilibrium.
 
 ![Chignolin, 1UAO](images/chignolin.png)

@@ -41,11 +41,12 @@ Run on NVIDIA RTX 3080 GPUs with CUDA and mixed precision.
 
 | page | version it was run against |
 |---|---|
-| [paracetamol / cMD](paracetamol/cMD.md) | `0.5.4` |
-| [paracetamol / REST2](paracetamol/REST2.md) | `0.5.4` |
-| [paracetamol / AIS](paracetamol/AIS.md) | `0.5.4` |
-| [chignolin / cMD](chignolin/cMD.md) | `0.5.4` |
-| [chignolin / REST2](chignolin/REST2.md) | `0.5.4` |
-| [alanine dipeptide / AIS](ALA/AIS.md) | `0.5.4` |
-| [barnase + barstar / cMD](barnase-barstar/cMD.md) | `0.5.4` |
+| [paracetamol / cMD](paracetamol/cMD.md) | `0.6.1` |
+| [paracetamol / REST2](paracetamol/REST2.md) | `0.6.1` |
+| [paracetamol / AIS](paracetamol/AIS.md) | `0.6.1` |
+| [chignolin / cMD](chignolin/cMD.md) | `0.6.1` |
+| [chignolin / REST2](chignolin/REST2.md) | `0.6.1` |
+| [alanine dipeptide / AIS](ALA/AIS.md) | `0.6.1` |
+| [barnase + barstar / cMD](barnase-barstar/cMD.md) | `0.6.1` |
 | [TYK2 + ejm_31 / selective REST2](tyk2-ejm31/REST2.md) | `0.6.1` |
+| [chignolin / choosing τ_max](chignolin/choosing-tau.md) | `0.5.4`, not re-run |

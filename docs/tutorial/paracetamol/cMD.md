@@ -1,13 +1,13 @@
 # cMD: paracetamol in explicit water, parameterised once
 
-**Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
-run executed as written, at that version. It has not been re-run for 0.6.1.
+**Tested against md-tools `0.6.1`.** Every command and every number on this page comes from a
+run executed as written, at that version.
 
 A complete conventional MD run of one small molecule, from a SMILES string to 200 ps of NPT
 production — and, on the way, **the parameter package every other paracetamol tutorial reuses**.
 This is the page to read first if you want to know where ligand parameters come from.
 
-It takes about a minute: the AM1-BCC charge calculation is most of it, and the 200 ps run is 14 s.
+It takes about a minute: the AM1-BCC charge calculation is most of it, and the 200 ps run is 13.5 s.
 
 ## What you need
 
@@ -220,11 +220,11 @@ Without `PCI_BUS_ID`, CUDA may number the cards differently from `nvidia-smi`.
 
 | stage | what | ensemble | elapsed |
 |---|---|---|---|
-| `min` | energy minimisation, 1000 iterations | — | 1.0 s |
-| `eq_1` | solute heavy atoms restrained | NVT | 1.5 s |
-| `eq_2` | solute heavy atoms restrained | NPT | 1.7 s |
-| `eq_3` | restraint released | NPT | 1.6 s |
-| `cMD` | production, 200 ps | NPT | 14.0 s |
+| `min` | energy minimisation, 1000 iterations | — | 0.9 s |
+| `eq_1` | solute heavy atoms restrained | NVT | 1.4 s |
+| `eq_2` | solute heavy atoms restrained | NPT | 1.5 s |
+| `eq_3` | restraint released | NPT | 1.4 s |
+| `cMD` | production, 200 ps | NPT | 13.5 s |
 
 ```text
 run.sh: all stages reported completion
@@ -254,9 +254,9 @@ Run
   platform                     CUDA
 Averages
   over                         20 report(s) in mdout.csv
-  Temperature (K)              mean 297.375   rms fluctuation 5.58951
-  Density (g/mL)               mean 0.994745   rms fluctuation 0.0120426
-  Speed (ns/day)               mean 1183.6    rms fluctuation 283.627
+  Temperature (K)              mean 298.784   rms fluctuation 7.29157
+  Density (g/mL)               mean 0.99488    rms fluctuation 0.013941
+  Speed (ns/day)               mean 1238      rms fluctuation 295.476
 Summary
   cMD: 100000 steps completed, 200 ps
 status               completed

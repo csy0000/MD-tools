@@ -1,7 +1,7 @@
 # REST2: paracetamol in explicit water, 10 ns per state
 
-**Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
-run executed as written, at that version. It has not been re-run for 0.6.1.
+**Tested against md-tools `0.6.1`.** Every command and every number on this page comes from a
+run executed as written, at that version.
 
 A four-state REST2 ladder over paracetamol, 10 ns of production **per state**. Every command below
 was run exactly as written, and every number is copied from the files that run produced.
@@ -10,7 +10,7 @@ The molecule is **not parameterised here**: this page reuses the package
 [cMD: paracetamol](../paracetamol/cMD.md) makes, so read that page first if you want to know where
 ligand parameters come from. The charge calculation happens once, there.
 
-The ladder took 19.5 min on one shared GPU, plus a few seconds to build and scale.
+The ladder took 25.4 min on one shared GPU, plus a few seconds to build and scale.
 
 ## What this runs
 
@@ -221,23 +221,28 @@ already completed were skipped, not repeated — only the ladder ran.
 ```text
 # steps completed       : 5000000 of 5000000
 # exchanges             : 5000 (every 1000 steps = 2.0 ps)
+# whole frames          : 100 (every 50000 steps)
 # solute frames         : 5000 (every 1000 steps)
 # production per replica: 10000.0 ps
+# exchange rule         : neighbouring
+# final state->walker   : [0, 3, 1, 2]
 # NEIGHBOURING-PAIR acceptance:
 #   basis: cumulative over every committed exchange row in the authoritative NetCDF, exchanges 0-4999
-#   state 0 <-> state 1   566/2500   0.226
-#   state 1 <-> state 2   525/2500   0.210
-#   state 2 <-> state 3   580/2500   0.232
-#   overall               1671/7500   0.223
+#   state 0 <-> state 1   544/2500   0.218
+#   state 1 <-> state 2   553/2500   0.221
+#   state 2 <-> state 3   565/2500   0.226
+#   overall               1662/7500   0.222
 # REST2:
 #   tau ladder            0, 0.166667, 0.333333, 0.5   (4 state(s), one temperature 300.0 K, NVT)
 #   scaling               solute-solute (1-tau)^2, solute-environment 1-tau
 #   left unscaled         bonds unscaled, angles unscaled, torsions: ordinary amide omega, aromatic ring bonds, other double bonds, impropers
 #   solute region         20 atom(s), 7 unscaled central bond(s), impropers unscaled
+#   system sha256         52db01895dced19f084147c3fb2ce3168149fe6112b5d4859ce60b472dad5132
 #   velocities on swap    never rescaled (one beta across the ladder)
 # TIMINGS:
-#   elapsed               1170.8 s
-#   throughput            737.95 ns/day per replica, 2951.81 ns/day aggregate over 4 state(s)
+#   elapsed               1523.8 s
+#   throughput            567.00 ns/day per replica, 2268.00 ns/day aggregate over 4 state(s)
+#   per step              0.3048 ms
 run_status: completed
 ```
 
@@ -252,33 +257,44 @@ swap busily while nothing ever crosses the ladder. Counting, per walker, full jo
 physical state to the hottest and back:
 
 ```text
-round trips (0 -> top -> 0), per walker: 51, 50, 58, 59
+round trips (0 -> top -> 0), per walker: 56, 48, 54, 46
 ```
 
-**The unscaled amide stays planar, and the scaled rotation loosens.** Measured on
-`solute_state<i>_prod1.nc`, 5000 frames each. An angle needs a circular standard deviation —
-179° and −179° are 2° apart, not 358°:
+**The unscaled amide stays planar.** Measured on `solute_state<i>_prod1.nc`, 5000 frames each. An
+angle needs a circular standard deviation — 179° and −179° are 2° apart, not 358°:
 
 | torsion | scaled? | state 0 (τ = 0) | state 1 | state 2 | state 3 (τ = 0.5) |
 |---|---|---|---|---|---|
-| amide ω, atoms 0-1-3-4 | no | 12.2° | 12.0° | 11.9° | 11.8° |
-| ring about N–C, atoms 1-3-4-5 | yes | 126.7° | 138.6° | 160.2° | 161.1° |
+| amide ω, atoms 0-1-3-4 | no | 12.2° | 12.3° | 12.0° | 11.7° |
+| ring about N–C, atoms 1-3-4-5 | yes | 148.5° | 139.2° | 174.1° | 138.6° |
 
 and **not one cis frame in any state** — 0 of 5000 with \|ω\| < 90°, state 0 to state 3. The amide
 looks the same in the hottest state as in the physical one, which is the point of leaving it
 unscaled: a hot state that isomerised it would sample a geometry state 0 never visits, and every
-exchange would carry that geometry down the ladder. The ring rotation, which REST2 is meant to
-help, is visibly freer at τ = 0.5.
+exchange would carry that geometry down the ladder. **That is the robust result on this page**: the
+12° and the zero cis frames come back unchanged from one run to the next.
+
+!!! warning "The ring row does not show what it looks like it should"
+    A reader expects the scaled torsion to widen with τ, and an earlier run of this page obliged —
+    126.7°, 138.6°, 160.2°, 161.1°. This one does not: 148.5°, 139.2°, 174.1°, 138.6°, with the
+    hottest state *narrower* than the physical one. Nothing is wrong with either run. The ring has
+    two equivalent faces, so its distribution is multi-modal, and a circular standard deviation
+    over a multi-modal distribution is a weighted sum of population occupancies that 10 ns does
+    not pin down. It is the wrong statistic for this torsion, and no number of extra digits fixes
+    that. To show that REST2 frees the rotation, compare the *populations* — or the barrier
+    crossing rate, which is what τ_max should be chosen by (see
+    [choosing τ_max](../chignolin/choosing-tau.md)).
 
 The files follow the thermodynamic **state**: `solute_state0_prod1.nc` is the physical ensemble, and
 no demultiplexing is needed before analysing it. `solute.yaml` records that the ladder integrated
 the saved states (`detection_route: saved-state`, and the sha256 of each).
 
 !!! note "One shared GPU is slower, and samples the same"
-    On four RTX 3080s this ladder ran at about 1400 ns/day per replica; on one shared A5000 it
-    runs at 738. The physics is identical — same Systems, same ladder, same acceptance near 0.22,
-    the same round-trip counts to within the scatter of a different random trajectory. A shared
-    card costs wall time, not correctness.
+    This run put all four workers on one RTX 3080 under MPS and got 567 ns/day per replica.
+    Earlier runs of the same ladder reached about 1400 ns/day per replica on four separate RTX
+    3080s and 738 on one shared A5000. The physics is identical across all of them — same Systems,
+    same ladder, acceptance near 0.22, the same round-trip counts to within the scatter of a
+    different random trajectory. A shared card costs wall time, not correctness.
 
 ## Next
 

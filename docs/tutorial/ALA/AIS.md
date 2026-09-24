@@ -1,17 +1,15 @@
 # AIS: alanine dipeptide in explicit water
 
-**Tested against md-tools `0.5.4`.** Every command and every number on this page comes from a
-run executed as written, at that version. It has not been re-run for 0.6.1.
+**Tested against md-tools `0.6.1`.** Every command and every number on this page comes from a
+run executed as written, at that version.
 
 Annealed importance sampling (AIS) for alanine dipeptide (ACE-ALA-NME), starting from the sequence
-and ending with a reweighted φ/ψ distribution, with md-tools **0.5.4**. Every command below was run
-exactly as written, and every number is copied from the files that run produced. The run used
-md-tools at commit `3da35d0` on one NVIDIA RTX 3080, with CUDA and mixed precision. The picture in
-step 2 came from commit `fb99d6e`, which draws peptides. Build the same scaled state without that
-commit and you get the same state file, only without the picture.
+and ending with a reweighted φ/ψ distribution. Every command below was run exactly as written on
+one NVIDIA RTX 3080, with CUDA and mixed precision, and every number is copied from the files that
+run produced.
 
-The whole thing took about 12 minutes. Building took 3 s and scaling 1 s. The chain from
-minimisation to the last switching path took 11 min 33 s.
+The whole thing took about 10 minutes. Building took 3 s and scaling 1 s. The chain from
+minimisation to the last switching path took 9 min 44 s.
 
 ## What AIS does here
 
@@ -257,10 +255,10 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 ./run.sh
 
 | stage | what | wall time |
 |---|---|---|
-| `min` | 1000 iterations, unscaled System | 2.3 s |
-| `eq_1`, `eq_2`, `eq_3` | 100 ps each on V0 | 11.3, 12.0, 12.4 s |
-| `source` | 2 ns on V0, 1079 ns/day | 154.1 s |
-| `AIS` | 64 paths × 20 ps | 464.7 s |
+| `min` | 1000 iterations, unscaled System | 0.9 s |
+| `eq_1`, `eq_2`, `eq_3` | 100 ps each on V0 | 8.2, 8.1, 8.0 s |
+| `source` | 2 ns on V0, 1241 ns/day | 139.4 s |
+| `AIS` | 64 paths × 20 ps | 418.9 s |
 
 It ended with `run.sh: all stages reported completion`. The paths are independent, so
 `NPROC=4 ./run.sh` with four GPUs splits them four ways. Path *n* writes the same files whatever the
@@ -362,9 +360,9 @@ python ais_reweight.py AIS-run1 ALA2_C_N_CA_C ALA2_N_CA_C_N
 
 ```text
 paths                    64
-work  mean / min / max   -134.79 / -139.27 / -128.17 kJ/mol
-dF (Jarzynski, V0 -> V1) -135.70 kJ/mol  (-54.40 kT)
-Kish effective samples   34.9 of 64
+work  mean / min / max   -134.40 / -138.26 / -128.14 kJ/mol
+dF (Jarzynski, V0 -> V1) -135.23 kJ/mol  (-54.21 kT)
+Kish effective samples   39.3 of 64
 wrote AIS-run1/reweighted_ALA2_C_N_CA_C.png
 wrote AIS-run1/reweighted_ALA2_N_CA_C_N.png
 ```
@@ -380,13 +378,13 @@ How to read them:
   20 ps of switching left the paths.
 * **Red** is the endpoints weighted by `exp(−βW)`, which estimates V1, the physical dipeptide. φ
   narrows onto the region around −75°, and ψ concentrates in the β/polyproline band near 150°.
-* **ESS 34.9 of 64.** The work values span 11 kJ/mol, about 4.4 kT, so a few paths do not dominate
+* **ESS 39.3 of 64.** The work values span 10 kJ/mol, about 4.1 kT, so a few paths do not dominate
   the weights. The narrower the work distribution, the closer this number stays to the path count.
   If it drops below about a tenth of the paths, switch more slowly or run more paths.
-* **dF = −135.7 kJ/mol** is F(V1) − F(V0), the free energy of restoring the solute's interactions
+* **dF = −135.2 kJ/mol** is F(V1) − F(V0), the free energy of restoring the solute's interactions
   to full strength. It checks the method, but it is not a physical observable of the peptide.
 
-64 endpoints spread over 36 bins make a jagged histogram, and the red curve carries only 35 effective
+64 endpoints spread over 36 bins make a jagged histogram, and the red curve carries only 39 effective
 samples. The shape is informative. The height of any single bin is not.
 
 **The amide stays trans throughout.** The torsion `ACE1_CH3_C_N_CA`, the ACE–ALA ω, is within 90° of

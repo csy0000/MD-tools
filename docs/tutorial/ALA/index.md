@@ -1,6 +1,6 @@
 # Alanine dipeptide
 
-**Tested against md-tools `0.5.4`.** The smallest system in this set: two peptide bonds capped at
+**Tested against md-tools `0.6.1`.** The smallest system in this set: two peptide bonds capped at
 both ends, 22 atoms, and the standard toy for everything that depends on backbone torsions.
 
 ![The alanine dipeptide](images/ala.png)
