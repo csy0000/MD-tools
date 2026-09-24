@@ -90,7 +90,7 @@ Outputs
 **Keep `TYL.sdf`.** It holds the bond orders, which is how the next step knows which bonds are
 aromatic and which C–N is an amide.
 
-## 2. Build V0
+## 2. Build the two end states
 
 `build/scaler.config` is the same file as for alanine dipeptide:
 
@@ -98,10 +98,15 @@ aromatic and which C–N is an amide.
 method: AIS
 schedule:
   kind: linear
-  n_states: 1
-  tau_min: 0.5
+  n_states: 2
+  tau_min: 0.0
   tau_max: 0.5
 ```
+
+It writes **both** end states, and the index ascends with τ exactly as in a REST2 ladder:
+`system_state0.xml` is τ 0 — V1, the physical molecule — and `system_state1.xml` is τ 0.5 — V0,
+what the source ensemble samples. `V0`/`V1` number the λ endpoints, not the τ values, so the
+digits invert; [the alanine page](../ALA/AIS.md#2-build-the-two-end-states) has the table.
 
 ```bash
 md-openmm build-top --rest2-scaler -s build/built.xml -p build/built.pdb --config build/scaler.config

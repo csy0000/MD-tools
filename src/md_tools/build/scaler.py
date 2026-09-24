@@ -27,10 +27,22 @@ from typing import Any, Mapping
 from .strict import ConfigError, Field, Schema, Section
 
 #: The methods a scaled-state directory is named after. REST2 is a ladder; cMD is a fixed-tau hot
-#: run; AIS is the scaled end state V0 a switch starts from (user, 2026-09-16). cMD and AIS hold ONE
-#: state each.
+#: run; AIS holds BOTH end states a switch mixes.
+#:
+#: The rule across all three is one rule: `system_state<i>` ascends with tau, and `scaler.yaml`
+#: records `state0_is_physical` so a reader never has to infer it from a filename.
+#:
+#: AIS held ONE state until 0.6.1 -- the scaled end state alone, at `system_state0.xml`, with V1
+#: referenced as `build/built.xml`. That made state 0 the UNPHYSICAL one for AIS and the physical
+#: one for REST2, and the scaler had to warn about it in prose on every AIS build. It now writes
+#: two: state 0 at tau 0 (V1, the physical Hamiltonian) and state 1 at tau_max (V0, what the
+#: source ensemble samples). Both end states then come from ONE writer, and `scaler.yaml` records
+#: a digest for each instead of leaving V1 as an unrecorded reference to another file.
 METHODS = ("REST2", "cMD", "AIS")
-SINGLE_STATE_METHODS = ("cMD", "AIS")
+SINGLE_STATE_METHODS = ("cMD",)
+
+#: AIS mixes exactly two end states, and the physical one is always state 0.
+TWO_STATE_METHODS = ("AIS",)
 
 
 def _check_schedule(resolved: dict[str, Any]) -> None:
@@ -48,6 +60,23 @@ def _check_schedule(resolved: dict[str, Any]) -> None:
         raise ConfigError(
             f"method {resolved['method']} uses ONE fixed-tau Hamiltonian, but the schedule has {n} "
             f"states. Use n_states: 1 with tau_min == tau_max, or method: REST2 for a ladder.")
+    if resolved["method"] in TWO_STATE_METHODS:
+        if n != 2:
+            raise ConfigError(
+                f"method {resolved['method']} mixes TWO end states and writes both, but the "
+                f"schedule has {n} state(s). Use n_states: 2 with tau_min: 0.0 and tau_max set to "
+                f"the scaled end state's tau.\n"
+                f"  Before 0.6.1 this was `n_states: 1` with tau_min == tau_max == that tau, and "
+                f"only the scaled state was written, as system_state0.xml. That made state 0 the "
+                f"unphysical one for AIS and the physical one for REST2. Both end states are now "
+                f"written, state 0 at tau 0 (V1) and state 1 at tau_max (V0), so a state index "
+                f"means the same thing in every method.\n"
+                f"  A run built against the old layout must be rebuilt: its run.sh names "
+                f"system_state0.xml as V0, which is now V1.")
+        if float(low) != 0.0:
+            raise ConfigError(
+                f"method {resolved['method']}: tau_min must be 0.0 -- state 0 IS the physical end "
+                f"state V1 -- but it is {low}. Put the scaled end state's tau in tau_max.")
 
 
 def _check_residue_settings(resolved: dict[str, Any]) -> None:

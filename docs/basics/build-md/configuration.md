@@ -537,7 +537,7 @@ The equilibrium trajectory the paths start from, sampled from V0 -- typically a 
 
 type: boolean · default: `false`
 
-Generate the source ensemble in this run instead of naming one. build-md then writes a stage chain before AIS: minimisation of the UNSCALED build/built.xml (the shared min/), the equilibration stages and a `source` production stage on V0, then the switching paths from that stage's whole-system trajectory. `run.sh` passes build/built.xml for minimisation and as V1, and the saved scaled state build/AIS/system_state0.xml (V0) for everything else. `stages.production_steps` is the source run's length and `reporting.crd_printout_whole` its frame interval, so both must be set. `dynamics.tau` must be V0's tau, which the stages check against the scaler.yaml beside the state and which makes the equilibration fixed-volume.
+Generate the source ensemble in this run instead of naming one. build-md then writes a stage chain before AIS: minimisation of the UNSCALED build/built.xml (the shared min/), the equilibration stages and a `source` production stage on V0, then the switching paths from that stage's whole-system trajectory. `run.sh` passes build/built.xml for minimisation and as V1, and the saved scaled state build/AIS/system_state1.xml (V0) for everything else, with build/AIS/system_state0.xml as V1. `stages.production_steps` is the source run's length and `reporting.crd_printout_whole` its frame interval, so both must be set. `dynamics.tau` must be V0's tau, which the stages check against the scaler.yaml beside the state and which makes the equilibration fixed-volume.
 
 #### `ais_source.topology`
 

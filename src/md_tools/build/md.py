@@ -313,7 +313,8 @@ MD_SCHEMA = Schema(
                       "`source` production stage on V0, then the switching paths from that "
                       "stage's whole-system trajectory. `run.sh` passes build/built.xml for "
                       "minimisation and as V1, and the saved scaled state "
-                      "build/AIS/system_state0.xml (V0) for everything else. "
+                      "build/AIS/system_state1.xml (V0) for everything else, with "
+                      "build/AIS/system_state0.xml as V1. "
                       "`stages.production_steps` is the source run's length and "
                       "`reporting.crd_printout_whole` its frame interval, so both must be set. "
                       "`dynamics.tau` must be V0's tau, which the stages check against the "
@@ -554,7 +555,7 @@ def _check_ais(resolved: dict[str, Any]) -> None:
         if not float(resolved["dynamics"]["tau"]) > 0.0:
             raise ConfigError(
                 "ais_source.generate is true but dynamics.tau is 0. The source stages run on V0, "
-                "the saved scaled state build/AIS/system_state0.xml, and dynamics.tau is the claim "
+                "the saved scaled state build/AIS/system_state1.xml, and dynamics.tau is the claim "
                 "about it they check -- at 0 they would run the built System, which is V1, and the "
                 "switch would go from V1 to itself. Set dynamics.tau to V0's tau.")
         steps = int(resolved["stages"]["production_steps"])
@@ -1846,7 +1847,11 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
         previous = None
         hot = any(float(stage.get("tau") or 0.0) > 0.0 for stage in plan)
         if hot:
-            state = f"build/{resolved['protocol']}/system_state0.xml"
+            # AIS writes BOTH end states: state 0 is tau 0 (V1, physical) and state 1 is the
+            # scaled end state (V0). Every other method's hot state is its state 0. The index
+            # ascends with tau in all of them, which is the whole point of the arrangement.
+            hot_index = 1 if resolved["protocol"] == "AIS" else 0
+            state = f"build/{resolved['protocol']}/system_state{hot_index}.xml"
             lines += [
                 "# The hot stages integrate the SAVED scaled state; a stage scales nothing and",
                 "# checks its tau against the scaler.yaml beside that file. Minimisation uses the",
@@ -1858,6 +1863,19 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
                 '  echo "run.sh: no scaled state at ${SCALED_SYSTEM}" >&2; exit 2',
                 'fi',
                 '']
+            if resolved["protocol"] == "AIS":
+                v1 = f"build/{resolved['protocol']}/system_state0.xml"
+                lines += [
+                    "# V1, the physical end state, is a SAVED state too -- written by the same",
+                    "# scaler run as V0, so both end states have one writer and scaler.yaml",
+                    "# records a digest for each. It is tau 0, so it is the built System's",
+                    "# Hamiltonian; it is named here rather than as build/built.xml because an",
+                    "# AIS pair must agree in force layout, and one writer makes that structural.",
+                    f'V1_STATE="${{HERE}}/../{v1}"',
+                    'if [[ ! -f "${V1_STATE}" ]]; then',
+                    '  echo "run.sh: no physical end state at ${V1_STATE}" >&2; exit 2',
+                    'fi',
+                    '']
         for stage in plan:
             target = targets[stage["name"]]
             system_var = ('"${SCALED_SYSTEM}"' if float(stage.get("tau") or 0.0) > 0.0
@@ -1890,7 +1908,8 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
                 '',
                 'echo "== AIS =="',
                 '"${LAUNCH[@]}" md-openmm md-run -i ../input/AIS.in \\',
-                '  -p "${TOPOLOGY}" -s "${SCALED_SYSTEM}" -p2 "${TOPOLOGY}" -s2 "${SYSTEM}" \\',
+                '  -p "${TOPOLOGY}" -s "${SCALED_SYSTEM}" -p2 "${TOPOLOGY}" '
+                '-s2 "${V1_STATE}" \\',
                 '  -o AIS.out -log AIS.log "$@"',
                 '']
         if protocol == "REST2":
@@ -2181,13 +2200,21 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
     from ..run.preflight import PreflightError, validate_generated_chain
 
     # THE SAVED STATE a hot stage integrates, required before anything is written. A stage
-    # scales nothing (user, 2026-09-16): with tau > 0 it runs on build/<protocol>/system_state0.xml,
-    # which `build-top --rest2-scaler` writes, and checks its tau against the record beside it.
+    # scales nothing (user, 2026-09-16): with tau > 0 it runs on the saved scaled state that
+    # `build-top --rest2-scaler` writes, and checks its tau against the record beside it.
+    #
+    # WHICH state that is differs by method, because the index ascends with tau. AIS writes both
+    # end states -- state 0 at tau 0 (V1) and state 1 at tau_max (V0) -- so its hot stages run on
+    # state 1. Every other method's hot state is its state 0.
     hot_state = None
     if any(float(stage.get("tau") or 0.0) > 0.0 for stage in chain_plan):
         from ..rest2.states import state_system_name
 
-        hot_state = dataset.build / resolved["protocol"] / state_system_name(0)
+        hot_index = 1 if resolved["protocol"] == "AIS" else 0
+        schedule = ("n_states: 2, tau_min: 0.0, tau_max = "
+                    f"{resolved['dynamics']['tau']}" if resolved["protocol"] == "AIS"
+                    else f"n_states: 1, tau_min = tau_max = {resolved['dynamics']['tau']}")
+        hot_state = dataset.build / resolved["protocol"] / state_system_name(hot_index)
         if not hot_state.is_file():
             raise ConfigError(
                 f"this {resolved['protocol']} run declares dynamics.tau = "
@@ -2195,9 +2222,8 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
                 f"and there is none at {hot_state}. A stage no longer scales in memory. Build it "
                 f"first:\n  md-openmm build-top --rest2-scaler -s {dataset.built('xml')} "
                 f"-p {dataset.built('pdb')} --config <scaler.config with method: "
-                f"{resolved['protocol']}, n_states: 1, tau_min = tau_max = "
-                f"{resolved['dynamics']['tau']}>\n(expected build/{resolved['protocol']}/"
-                f"{state_system_name(0)})")
+                f"{resolved['protocol']}, {schedule}>\n(expected build/{resolved['protocol']}/"
+                f"{state_system_name(hot_index)})")
 
     chain = []
     for stage in chain_plan:

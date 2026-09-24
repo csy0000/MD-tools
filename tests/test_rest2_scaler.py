@@ -162,14 +162,47 @@ def test_a_hot_cmd_state_is_one_file_at_its_tau(tmp_path):
     assert record["state0_is_physical"] is False
 
 
-def test_an_ais_end_state_is_one_file_in_its_own_directory(tmp_path):
+def test_ais_writes_both_end_states_with_the_physical_one_first(tmp_path):
+    """AIS mixes two end states and writes BOTH, state 0 at tau 0 and state 1 at tau_max.
+
+    It wrote only the scaled one until 0.6.1, as `system_state0.xml`, with V1 referenced as
+    `build/built.xml`. That made state 0 the UNPHYSICAL state for AIS and the physical one for
+    REST2, so a state index meant two different things depending on the method, and the scaler
+    had to warn about it in prose on every AIS build.
+
+    The rule is now one rule in every method: the index ascends with tau, and `state0_is_physical`
+    records whether state 0 sits at tau 0 rather than leaving it to be read off a filename. Note
+    the numbers invert against the LAMBDA endpoints -- V0, the state the source ensemble samples,
+    is state 1 -- because tau describes the files and lambda describes the run.
+    """
     from md_tools.rest2.states import scaled_state_identity
 
     build = _dataset(tmp_path / "ALA")
-    _scale(build, _config(build, "method: AIS\nschedule:\n  n_states: 1\n"
-                                 "  tau_min: 0.5\n  tau_max: 0.5\n"))
-    identity = scaled_state_identity(build / "AIS" / "system_state0.xml")
-    assert identity["method"] == "AIS" and identity["tau"] == 0.5
+    record = _scale(build, _config(build, "method: AIS\nschedule:\n  n_states: 2\n"
+                                          "  tau_min: 0.0\n  tau_max: 0.5\n"))
+
+    physical = scaled_state_identity(build / "AIS" / "system_state0.xml")
+    scaled = scaled_state_identity(build / "AIS" / "system_state1.xml")
+    assert physical["method"] == "AIS" and physical["tau"] == 0.0
+    assert scaled["method"] == "AIS" and scaled["tau"] == 0.5
+
+    # One writer for both end states, so scaler.yaml carries a digest for each instead of
+    # leaving V1 as an unrecorded reference to another file.
+    assert record["state0_is_physical"] is True
+    assert [state["tau"] for state in record["states"]] == [0.0, 0.5]
+    assert len({state["sha256"] for state in record["states"]}) == 2
+    assert "NOT the physical Hamiltonian" not in (build / "AIS" / "scaler.log").read_text("utf-8")
+
+
+def test_the_old_single_state_ais_schedule_is_refused_by_name(tmp_path):
+    """A pre-0.6.1 scaler.config must not quietly build something that means something else."""
+    from md_tools.build.strict import ConfigError
+
+    build = _dataset(tmp_path / "ALA")
+    with pytest.raises(ConfigError, match="mixes TWO end states"):
+        _scale(build, _config(build, "method: AIS\nschedule:\n  n_states: 1\n"
+                                     "  tau_min: 0.5\n  tau_max: 0.5\n"))
+    assert not (build / "AIS").exists()
 
 
 def test_a_ladder_that_starts_scaled_says_so_in_words(tmp_path):

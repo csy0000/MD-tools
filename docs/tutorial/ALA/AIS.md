@@ -86,17 +86,17 @@ Counts
 The box is a rhombic dodecahedron of 19.1 nm³. Hydrogen mass repartitioning lets every later stage
 run at 4 fs. `timestep_fs: auto` reads that from the masses in the System, not from the configuration.
 
-## 2. Build V0, the scaled state
+## 2. Build the two end states
 
-V1 is `build/built.xml`, which already exists. V0 is a scaled copy of it, built once and saved as a
-file. `build/scaler.config` describes one state, at τ = 0.5:
+Both end states are saved as files, written once by one scaler run.
+`build/scaler.config` names the two taus:
 
 ```yaml
 method: AIS
 schedule:
   kind: linear
-  n_states: 1
-  tau_min: 0.5
+  n_states: 2
+  tau_min: 0.0
   tau_max: 0.5
 ```
 
@@ -108,8 +108,9 @@ It writes `build/AIS/`:
 
 ```text
 build/AIS/
-├── system_state0.xml      V0
-├── scaler.yaml            what V0 is and how it was made (sha256 of every file)
+├── system_state0.xml      tau 0    -- V1, the physical end state
+├── system_state1.xml      tau 0.5  -- V0, what the source ensemble samples
+├── scaler.yaml            what each state is and how it was made (sha256 of every file)
 ├── scaler.log             the same, for a person
 └── protein-unscaled.png   what stays unscaled, drawn
 ```
@@ -117,16 +118,40 @@ build/AIS/
 From `scaler.log`:
 
 ```text
-  schedule                    linear, 1 state(s), tau 0.5 .. 0.5
-  state 0 is at tau = 0.5: it is NOT the physical Hamiltonian. REST2 recovers the physical ensemble only from an unscaled state, so no state here samples it.
+  schedule                    linear, 2 state(s), tau 0.0 .. 0.5
   solute                      22 atom(s)
   unscaled torsions           amide omega 2 bond(s), aromatic ring 0 bond(s), double bond 0 bond(s), impropers 2 term(s)
                               14 torsion term(s) unscaled, 28 scaled
   picture of protein          protein-unscaled.png  (ACE-ALA-NME: red = unscaled torsions across bond(s) 4-6, 14-16; 2 improper centre(s))
+
+States
+------
+  system_state0.xml      tau 0.0       (1-tau)^2 1.000000   1-tau 1.000000
+  system_state1.xml      tau 0.5       (1-tau)^2 0.250000   1-tau 0.500000
 ```
 
-The warning is correct, and for AIS it is intended: V0 is not meant to be physical. The switching
-paths are what bring the sample back to V1.
+!!! note "The state index follows τ; the V-number follows λ. They run opposite ways."
+    `system_state<i>` ascends with τ in **every** method, so state 0 is the τ = 0 Hamiltonian here
+    exactly as it is in a REST2 ladder, and `scaler.yaml` records `state0_is_physical: true`
+    rather than leaving it to be read off a filename.
+
+    `V0` and `V1` are the **λ endpoints**, not τ values: λ runs 0 → 1 from V0 to V1, and V0 is
+    whichever state the source ensemble was sampled from. For an anneal-to-physical switch that
+    is the scaled one, so:
+
+    | | λ | τ | file |
+    |---|---|---|---|
+    | **V0** — source, scaled | 0 | 0.5 | `system_state1.xml` |
+    | **V1** — physical | 1 | 0 | `system_state0.xml` |
+
+    The digits invert, and that is not an accident to be tidied away: τ is a property of the
+    files, λ is a property of the run. Before 0.6.1 AIS wrote only the scaled state, as
+    `system_state0.xml`, which made state 0 unphysical for AIS and physical for REST2. An old
+    tree must be rebuilt; `build-top --rest2-scaler` refuses the old `n_states: 1` schedule by
+    name and says so.
+
+Writing both end states from one scaler run also means `scaler.yaml` carries a digest for each,
+instead of V1 being an unrecorded reference to `build/built.xml`.
 
 `protein-unscaled.png` marks in red both amide C–N bonds, ACE–ALA (4–6) and ALA–NME (14–16). Every
 torsion about those bonds keeps its full strength in V0. The numbers are atom indices.
@@ -186,7 +211,7 @@ Three parts do what earlier releases left to you:
   It lists every proper torsion of the solute by explicit atom selector, 41 of them here. The result
   is an ordinary `cv.yaml`: copy it, delete lines and name the copy in `collective_variables.file`
   if you want fewer.
-* **`dynamics.tau: 0.5`** scales nothing. It is a claim about `build/AIS/system_state0.xml`, and
+* **`dynamics.tau: 0.5`** scales nothing. It is a claim about `build/AIS/system_state1.xml`, and
   every hot stage refuses if the scaler record disagrees with it. A scaled run is fixed-volume
   throughout, so the two "NPT" equilibration stages run as NVT and are named that way.
 
@@ -219,7 +244,8 @@ by every method run on this system, so it never depends on one method's scaled s
 stage runs on V0:
 
 ```text
-SCALED_SYSTEM="${HERE}/../build/AIS/system_state0.xml"
+SCALED_SYSTEM="${HERE}/../build/AIS/system_state1.xml"   # V0, tau 0.5
+V1_STATE="${HERE}/../build/AIS/system_state0.xml"        # V1, tau 0
 
 echo "== min =="
 md-openmm md-run -i ../input/min.in \
@@ -240,7 +266,7 @@ md-openmm md-run -i ../input/source.in \
 ...
 echo "== AIS =="
 "${LAUNCH[@]}" md-openmm md-run -i ../input/AIS.in \
-  -p "${TOPOLOGY}" -s "${SCALED_SYSTEM}" -p2 "${TOPOLOGY}" -s2 "${SYSTEM}" \
+  -p "${TOPOLOGY}" -s "${SCALED_SYSTEM}" -p2 "${TOPOLOGY}" -s2 "${V1_STATE}" \
   -o AIS.out -log AIS.log "$@"
 ```
 
@@ -271,7 +297,7 @@ From `AIS.log`:
 ```text
 End states
 ----------
-  V0                          .../build/AIS/system_state0.xml  (.../build/built.pdb)  -- the source ensemble's state
+  V0                          .../build/AIS/system_state1.xml  (.../build/built.pdb)  -- the source ensemble's state
   V1                          .../build/built.xml  (.../build/built.pdb)
   mixed forces                NonbondedForce, PeriodicTorsionForce
   shared forces               3 identical in both, added once
@@ -297,7 +323,7 @@ Source ensemble
   angles and the motion remover are identical in both files, so they are added once. md-tools refuses
   two Systems that differ in atoms, masses, constraints, box, barostat or force layout.
 * **CONFIRMED.** The source stage wrote the sha256 of the System it integrated into
-  `whole_prod1.nc`, and it matches `system_state0.xml` (the digest `scaler.yaml` records). The paths
+  `whole_prod1.nc`, and it matches `system_state1.xml` (the digest `scaler.yaml` records). The paths
   therefore start from an ensemble of exactly the V0 they switch from. A source trajectory from
   somewhere else, with no digest, reads *asserted* instead.
 
