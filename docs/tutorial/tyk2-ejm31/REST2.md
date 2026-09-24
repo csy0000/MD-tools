@@ -4,11 +4,11 @@
 executed as written on four RTX 3080s. The settings are justified in
 [Choosing τ_max and the rung count](choosing-the-ladder.md); you do not need it to follow this page.
 
-**Two routes**, both starting from the same configuration with both selection lists EMPTY:
+**Two routes**, both starting from the same configuration with neither selection list present —
+there is no way to write an empty mask, so a category you heat nothing of is one you leave out:
 
 ```yaml
-backbone_scaling_list: []
-sidechain_scaling_list: []
+# no backbone_scaling_list, no sidechain_scaling_list
 ```
 
 | | what you change | rungs | τ_max | what it buys |
@@ -22,7 +22,7 @@ worse — recovering the acceptance takes more rungs, not a colder top rung. And
 barriers you need crossed, which for this system are the ligand's: 0.4 crosses them, and the
 pocket's χ torsions are along for the ride either way.
 
-**`backbone_scaling_list` stays `[]` in both routes.** The pocket finder prints a
+**`backbone_scaling_list` is absent in both routes.** The pocket finder prints a
 `sidechain_scaling_list` line specifically, and the backbone key — a separate supported key taking
 the same mask grammar — is for a hinge or a loop you mean to reorganise. A pocket's χ torsions were
 never the constraint here: going from τ 0.25 to 0.4 gained **6x on the ligand's torsions and 11% on
@@ -141,14 +141,12 @@ you expect in the site is 0.02 nm beyond, that is a decision for you, not for th
 
 ## 2. The scaled states, one set per route
 
-**Route A — the ligand alone.** Both selection lists empty; only the ligand is named:
+**Route A — the ligand alone.** Neither selection list appears; only the ligand is named:
 
 ```yaml
 # build/scaler-ligand.config
 method: REST2
 schedule: {kind: linear, n_states: 8, tau_min: 0.0, tau_max: 0.5}
-backbone_scaling_list: []
-sidechain_scaling_list: []
 ligand_scaling_dict:
   L01:
     mask: ":<ligand residue index>"
@@ -161,7 +159,6 @@ ligand_scaling_dict:
 # build/scaler-pocket.config
 method: REST2
 schedule: {kind: linear, n_states: 12, tau_min: 0.0, tau_max: 0.4}
-backbone_scaling_list: []
 sidechain_scaling_list: "<the mask step 1 printed>"
 ligand_scaling_dict:
   L01:
@@ -169,9 +166,16 @@ ligand_scaling_dict:
     torsion_exclusions: auto
 ```
 
-An empty list and an absent key are not the same thing to read, but they resolve the same way: a
-category you name empty is a category you heat nothing of. Writing them explicitly is how the two
-routes stay one file apart.
+!!! warning "A category you heat nothing of is one you leave OUT"
+    There is no way to write an empty mask. `backbone_scaling_list: []` is refused with
+    `expected str, got list`, and `backbone_scaling_list: ""` with `the mask is empty`. Omitting
+    the key is the only accepted way to say "heat no backbone", so the two routes differ by
+    whether the `sidechain_scaling_list` line is present at all.
+
+**The mask's numbers are ONE-BASED topology residue indices** (`md-tools-residue-mask/1`). The
+helper in step 1 prints them ready to paste, so this only matters if you build a mask yourself
+from a tool that counts residues from zero — mdtraj does, and an off-by-one mask heats the wrong
+residues while resolving perfectly.
 
 ```bash
 md-openmm build-top --rest2-scaler -s build/built.xml -p build/built.pdb \
