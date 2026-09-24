@@ -241,8 +241,28 @@ def _resolve_platform(machine: dict[str, Any], *, cpu: bool, device: Any,
             index, detail)
 
 
+def _measurement_state(coordinates):
+    """`-c` as (positions, box vectors), or None when there is nothing usable to read.
+
+    Returns the BOX as well as the positions, always together: an NPT equilibration shrinks the
+    box (7.661 -> 7.500 nm for barnase-barstar), and those positions in the System's default box
+    are +7e11 kJ/mol. A `-c` that cannot be parsed is not an error here -- the measurement is a
+    placement heuristic, and every real check of this file happens elsewhere -- so the caller
+    falls back rather than refusing a launch over a benchmark.
+    """
+    if not coordinates:
+        return None
+    try:
+        from openmm import XmlSerializer
+
+        state = XmlSerializer.deserialize(Path(coordinates).read_text())
+        return state.getPositions(), state.getPeriodicBoxVectors()
+    except Exception:                                      # noqa: BLE001 - heuristic, not a check
+        return None
+
+
 def _plan_placement(coordination, machine: dict[str, Any], *, cpu: bool, device: Any,
-                    loaded, topology, system, protocol: str):
+                    loaded, topology, system, protocol: str, coordinates=None):
     """CPUs, devices and MPS for every worker of this launch. Collective; refuses before output.
 
     In order, because each step needs the one before:
@@ -298,9 +318,22 @@ def _plan_placement(coordination, machine: dict[str, Any], *, cpu: bool, device:
                 f"{protocol}: placement by measured throughput needs this run's System to "
                 f"measure with, and none was given to the preflight.")
         pair = loaded if loaded is not None else load_inputs(topology, system)
+        # THE COORDINATES THIS RUN IS ABOUT TO INTEGRATE, not the topology's.
+        #
+        # `-p` is the topology; the coordinates inside it are whatever `build-top` wrote and
+        # nothing ever relaxes them -- `build/built.pdb` is deliberately never rewritten, so the
+        # minimiser's result went to `min/` and the equilibration's to `eq/`. Measuring on it
+        # benchmarks the one structure in the tree still at its as-built energy, and for a large
+        # solvated system an unthermostatted Verlet integrator diverges on it within ten steps.
+        # `-c` is REQUIRED for a ladder and must already exist, so the relaxed state is always
+        # there; it is simply what the run loads moments later.
+        positions, box = pair.pdb.positions, None
+        state = _measurement_state(coordinates)
+        if state is not None:
+            positions, box = state
         try:
             return placing.measure_device_throughput(
-                pair.system, pair.pdb.positions, devices=hosts[mine["host"]],
+                pair.system, positions, box_vectors=box, devices=hosts[mine["host"]],
                 precision=request.precision)
         except Exception as failure:                       # noqa: BLE001 - reported as refusal
             raise PreflightError(
@@ -843,7 +876,8 @@ def _fail_here_if_asked(coordination) -> None:
 
 
 def _common(*, topology, system, outputs, inputs, cpu, device, number_of_groups, replicas,
-            protocol, machine_config, check_particles=True, load=False, serial=False):
+            protocol, machine_config, check_particles=True, load=False, serial=False,
+            coordinates=None):
     """Steps 1-11, in order. Shared by every mode; each mode adds only its own inputs."""
     _check_command_line(cpu=cpu, device=device, number_of_groups=number_of_groups)
 
@@ -885,7 +919,8 @@ def _common(*, topology, system, outputs, inputs, cpu, device, number_of_groups,
     # rank sees identically; placement and the platform are rank-local -- this rank's CPUs, this
     # rank's device, this rank's CUDA context -- and each is made collective.
     plan = _plan_placement(coordination, machine, cpu=cpu, device=device, loaded=loaded,
-                           topology=topology, system=system, protocol=protocol)
+                           topology=topology, system=system, protocol=protocol,
+                           coordinates=coordinates)
     acceleration, index, detail = collectively(
         coordination, lambda: _resolve_platform(machine, cpu=cpu, device=device, plan=plan),
         what=f"the {protocol} preflight")
@@ -917,6 +952,7 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
         outputs=inventory.roles,
         inputs=inputs, cpu=cpu, device=device, number_of_groups=None, replicas=None,
         protocol=protocol, machine_config=machine_config, load=timestep_fs is not None,
+        coordinates=coordinates,
         # A cMD stage is serial by construction. `_common` refuses a plural launch after the
         # coordination is open and before placement or anything is created, so it stops at the
         # preflight with every rank agreeing rather than partway through with N writers.
@@ -1471,6 +1507,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
         outputs=inventory.roles,
         inputs=inputs, cpu=cpu, device=device, number_of_groups=number_of_groups,
         replicas=int(replicas), protocol=protocol, machine_config=machine_config,
+        coordinates=coordinates,
         # ALWAYS loaded: the saved states' solute record, force audit and per-state equilibration
         # all need the topology and the state System.
         load=True)
@@ -1936,7 +1973,8 @@ def preflight_ais(*, topology, system, source, topology2=None, system2=None,
         outputs={"o": output, "log": log},
         inputs={"source-traj": source, "s2": system2, "p2": topology2}, cpu=cpu, device=device,
         number_of_groups=number_of_groups, replicas=None, protocol="AIS",
-        machine_config=machine_config, load=dynamics is not None)
+        machine_config=machine_config, load=dynamics is not None,
+        coordinates=coordinates)
 
     # After existence, before any output: a source whose suffix and contents disagree is neither.
     source_format = check_trajectory_declaration(source, what="-source-traj")

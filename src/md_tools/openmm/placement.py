@@ -668,6 +668,7 @@ def _why_doubled_up(plan: "LaunchPlan", mine: Mapping[str, Any]) -> str:
 # ---------------------------------------------------------------------------------------------
 
 def measure_device_throughput(system, positions, *, devices: int, precision: str,
+                              box_vectors=None,
                               warmup_steps: int = 50, min_seconds: float = 1.0,
                               max_steps: int = 5000, timestep_ps: float = 0.002,
                               clock=time.perf_counter) -> dict[str, Any]:
@@ -680,6 +681,15 @@ def measure_device_throughput(system, positions, *, devices: int, precision: str
 
     A Verlet integrator with no thermostat, because this measures kernels rather than sampling
     anything, and nothing it produces is kept.
+
+    **`positions` must be a state the run could integrate, and `box_vectors` must be ITS box.**
+    A Verlet integrator conserves energy, so it has nothing to dissipate a close contact with:
+    handed a freshly solvated structure, it converts the contact energy to motion, steps into a
+    worse contact, and diverges. Barnase-barstar reached `Particle coordinate is NaN` in ten
+    steps that way, from `build/built.pdb` at -188350 kJ/mol against an equilibrated -402289.
+    The caller therefore passes the run's own `-c`, and its box with it -- those same positions
+    in the System's DEFAULT box are +7e11 kJ/mol, so taking one without the other trades a NaN
+    for a worse one.
     """
     from openmm import Context, Platform, VerletIntegrator
 
@@ -690,6 +700,8 @@ def measure_device_throughput(system, positions, *, devices: int, precision: str
         context = Context(system, integrator, platform,
                           {"DeviceIndex": str(device), "Precision": precision})
         try:
+            if box_vectors is not None:
+                context.setPeriodicBoxVectors(*box_vectors)
             context.setPositions(positions)
             context.setVelocitiesToTemperature(300.0, 1)
             integrator.step(int(warmup_steps))
