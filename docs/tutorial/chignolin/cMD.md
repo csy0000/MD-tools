@@ -5,51 +5,10 @@ written, at that version, on one RTX 3080. It has not been re-run for 0.6.1.
 
 1 ns of ordinary MD on the folded NMR structure of [chignolin](index.md). **Total time: 1 min 3 s.**
 
-## 1. The structure
+**Starts from a built system.** Do [the system page](index.md) first: it takes the first NMR
+model of 1UAO and writes `CHI/build/built.xml`, `built.pdb` and `built.log`.
 
-```bash
-mkdir -p CHI/build && cd CHI/build
-curl -O https://files.rcsb.org/download/1UAO.pdb
-awk '/^MODEL/{m++} m==1{print} /^ENDMDL/{if(m==1) exit}' 1UAO.pdb \
-    | grep -E '^(ATOM|TER)' > chignolin.pdb
-echo END >> chignolin.pdb
-```
-
-1UAO holds 18 NMR models; the build needs one. That leaves 138 atoms.
-
-## 2. Build the system
-
-`build-top.config`:
-
-```yaml
-solute:
-  kind: peptide
-solvent:
-  model: TIP3P
-  padding_nm: 1.5
-hydrogen_mass_repartitioning:
-  enabled: true
-```
-
-```bash
-md-openmm build-top -i chignolin.pdb -os built.xml -op built.pdb \
-    -log built.log --config build-top.config
-```
-
-Writes the System, the structure that matches it and the build record. From `built.log`:
-
-```text
-  atoms                       2553
-  solute atoms                138
-  waters                      803
-  ions                        {'NA': 4, 'CL': 2}
-  HMR                         applied, target 3.024 amu, recommend 4.0 fs
-```
-
-Four Na⁺ against two Cl⁻ because chignolin carries −2. What every key means:
-[build-top](../../basics/build-top/index.md).
-
-## 3. Generate the run
+## 1. Generate the run
 
 `cMD.config` at the dataset root:
 
@@ -80,7 +39,7 @@ the masses in `built.xml` rather than from this file — HMR has to be proved, n
 `build-md` writes and checks: [build-md](../../basics/build-md/index.md). Every key:
 [the configuration reference](../../basics/build-md/configuration.md).
 
-## 4. Run it
+## 2. Run it
 
 ```bash
 cd cMD-run1
@@ -97,7 +56,7 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1 ./run.sh
 == cMD ==     cMD:          250000 steps completed, 1000 ps
 ```
 
-## 5. What it wrote
+## 3. What it wrote
 
 ```text
 CHI/

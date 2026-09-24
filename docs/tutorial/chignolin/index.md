@@ -14,26 +14,49 @@ Folding and unfolding are slow compared with a torsion rotation but fast compare
 so chignolin is where an enhanced-sampling method can be shown to reach a state that plain MD
 reaches only occasionally — and where the two can still be compared in a day.
 
-## Build it
+## 1. The structure
 
 ```bash
+mkdir -p CHI/build && cd CHI/build
 curl -O https://files.rcsb.org/download/1UAO.pdb
+awk '/^MODEL/{m++} m==1{print} /^ENDMDL/{if(m==1) exit}' 1UAO.pdb \
+    | grep -E '^(ATOM|TER)' > chignolin.pdb
+echo END >> chignolin.pdb
 ```
 
-The file holds eighteen NMR models; the build uses the first. Explicit solvent:
+1UAO holds 18 NMR models; the build needs one. That leaves 138 atoms.
+
+## 2. Build the system
+
+`build-top.config`:
 
 ```yaml
-# build.config
-solvent: {model: TIP3P, padding_nm: 1.0}
-constraints: {type: HBonds, rigid_water: true}
+solute:
+  kind: peptide
+solvent:
+  model: TIP3P
+  padding_nm: 1.5
+hydrogen_mass_repartitioning:
+  enabled: true
 ```
 
 ```bash
-md-openmm build-top -i 1UAO.pdb --config build.config \
-    -os build/built.xml -op build/built.pdb -log build/built.log
+md-openmm build-top -i chignolin.pdb -os built.xml -op built.pdb \
+    -log built.log --config build-top.config
 ```
 
-About 2,550 atoms once solvated, which runs at nanoseconds per minute on one card.
+Writes the System, the structure that matches it and the build record. From `built.log`:
+
+```text
+  atoms                       2553
+  solute atoms                138
+  waters                      803
+  ions                        {'NA': 4, 'CL': 2}
+  HMR                         applied, target 3.024 amu, recommend 4.0 fs
+```
+
+Four Na⁺ against two Cl⁻ because chignolin carries −2. What every key means:
+[build-top](../../basics/build-top/index.md).
 
 ## Where to go next
 
