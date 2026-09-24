@@ -18,7 +18,8 @@ from openmm.app import Topology, element                                        
 
 from md_tools.rest2.masks import parse_residue_mask                             # noqa: E402
 from md_tools.rest2.pocket import (DEFAULT_CUTOFF_NM, POCKET_CRITERION, PocketError,  # noqa: E402
-                                   main, pocket_report, pocket_residues, residue_mask)
+                                   interface_residues, main, pocket_report,
+                                   pocket_residues, residue_mask)
 
 
 def _structure(residues, *, box=None):
@@ -189,3 +190,87 @@ def test_the_command_line_prints_a_mask_and_refuses_a_bad_ligand(tmp_path, capsy
     assert "out of range" in capsys.readouterr().err
     assert main([str(build / "built.pdb"), "--ligand", ":13@CA"]) == 2
     assert "atom selector" in capsys.readouterr().err
+
+
+# --- two regions: a ligand site is the special case of an interface -----------------------------
+
+def test_an_interface_reports_both_sides_separately_and_together():
+    """A protein-protein contact has two sides, and which residues belong to which one matters.
+
+    The helper could not express this at all until 0.6.1: `--ligand` names exactly ONE residue, so
+    a chain had no way to be the reference. The barnase-barstar tutorial hand-rolled the same
+    criterion in Python as a result, and that hand-rolled loop is where the one-based/zero-based
+    mask bug bit -- a mask that resolves perfectly and heats the wrong residues.
+
+    Both sides are sidechains here, so the combined mask is what goes in `sidechain_scaling_list`;
+    the per-side masks are printed too, because for a LIGAND site only one side belongs there.
+    """
+    topology, positions = _structure([
+        ("ALA", [("C", (0.0, 0.0, 0.0))]),      # 1: side one, far from side two
+        ("LEU", [("C", (1.0, 0.0, 0.0))]),      # 2: side one, in contact with 3
+        ("VAL", [("C", (1.2, 0.0, 0.0))]),      # 3: side two, in contact with 2
+        ("PHE", [("C", (3.0, 0.0, 0.0))]),      # 4: side two, far from side one
+    ])
+    found = interface_residues(topology, positions, int1=":1-2", int2=":3-4", cutoff_nm=0.5)
+
+    assert [e["residue"] for e in found["residues"]] == [2, 3]
+    assert {e["residue"]: e["side"] for e in found["residues"]} == {2: "int1", 3: "int2"}
+
+    text = pocket_report(found, source="built.pdb")
+    assert 'sidechain_scaling_list: ":2-3"' in text
+    assert '--int1 side only: ":2"' in text
+    assert '--int2 side only: ":3"' in text
+    assert "nothing resolves an interface at run time" in text
+
+
+def test_only_cross_region_contacts_count():
+    """Neighbours WITHIN a region are not contacts across the interface between the regions.
+
+    Residues 1 and 2 are 0.1 nm apart and both on side one. Neither is near side two. If the
+    measurement were "close to anything", both would be selected and the mask would be the whole
+    protein.
+    """
+    topology, positions = _structure([
+        ("ALA", [("C", (0.0, 0.0, 0.0))]),
+        ("LEU", [("C", (0.1, 0.0, 0.0))]),
+        ("VAL", [("C", (5.0, 0.0, 0.0))]),
+    ])
+    found = interface_residues(topology, positions, int1=":1-2", int2=":3", cutoff_nm=0.5)
+    assert found["residues"] == []
+
+
+def test_a_pocket_does_not_report_the_ligand_as_lining_itself():
+    """With `int1` defaulted the question is "what lines this?", and the answer is the other side.
+
+    Reporting the int2 residues back would say a ligand lines its own pocket, and would put it in
+    a sidechain list where it must NOT appear -- `ligand_scaling_dict` already scales it, so
+    naming it twice scales it twice.
+    """
+    topology, positions = _structure([LIGAND, ("ALA", [("C", (0.4, 0.0, 0.0))])])
+    found = interface_residues(topology, positions, int2=":1", cutoff_nm=0.5)
+    assert [e["residue"] for e in found["residues"]] == [2]
+    text = pocket_report(found, source="built.pdb")
+    assert 'sidechain_scaling_list: ":2"' in text
+    assert "belongs in" in text and "ligand_scaling_dict" in text
+
+
+def test_the_two_regions_may_not_overlap():
+    topology, positions = _structure([("ALA", [("C", (0.0, 0.0, 0.0))]),
+                                      ("LEU", [("C", (0.4, 0.0, 0.0))])])
+    with pytest.raises(PocketError, match="two SIDES"):
+        interface_residues(topology, positions, int1=":1-2", int2=":2", cutoff_nm=0.5)
+
+
+def test_ligand_is_an_alias_for_int2_on_the_command_line(tmp_path, capsys):
+    """`--ligand` keeps working, and means exactly `--int2` with int1 defaulted."""
+    from openmm.app import PDBFile
+
+    topology, positions = _structure([LIGAND, ("ALA", [("C", (0.4, 0.0, 0.0))])])
+    path = tmp_path / "built.pdb"
+    with path.open("w") as handle:
+        PDBFile.writeFile(topology, positions, handle)
+
+    assert main([str(path), "--ligand", ":1", "--cutoff-nm", "0.5"]) == 0
+    with_ligand = capsys.readouterr().out
+    assert main([str(path), "--int2", ":1", "--cutoff-nm", "0.5"]) == 0
+    assert capsys.readouterr().out == with_ligand

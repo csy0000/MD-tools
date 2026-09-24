@@ -31,10 +31,11 @@ from pathlib import Path
 from typing import Any, Sequence
 
 __all__ = ["POCKET_CRITERION", "DEFAULT_CUTOFF_NM", "DEFAULT_MARGIN_NM", "PocketError",
-           "pocket_residues", "residue_mask", "pocket_report", "main"]
+           "interface_residues", "pocket_residues", "residue_mask", "pocket_report", "main"]
 
-#: Name and version of the criterion, printed with every report.
-POCKET_CRITERION = "md-tools-pocket-selection/1"
+#: Name and version of the criterion, printed with every report. Version 2 reports a SIDE per
+#: entry, because the two regions are no longer a ligand and everything else.
+POCKET_CRITERION = "md-tools-pocket-selection/2"
 #: 5 A: the conventional first-shell cutoff for "lining the site".
 DEFAULT_CUTOFF_NM = 0.5
 #: How far beyond the cutoff the report still lists a residue, marked as NOT selected.
@@ -62,78 +63,138 @@ def _minimum_image(deltas, box):
     return deltas
 
 
-def pocket_residues(topology, positions, *, ligand, cutoff_nm: float = DEFAULT_CUTOFF_NM,
-                    margin_nm: float = DEFAULT_MARGIN_NM,
-                    include_solvent: bool = False) -> dict[str, Any]:
-    """Every residue with a heavy atom strictly within `cutoff_nm` of the ligand's heavy atoms.
+def _resolve_side(spec, residues, *, where: str) -> list[int]:
+    """A mask or a residue index -> the one-based numbers it names, checked against the topology."""
+    from .masks import parse_residue_mask
 
-    `ligand` is a one-based topology residue index, or a mask naming exactly one residue.
-    Returns the ligand's own description, the selected residues and the near misses, each with its
-    minimum distance in nm.
+    if isinstance(spec, str):
+        numbers = parse_residue_mask(spec, where=where)
+    elif isinstance(spec, (list, tuple, set, frozenset)):
+        numbers = [int(n) for n in spec]
+    else:
+        numbers = [int(spec)]
+    if not numbers:
+        raise PocketError(f"{where} names no residue")
+    for number in numbers:
+        if not 1 <= number <= len(residues):
+            raise PocketError(f"{where}: residue {number} is out of range; this topology has "
+                              f"{len(residues)} residues")
+    return sorted(set(numbers))
+
+
+def interface_residues(topology, positions, *, int2, int1=None,
+                       cutoff_nm: float = DEFAULT_CUTOFF_NM,
+                       margin_nm: float = DEFAULT_MARGIN_NM,
+                       include_solvent: bool = False) -> dict[str, Any]:
+    """Residues of each region with a heavy atom strictly within `cutoff_nm` of the OTHER region.
+
+    Two regions, because an interface has two sides and a ligand site is only the special case
+    where one of them is a single residue. `--int2` is that side; `int1` defaults to every
+    non-solvent residue NOT in `int2`, which reproduces what `--ligand` meant.
+
+    The result reports the two sides SEPARATELY, and that separation is the point. For a ligand
+    site the int1 side is the pocket and belongs in `sidechain_scaling_list`, while the ligand
+    itself belongs in `ligand_scaling_dict` and must NOT go in the sidechain list; for a
+    protein-protein interface both sides are sidechains and the combined mask is what you want.
+    Merging them unconditionally would be wrong for exactly one of those, silently.
+
+    Only cross-region pairs are measured. Contacts WITHIN a region are not contacts across an
+    interface, so a residue is never selected because of its own neighbours.
     """
     import numpy as np
     from openmm import unit
 
-    from .masks import parse_residue_mask
     from .regions import residue_kind
     from .selection import topology_digest
 
     residues = list(topology.residues())
-    if isinstance(ligand, str):
-        numbers = parse_residue_mask(ligand, where="--ligand")
-        if len(numbers) != 1:
-            raise PocketError(f"--ligand {ligand!r} names {len(numbers)} residues; a pocket is "
-                              f"measured around ONE ligand instance")
-        number = numbers[0]
+    side2 = _resolve_side(int2, residues, where="--int2")
+    if int1 is None:
+        chosen = set(side2)
+        side1 = [r.index + 1 for r in residues
+                 if r.index + 1 not in chosen
+                 and (include_solvent or residue_kind(r) != "solvent")]
     else:
-        number = int(ligand)
-    if not 1 <= number <= len(residues):
-        raise PocketError(f"residue {number} is out of range; this topology has {len(residues)} "
-                          f"residues")
-    target = residues[number - 1]
+        side1 = _resolve_side(int1, residues, where="--int1")
+    overlap = sorted(set(side1) & set(side2))
+    if overlap:
+        raise PocketError(f"--int1 and --int2 share residue(s) {overlap[:6]}; an interface has "
+                          f"two SIDES, and a residue cannot be on both")
+
     if hasattr(positions, "value_in_unit"):
         positions = positions.value_in_unit(unit.nanometer)
     xyz = np.asarray([[float(v) for v in row] for row in positions], dtype=float)
     if xyz.shape[0] != topology.getNumAtoms():
         raise PocketError(f"{xyz.shape[0]} positions for {topology.getNumAtoms()} atoms")
-
     box = topology.getPeriodicBoxVectors()
     if box is not None:
         box = np.asarray([[float(v.value_in_unit(unit.nanometer)) for v in row] for row in box])
-    ligand_atoms = _heavy(target)
-    if not ligand_atoms:
-        raise PocketError(f"residue {number} ({target.name}) has no heavy atom to measure from")
-    ligand_xyz = xyz[[atom.index for atom in ligand_atoms]]
+
+    def heavy_indices(numbers):
+        out = []
+        for number in numbers:
+            out.extend(atom.index for atom in _heavy(residues[number - 1]))
+        return out
+
+    def describe(number, distance, side):
+        residue = residues[number - 1]
+        return {"residue": number, "chain": residue.chain.id,
+                "residue_id": str(residue.id).strip(),
+                "insertion_code": (residue.insertionCode or "").strip(),
+                "residue_name": residue.name, "kind": residue_kind(residue), "side": side,
+                "minimum_distance_nm": round(distance, 4)}
+
+    # BOTH sides are measured when both were stated, because an interface has two of them.
+    # When int1 was defaulted the caller asked "what lines this?", and the answer is the other
+    # side only: reporting the int2 residues back would say a ligand lines its own pocket, and
+    # would put it in a sidechain list where it must not appear.
+    sides = [(side1, side2, "int1")]
+    if int1 is not None:
+        sides.append((side2, side1, "int2"))
 
     selected, near = [], []
-    for other in residues:
-        if other.index == target.index:
-            continue
-        kind = residue_kind(other)
-        if kind == "solvent" and not include_solvent:
-            continue
-        atoms = _heavy(other)
-        if not atoms:
-            continue
-        deltas = (xyz[[a.index for a in atoms]][:, None, :] - ligand_xyz[None, :, :]).reshape(-1, 3)
-        distance = float(np.linalg.norm(_minimum_image(deltas, box), axis=1).min())
-        entry = {"residue": other.index + 1, "chain": other.chain.id,
-                 "residue_id": str(other.id).strip(),
-                 "insertion_code": (other.insertionCode or "").strip(),
-                 "residue_name": other.name, "kind": kind,
-                 "minimum_distance_nm": round(distance, 4)}
-        if distance < float(cutoff_nm):
-            selected.append(entry)
-        elif distance < float(cutoff_nm) + float(margin_nm):
-            near.append(entry)
+    for mine, theirs, side in sides:
+        other_xyz = xyz[heavy_indices(theirs)]
+        if not len(other_xyz):
+            raise PocketError("the opposite region has no heavy atom to measure against")
+        for number in mine:
+            atoms = _heavy(residues[number - 1])
+            if not atoms:
+                continue                       # glycine, an ion: nothing to measure or to heat
+            deltas = (xyz[[a.index for a in atoms]][:, None, :]
+                      - other_xyz[None, :, :]).reshape(-1, 3)
+            distance = float(np.linalg.norm(_minimum_image(deltas, box), axis=1).min())
+            if distance < float(cutoff_nm):
+                selected.append(describe(number, distance, side))
+            elif distance < float(cutoff_nm) + float(margin_nm):
+                near.append(describe(number, distance, side))
+
     return {"criterion": POCKET_CRITERION, "cutoff_nm": float(cutoff_nm),
             "margin_nm": float(margin_nm), "periodic": box is not None,
             "topology_sha256": topology_digest(topology),
-            "ligand": {"residue": number, "residue_name": target.name,
-                       "chain": target.chain.id, "residue_id": str(target.id).strip(),
-                       "heavy_atoms": len(ligand_atoms)},
+            "int1": {"residues": side1, "stated": int1 is not None},
+            "int2": {"residues": side2, "stated": True},
             "residues": sorted(selected, key=lambda e: e["residue"]),
             "near_misses": sorted(near, key=lambda e: e["minimum_distance_nm"])}
+
+
+def pocket_residues(topology, positions, *, ligand, cutoff_nm: float = DEFAULT_CUTOFF_NM,
+                    margin_nm: float = DEFAULT_MARGIN_NM,
+                    include_solvent: bool = False) -> dict[str, Any]:
+    """The ligand case of `interface_residues`: one residue against everything else.
+
+    Kept because it is the common call and reads as what it does. `--ligand X` is exactly
+    `--int2 X` with `int1` left to default, so this adds no second criterion.
+    """
+    residues = list(topology.residues())
+    numbers = _resolve_side(ligand, residues, where="--ligand")
+    if len(numbers) != 1:
+        raise PocketError(f"--ligand {ligand!r} names {len(numbers)} residues; a pocket is "
+                          f"measured around ONE ligand instance. For a region with several "
+                          f"residues, or for a protein-protein interface, use --int1/--int2.")
+    return interface_residues(topology, positions, int2=numbers, int1=None,
+                              cutoff_nm=cutoff_nm, margin_nm=margin_nm,
+                              include_solvent=include_solvent)
 
 
 def residue_mask(numbers: Sequence[int]) -> str:
@@ -152,38 +213,58 @@ def residue_mask(numbers: Sequence[int]) -> str:
 
 
 def pocket_report(found: dict[str, Any], *, source: str | None = None) -> str:
-    """The printed block: what was measured, the table, and the mask to paste."""
-    ligand = found["ligand"]
+    """The printed block: what was measured, the table, and the mask(s) to paste."""
+    side1 = [e for e in found["residues"] if e["side"] == "int1"]
+    side2 = [e for e in found["residues"] if e["side"] == "int2"]
+    stated = found["int1"]["stated"]
     lines = [
-        f"pocket of {ligand['residue_name']} at topology residue {ligand['residue']} "
-        f"(chain {ligand['chain']!r}, id {ligand['residue_id']}), "
-        f"{ligand['heavy_atoms']} heavy atoms",
-        f"  criterion : {found['criterion']}: heavy-atom minimum distance, strictly < "
-        f"{found['cutoff_nm']} nm"
+        (f"interface between --int1 ({len(found['int1']['residues'])} residue(s)) and "
+         f"--int2 ({len(found['int2']['residues'])} residue(s))" if stated else
+         f"pocket around --int2 ({len(found['int2']['residues'])} residue(s)), measured against "
+         f"every other non-solvent residue"),
+        f"  criterion : {found['criterion']}: heavy-atom minimum distance ACROSS the two "
+        f"regions, strictly < {found['cutoff_nm']} nm"
         + (", minimum image (the topology has a box)" if found["periodic"] else ", no box"),
         f"  structure : {source or 'the given topology'}  "
         f"topology_sha256 {found['topology_sha256'][:12]}...",
         "",
-        "  index  chain  resid   name   min distance (nm)",
+        "   side  index  chain  resid   name   min distance (nm)",
     ]
     for entry in found["residues"]:
-        lines.append(f"  {entry['residue']:>5}  {entry['chain']:>5}  {entry['residue_id']:>5}"
-                     f"{entry['insertion_code']:<1}  {entry['residue_name']:<5}  "
-                     f"{entry['minimum_distance_nm']:>8.3f}")
+        lines.append(f"  {entry['side']:>5}  {entry['residue']:>5}  {entry['chain']:>5}  "
+                     f"{entry['residue_id']:>5}{entry['insertion_code']:<1}  "
+                     f"{entry['residue_name']:<5}  {entry['minimum_distance_nm']:>8.3f}")
     if not found["residues"]:
         lines.append("  (none)")
-    mask = residue_mask([entry["residue"] for entry in found["residues"]])
-    lines += ["", "  paste into the scaler configuration, unchanged:",
-              f"    sidechain_scaling_list: \"{mask}\"" if mask else
-              "    (nothing within the cutoff)"]
+
+    mask1 = residue_mask([e["residue"] for e in side1])
+    mask2 = residue_mask([e["residue"] for e in side2])
+    both = residue_mask([e["residue"] for e in found["residues"]])
+    lines += ["", "  paste into the scaler configuration, unchanged:"]
+    if stated:
+        # Both sides are protein: the combined mask is the sidechain list.
+        lines += [f"    sidechain_scaling_list: \"{both}\"" if both else
+                  "    (nothing within the cutoff)"]
+        if mask1 and mask2:
+            lines += [f"      --int1 side only: \"{mask1}\"",
+                      f"      --int2 side only: \"{mask2}\""]
+    else:
+        # A ligand site: the pocket is the int1 side ONLY. The ligand goes in
+        # ligand_scaling_dict, and putting it in the sidechain list too would scale it twice.
+        lines += [f"    sidechain_scaling_list: \"{mask1}\"" if mask1 else
+                  "    (nothing within the cutoff)"]
+        lines += ["      the --int2 residue(s) are NOT in that list: a ligand belongs in",
+                  "      ligand_scaling_dict, and naming it in both would scale it twice."]
     if found["near_misses"]:
         lines += ["", f"  NOT selected, within {found['margin_nm']} nm beyond the cutoff "
                       f"(the boundary is strict):"]
         for entry in found["near_misses"]:
-            lines.append(f"    {entry['residue']:>5} {entry['residue_name']:<5} "
+            lines.append(f"    {entry['side']:>5} {entry['residue']:>5} "
+                         f"{entry['residue_name']:<5} "
                          f"{entry['minimum_distance_nm']:>8.3f} nm")
+    what = "an interface" if stated else "a pocket"
     lines += ["", "  The mask is one-based TOPOLOGY residue indices of this structure. It is a "
-                  "decision, not a", "  query: nothing resolves a pocket at run time."]
+                  "decision, not a", f"  query: nothing resolves {what} at run time."]
     return "\n".join(lines)
 
 
@@ -194,11 +275,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="python -m md_tools.rest2.pocket", allow_abbrev=False,
-        description="Print the residues lining a ligand, as a mask to paste into a "
-                    "scaler.config. Resolves nothing at run time.")
+        description="Print the residues lining an interface -- a ligand site or a "
+                    "protein-protein contact -- as a mask to paste into a scaler.config. "
+                    "Resolves nothing at run time.")
     parser.add_argument("structure", help="the built structure (build/built.pdb or .cif)")
-    parser.add_argument("--ligand", required=True,
-                        help="the ligand instance: a mask naming ONE residue, e.g. \":201\"")
+    parser.add_argument("--int2", "--ligand", dest="int2", required=True,
+                        help="one side of the interface, as a mask. For a ligand site this is "
+                             "the ligand, e.g. \":291\"; --ligand is the same option under its "
+                             "older name.")
+    parser.add_argument("--int1", default=None,
+                        help="the other side, as a mask, e.g. a protein chain. Left out, it is "
+                             "every non-solvent residue NOT in --int2, which is what a ligand "
+                             "pocket means.")
     parser.add_argument("--cutoff-nm", type=float, default=DEFAULT_CUTOFF_NM)
     parser.add_argument("--margin-nm", type=float, default=DEFAULT_MARGIN_NM)
     parser.add_argument("--include-solvent", action="store_true",
@@ -209,10 +297,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     reader = PDBxFile if path.suffix.lower() in (".cif", ".pdbx") else PDBFile
     structure = reader(str(path))
     try:
-        found = pocket_residues(structure.topology, structure.positions,
-                                ligand=arguments.ligand, cutoff_nm=arguments.cutoff_nm,
-                                margin_nm=arguments.margin_nm,
-                                include_solvent=arguments.include_solvent)
+        found = interface_residues(structure.topology, structure.positions,
+                                   int2=arguments.int2, int1=arguments.int1,
+                                   cutoff_nm=arguments.cutoff_nm,
+                                   margin_nm=arguments.margin_nm,
+                                   include_solvent=arguments.include_solvent)
     except (PocketError, ValueError) as refusal:
         print(f"pocket: {refusal}", file=__import__("sys").stderr)
         return 2
