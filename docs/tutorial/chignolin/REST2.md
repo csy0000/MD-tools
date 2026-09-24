@@ -15,7 +15,7 @@ cards it is about 7 min 30 s — the same physics either way; see step 5.
 This is the peptide counterpart of [REST2: paracetamol](../paracetamol/REST2.md). The steps are the same; what
 differs is that a peptide needs no SDF — its unscaled torsions come from the residue table, not from
 bond orders — and that the ladder has to be spaced more tightly, which
-[step 6](#6-why-tau_max-is-03-and-not-05) measures rather than asserts.
+[choosing τ_max](choosing-tau.md) measures rather than asserts.
 
 ## What this runs
 

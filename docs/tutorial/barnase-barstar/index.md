@@ -104,17 +104,27 @@ Counts
   ions                        {'NA': 28, 'CL': 24}
 ```
 
-!!! note "The solute is reproducible; the water count is not a fixed number"
-    An earlier version of this page, built at a commit between 0.5.4 and 0.6.0, reported the same
-    solute exactly — 3132 solute atoms, the same 44 atoms added to the same 15 residues, the same
-    28 Na⁺ and 24 Cl⁻, the same 90 crystal waters kept — in a box 0.8 % smaller: 315.5 nm³ and
-    8757 added waters, for 29725 atoms.
+!!! note "This build does not repeat exactly, and that is `missing_atoms: add` doing its job"
+    Run the command above three times and you get three different boxes. Measured, at one version,
+    from the same `1BRS.cif` and the same configuration:
 
-    Treat every solvent count on this page as a record of one build, not a target. How many waters
-    a box takes depends on the box the padding rule produces and on where the packing happens to
-    place them, and both can shift between releases without anything being wrong. What must match,
-    and did, is the solute: its atoms, its completed side chains, its protonation and its net
-    charge. (PROPKA's His18 pKa moved 6.04 → 6.08 between the two, which changes no assignment.)
+    | build | box | added waters | atoms | His18 pKa |
+    |---|---|---|---|---|
+    | 1 | 315.5 nm³ | 8755 | 29719 | 6.08 |
+    | 2 | 317.9 nm³ | 8823 | 29923 | 6.08 |
+    | 3 | 318.1 nm³ | 8833 | 29953 | 6.09 |
+
+    The cause is the 44 side-chain atoms this page asks PDBFixer to build. It does not place them
+    identically every time, so the solute's extent changes a little, the 1.5 nm padding wraps a
+    slightly different dodecahedron, and the water count follows. PROPKA then reads those same side
+    chains, which is why a pKa moves in the last digit too. None of it changes an assignment.
+
+    **What is reproducible is the solute**: 3132 atoms, the same 44 atoms added to the same 15
+    residues, the same 28 Na⁺ and 24 Cl⁻, the same 90 crystal waters kept, the same protonation
+    and the same net charge. Those are the numbers to check a build against. A box volume or a
+    water count on this page is a record of one build, and matching it to the digit is neither
+    expected nor meaningful — a spread of about 0.8 % is ordinary here. If you need byte-identical
+    boxes, build once and reuse `built.xml`, which is what every run on this system does.
 
 **Reading the protonation.** PROPKA predicts every titratable group; md-tools prints the ones worth
 a second look. Barnase His18 (pKa 6.08) and Glu73 (6.69) are within one pH unit of 7, so their
