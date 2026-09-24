@@ -21,7 +21,6 @@ size.
 | [**Alanine dipeptide**](ALA/index.md) | the toy: two torsions with barriers a plain run crosses, so a method can be checked against the truth | AIS |
 | [**Paracetamol**](paracetamol/index.md) | a ligand on its own: parameterise once, reuse everywhere | cMD, REST2, AIS |
 | [**Chignolin**](chignolin/index.md) | a folding peptide: a real equilibrium, small enough to compare methods in a day | cMD, REST2 |
-| [**Bromodomain + paracetamol**](bromodomain-paracetamol/index.md) | a protein–ligand complex, reusing the ligand's own package | cMD |
 | [**Barnase + barstar**](barnase-barstar/index.md) | a protein–protein interface: the coordinate is between two molecules | cMD |
 | [**TYK2 + ejm_31**](tyk2-ejm31/index.md) | a kinase with a real inhibitor: where a hot region is worth CHOOSING | selective REST2 |
 
@@ -29,7 +28,7 @@ size.
 
 | method | systems | state |
 |---|---|---|
-| **cMD** | paracetamol, chignolin, bromodomain, barnase–barstar | published |
+| **cMD** | paracetamol, chignolin, barnase–barstar | published |
 | **REST2** | paracetamol, chignolin, TYK2 | published |
 | **AIS** | alanine dipeptide, paracetamol | published |
 | **Umbrella sampling** | alanine dipeptide (φ), protein–ligand and protein–protein (centre-of-mass distance) | planned, 0.6.2 |
@@ -48,6 +47,5 @@ Run on NVIDIA RTX 3080 GPUs with CUDA and mixed precision.
 | [chignolin / cMD](chignolin/cMD.md) | `0.5.4` |
 | [chignolin / REST2](chignolin/REST2.md) | `0.5.4` |
 | [alanine dipeptide / AIS](ALA/AIS.md) | `0.5.4` |
-| [bromodomain + paracetamol / cMD](bromodomain-paracetamol/cMD.md) | `0.5.4` |
 | [barnase + barstar / cMD](barnase-barstar/cMD.md) | `0.5.4` |
 | [TYK2 + ejm_31 / selective REST2](tyk2-ejm31/REST2.md) | `0.6.1` |

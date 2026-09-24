@@ -160,7 +160,7 @@ Summary
 
 **`reused (stated reference)` is the point of this page.** No charge is generated here: the step
 that cost a minute happened once, in section 2, and every later build of this molecule — this box,
-the REST2 ladder, the bromodomain complex — reads those same numbers.
+the REST2 ladder, a protein–ligand complex — reads those same numbers.
 
 Everything not stated is the documented default (Sage 2.2.1, TIP3P, a 1.5 nm dodecahedron, 0.15 M
 NaCl, HBonds constraints), and the build log lists each with `(default)` beside it. See
@@ -284,7 +284,7 @@ PARA/
 
 * the same molecule with enhanced sampling: [REST2: paracetamol](../paracetamol/REST2.md)
 * the same parameters in a protein pocket:
-  [cMD: a bromodomain with paracetamol](../bromodomain-paracetamol/cMD.md)
+  [the TYK2 complex](../tyk2-ejm31/index.md)
 * what a package is, in full: [Ligand parameter packages](../../basics/ligand-packages.md)
 * register the finished directory as a dataset:
   [Registering a finished run](../../basics/data-register/index.md)

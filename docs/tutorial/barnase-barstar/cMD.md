@@ -106,5 +106,5 @@ interface; for either, the run length and the analysis are a study of their own.
 ## Next
 
 * a protein with a bound ligand, from its parameter package:
-  [cMD: a bromodomain with paracetamol (4A9K)](../bromodomain-paracetamol/cMD.md)
+  [the TYK2 complex](../tyk2-ejm31/index.md)
 * register the finished directory as a dataset: [Registering a finished run](../../basics/data-register/index.md)

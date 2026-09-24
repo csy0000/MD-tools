@@ -284,7 +284,7 @@ the saved states (`detection_route: saved-state`, and the sha256 of each).
 
 * where the parameters came from: [cMD: paracetamol](../paracetamol/cMD.md)
 * the same parameters in a protein pocket:
-  [cMD: a bromodomain with paracetamol](../bromodomain-paracetamol/cMD.md)
+  [the TYK2 complex](../tyk2-ejm31/index.md)
 * a ladder over a peptide: [REST2: chignolin](../chignolin/REST2.md)
 * register the finished directory as a dataset:
   [Registering a finished run](../../basics/data-register/index.md)
