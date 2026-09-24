@@ -288,9 +288,9 @@ PARA/
 
 ## Next
 
-* the same molecule with enhanced sampling: [REST2: paracetamol](../REST2/paracetamol.md)
+* the same molecule with enhanced sampling: [REST2: paracetamol](../paracetamol/REST2.md)
 * the same parameters in a protein pocket:
-  [cMD: a bromodomain with paracetamol](bromodomain-paracetamol.md)
+  [cMD: a bromodomain with paracetamol](../bromodomain-paracetamol/cMD.md)
 * what a package is, in full: [Ligand parameter packages](../../ligand-packages.md)
 * register the finished directory as a dataset:
   [Registering a finished run](../../data_register/README.md)

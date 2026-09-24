@@ -18,7 +18,7 @@ files that run produced (one NVIDIA RTX 3080, CUDA, mixed precision).
 
 Building took **16 s**; minimisation, equilibration and 10 ns of production took **40 min**.
 
-Read [cMD: paracetamol](paracetamol.md) first; this page explains only what is new.
+Read [cMD: paracetamol](../paracetamol/cMD.md) first; this page explains only what is new.
 
 ## 1. The structure, and the choices it needs
 
@@ -216,5 +216,5 @@ interface; for either, the run length and the analysis are a study of their own.
 ## Next
 
 * a protein with a bound ligand, from its parameter package:
-  [cMD: a bromodomain with paracetamol (4A9K)](bromodomain-paracetamol.md)
+  [cMD: a bromodomain with paracetamol (4A9K)](../bromodomain-paracetamol/cMD.md)
 * register the finished directory as a dataset: [Registering a finished run](../../data_register/README.md)

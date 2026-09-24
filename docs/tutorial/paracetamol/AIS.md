@@ -8,12 +8,12 @@ run executed as written, at that version. It has not been re-run for 0.6.1.
     transformation between **two** Systems, and the older behaviour is retired.
 
     The build below **reuses** the parameter package made by
-    [cMD: paracetamol](../cMD/paracetamol.md), which needs the release after 0.5.4. The run itself
+    [cMD: paracetamol](../paracetamol/cMD.md), which needs the release after 0.5.4. The run itself
     is unchanged: reusing the package produces the same `built.xml` (sha256 `1a7c9faa...`) and the
     same coordinates as the build that generated the charges here, so every number on this page is
     the one that run produced.
 
-The AIS chain of [AIS: alanine dipeptide](alanine.md), applied to a small molecule given as SMILES.
+The AIS chain of [AIS: alanine dipeptide](../ALA/AIS.md), applied to a small molecule given as SMILES.
 Read that page first: it explains each step, and this page shows only where the ligand route differs
 and what the run produced. Every command below was run exactly as written, and every number is
 copied from the files that run produced. The run used md-tools at commit `3da35d0` on one NVIDIA RTX
@@ -56,7 +56,7 @@ md-openmm build-top -i build/paracetamol.smi \
 ```
 
 `solute.parameters` names the package this molecule's parameters come from, so **no charges are
-generated here**: they are read from the package that [cMD: paracetamol](../cMD/paracetamol.md)
+generated here**: they are read from the package that [cMD: paracetamol](../paracetamol/cMD.md)
 made and `data-register --ligand-package` put in the shared catalog. Give a path to a package
 directory instead if it is not registered. The switching paths and the cMD box therefore rest on
 identical ligand parameters — an AIS result and an ordinary MD result for this molecule differ in
@@ -135,7 +135,7 @@ torsion terms: the methyl rotation, the rotation of the ring about the N–C bon
 ## 3. Configuration and run
 
 `AIS.config` is **identical** to the alanine dipeptide's, apart from a comment (see
-[step 3 there](alanine.md#3-one-configuration-for-the-whole-chain)). `build-md` never names the
+[step 3 there](../ALA/AIS.md#3-one-configuration-for-the-whole-chain)). `build-md` never names the
 molecule. It reads the solute from `build/`.
 
 ```bash
@@ -171,11 +171,11 @@ and from `AIS.out`:
 ```
 
 As for alanine dipeptide, `evenly_spaced` used source frames 5 to 68 (see
-[the note there](alanine.md#what-the-ais-log-checks-before-it-switches-anything)).
+[the note there](../ALA/AIS.md#what-the-ais-log-checks-before-it-switches-anything)).
 
 ## 4. Reweight the torsions
 
-With the same [`ais_reweight.py`](ais_reweight.py), for three torsions: the amide
+With the same [`ais_reweight.py`](../shared/ais_reweight.py), for three torsions: the amide
 `TYL1_C1_C2_N1_C3` (unscaled), the ring about N–C `TYL1_C2_N1_C3_C4` (scaled), and the O–H rotation
 `TYL1_C5_C6_O2_H7` (scaled):
 
@@ -215,7 +215,7 @@ property of paracetamol.
 
 ## Next
 
-* where these parameters come from: [cMD: paracetamol](../cMD/paracetamol.md)
-* the peptide route, with every step explained: [AIS: alanine dipeptide](alanine.md)
-* REST2 on the same molecule: [REST2: paracetamol](../REST2/paracetamol.md)
+* where these parameters come from: [cMD: paracetamol](../paracetamol/cMD.md)
+* the peptide route, with every step explained: [AIS: alanine dipeptide](../ALA/AIS.md)
+* REST2 on the same molecule: [REST2: paracetamol](../paracetamol/REST2.md)
 * the method, the work convention and every file: [AIS](../../openmm_methods/AIS/README.md)

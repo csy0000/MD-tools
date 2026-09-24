@@ -1,7 +1,7 @@
 # Choosing τ_max and the rung count: what four ladders showed
 
 **Tested against md-tools `0.6.1`.** Background for
-[REST2 on a protein–ligand complex](README.md). Nothing here is needed to RUN that tutorial: this
+[REST2 on a protein–ligand complex](REST2.md). Nothing here is needed to RUN that tutorial: this
 is the evidence for the settings it uses, the datasets they produced, and the two numbers on them
 that mislead.
 

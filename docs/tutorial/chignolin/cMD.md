@@ -15,7 +15,7 @@ RTX 3080 with CUDA and mixed precision.
 
 The whole thing took **1 min 3 s**.
 
-This is the peptide counterpart of [cMD: paracetamol](paracetamol.md), which explains each step in
+This is the peptide counterpart of [cMD: paracetamol](../paracetamol/cMD.md), which explains each step in
 more detail. The differences are that a peptide is built from a structure rather than a SMILES
 string, and that hydrogen mass repartitioning lets it run at 4 fs.
 
@@ -46,7 +46,7 @@ That leaves 138 atoms: the ten residues with their hydrogens, free termini, noth
 `build-top` also takes the sequence instead of the structure, as a `.seq`. That builds an
 **extended** conformation rather than the folded one, which is a different starting point and a
 much larger box — see
-[the note on the REST2 page](../REST2/chignolin.md#1-the-dataset-root-and-the-structure).
+[the note on the REST2 page](../chignolin/REST2.md#1-the-dataset-root-and-the-structure).
 
 ## 2. Build the system
 
@@ -189,10 +189,10 @@ with an uninterrupted one's.
 
 1 ns is a demonstration, not a study. Chignolin folds and unfolds on the microsecond scale, so for
 anything real raise `production_steps` — or use the ladder, which is what
-[REST2: chignolin](../REST2/chignolin.md) is for.
+[REST2: chignolin](../chignolin/REST2.md) is for.
 
 ## Next
 
-* the same peptide across six scaled states: [REST2: chignolin](../REST2/chignolin.md)
-* the same steps for a small molecule, explained in more detail: [cMD: paracetamol](paracetamol.md)
+* the same peptide across six scaled states: [REST2: chignolin](../chignolin/REST2.md)
+* the same steps for a small molecule, explained in more detail: [cMD: paracetamol](../paracetamol/cMD.md)
 * what every configuration key means: [Configuration](../../md-configuration.md)

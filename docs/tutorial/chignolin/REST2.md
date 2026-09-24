@@ -16,7 +16,7 @@ six NVIDIA RTX 3080 cards with CUDA and mixed precision.
 The whole thing took **8 min 3 s**: building took 4 s, scaling 2 s, and minimisation through the
 last exchange 7 min 57 s.
 
-This is the peptide counterpart of [REST2: paracetamol](paracetamol.md). The steps are the same; what
+This is the peptide counterpart of [REST2: paracetamol](../paracetamol/REST2.md). The steps are the same; what
 differs is that a peptide needs no SDF — its unscaled torsions come from the residue table, not from
 bond orders — and that the ladder has to be spaced more tightly, which
 [step 6](#6-why-tau_max-is-03-and-not-05) measures rather than asserts.
@@ -275,7 +275,7 @@ which is the one to analyse.
 
 ## 6b. Why `tau_max` is 0.3 and not 0.5 {#6-why-tau_max-is-03-and-not-05}
 
-The [paracetamol ladder](paracetamol.md) spans τ 0 → 0.5 in four states and accepts 0.223. The same
+The [paracetamol ladder](../paracetamol/REST2.md) spans τ 0 → 0.5 in four states and accepts 0.223. The same
 span over chignolin, in six states, does not work:
 
 | ladder | solute atoms | states | τ span | overall acceptance |
@@ -300,6 +300,6 @@ adding states means adding GPUs.
 
 ## See also
 
-* the same ladder for a small molecule: [REST2: paracetamol](paracetamol.md)
+* the same ladder for a small molecule: [REST2: paracetamol](../paracetamol/REST2.md)
 * what the scaled states are: [REST2](../../openmm_methods/REST2/README.md)
-* a peptide built from a sequence, switched rather than exchanged: [AIS: alanine dipeptide](../AIS/alanine.md)
+* a peptide built from a sequence, switched rather than exchanged: [AIS: alanine dipeptide](../ALA/AIS.md)

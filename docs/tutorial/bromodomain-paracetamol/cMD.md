@@ -25,7 +25,7 @@ exactly as written and every number is copied from the files that run produced (
 Building took under a minute; minimisation, equilibration and 10 ns of production took
 **34 min 18 s**.
 
-Read [cMD: paracetamol](paracetamol.md) and [cMD: barnase–barstar](barnase-barstar.md) first: this
+Read [cMD: paracetamol](../paracetamol/cMD.md) and [cMD: barnase–barstar](../barnase-barstar/cMD.md) first: this
 page explains only what a ligand adds.
 
 ## 1. The structure, and what is in it
@@ -104,7 +104,7 @@ solvent:
   author chain and operator. (The additive strip above is the other way round: it edits the file
   before expansion, so it names the deposited ids.)
 * **Where the package comes from.** This page reuses one that already exists. To make it yourself,
-  see [cMD: paracetamol](paracetamol.md), which parameterises the molecule from its SMILES string
+  see [cMD: paracetamol](../paracetamol/cMD.md), which parameterises the molecule from its SMILES string
   and writes exactly this package -- same parameter id, same parameters, measured.
 
 ## 3. Build
@@ -235,5 +235,5 @@ registered for this build to run. Registering it in the shared catalog under
 
 ## Next
 
-* the protein–protein counterpart, with no ligand: [cMD: barnase–barstar](barnase-barstar.md)
+* the protein–protein counterpart, with no ligand: [cMD: barnase–barstar](../barnase-barstar/cMD.md)
 * register the finished directory as a dataset: [Registering a finished run](../../data_register/README.md)

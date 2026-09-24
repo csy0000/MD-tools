@@ -346,7 +346,7 @@ From `AIS.out`, the first rows of the path table:
 ## 6. Reweight the torsions
 
 The estimator is analysis, so it is not part of md-tools. Download
-[`ais_reweight.py`](ais_reweight.py) and run it in the run directory's parent. Its core fits in a few
+[`ais_reweight.py`](../shared/ais_reweight.py) and run it in the run directory's parent. Its core fits in a few
 lines:
 
 ```python
@@ -399,5 +399,5 @@ unscaled amide from step 2 doing its job.
 
 ## Next
 
-* the same chain for a small molecule: [AIS: paracetamol](paracetamol.md)
+* the same chain for a small molecule: [AIS: paracetamol](../paracetamol/AIS.md)
 * the method, the work convention and every file: [AIS](../../openmm_methods/AIS/README.md)

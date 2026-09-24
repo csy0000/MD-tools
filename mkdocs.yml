@@ -113,19 +113,28 @@ nav:
       - Machine configuration: machine-configuration.md
   - Tutorials:
       - tutorial/README.md
-      - cMD:
-          - Paracetamol: tutorial/cMD/paracetamol.md
-          - Chignolin: tutorial/cMD/chignolin.md
-          - Barnase-barstar (1BRS): tutorial/cMD/barnase-barstar.md
-          - Bromodomain + paracetamol (4A9K): tutorial/cMD/bromodomain-paracetamol.md
-      - REST2:
-          - Paracetamol: tutorial/REST2/paracetamol.md
-          - Chignolin: tutorial/REST2/chignolin.md
-      - AIS:
-          - Alanine dipeptide: tutorial/AIS/alanine.md
-          - Paracetamol: tutorial/AIS/paracetamol.md
-      - Protein-ligand complex:
-          - REST2 (ligand + pocket): tutorial/protein-ligand-complex/REST2/README.md
+      - Alanine dipeptide:
+          - The system: tutorial/ALA/index.md
+          - AIS: tutorial/ALA/AIS.md
+      - Paracetamol:
+          - The system: tutorial/paracetamol/index.md
+          - cMD: tutorial/paracetamol/cMD.md
+          - REST2: tutorial/paracetamol/REST2.md
+          - AIS: tutorial/paracetamol/AIS.md
+      - Chignolin:
+          - The system: tutorial/chignolin/index.md
+          - cMD: tutorial/chignolin/cMD.md
+          - REST2: tutorial/chignolin/REST2.md
+      - Bromodomain + paracetamol:
+          - The system: tutorial/bromodomain-paracetamol/index.md
+          - cMD: tutorial/bromodomain-paracetamol/cMD.md
+      - Barnase + barstar:
+          - The system: tutorial/barnase-barstar/index.md
+          - cMD: tutorial/barnase-barstar/cMD.md
+      - TYK2 + ejm_31:
+          - The system: tutorial/tyk2-ejm31/index.md
+          - Selective REST2: tutorial/tyk2-ejm31/REST2.md
+          - Choosing the ladder: tutorial/tyk2-ejm31/choosing-the-ladder.md
       - Archived:
           - tutorial/archived/README.md
           - 0.5.3 cMD paracetamol: tutorial/archived/0.5.3/cMD/paracetamol.md

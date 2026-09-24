@@ -12,7 +12,7 @@ A four-state REST2 ladder over paracetamol, 10 ns of production **per state**. E
 was run exactly as written, and every number is copied from the files that run produced.
 
 The molecule is **not parameterised here**: this page reuses the package
-[cMD: paracetamol](../cMD/paracetamol.md) makes, so read that page first if you want to know where
+[cMD: paracetamol](../paracetamol/cMD.md) makes, so read that page first if you want to know where
 ligand parameters come from. The charge calculation happens once, there.
 
 The ladder took 19.5 min on one shared GPU, plus a few seconds to build and scale.
@@ -77,7 +77,7 @@ Counts
 `parameters` names the package **by identity**, with no path: it is resolved in the shared catalog
 under `$MD_DATA/parameters/ligands`, where `md-openmm data-register --ligand-package` put it. A
 package that is not registered is named by its path instead — see
-[cMD: paracetamol](../cMD/paracetamol.md).
+[cMD: paracetamol](../paracetamol/cMD.md).
 
 `reused (stated reference)` means no charge was generated here. This box and the cMD page's box
 rest on the same numbers, which is the point: a comparison between the two runs is a comparison of
@@ -126,7 +126,7 @@ From `scaler.log`:
 and `TYL-unscaled.png` — every red bond keeps all its torsions unscaled in every state, and every red
 atom is the centre of an unscaled improper; the numbers are the atom indices `scaler.yaml` uses:
 
-![paracetamol: unscaled torsions in red](images/paracetamol-unscaled.png)
+![paracetamol: unscaled torsions in red](images/paracetamol-rest2-unscaled.png)
 
 The amide (1–3) and the whole ring are protected. What REST2 *does* heat are the 18 torsion terms
 left: the methyl rotation, the rotation of the ring about the N–C bond (3–4), and the O–H rotation.
@@ -296,9 +296,9 @@ the saved states (`detection_route: saved-state`, and the sha256 of each).
 
 ## Next
 
-* where the parameters came from: [cMD: paracetamol](../cMD/paracetamol.md)
+* where the parameters came from: [cMD: paracetamol](../paracetamol/cMD.md)
 * the same parameters in a protein pocket:
-  [cMD: a bromodomain with paracetamol](../cMD/bromodomain-paracetamol.md)
-* a ladder over a peptide: [REST2: chignolin](chignolin.md)
+  [cMD: a bromodomain with paracetamol](../bromodomain-paracetamol/cMD.md)
+* a ladder over a peptide: [REST2: chignolin](../chignolin/REST2.md)
 * register the finished directory as a dataset:
   [Registering a finished run](../../data_register/README.md)

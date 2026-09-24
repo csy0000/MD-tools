@@ -10,35 +10,44 @@ may still be right, but nothing on this site claims they were checked against it
 At each major release every tutorial is re-run as written and adjusted where it no longer passes.
 The 0.5.3 pages are [archived](archived/README.md), with the reasons.
 
-Run on NVIDIA RTX 3080 GPUs with CUDA and mixed
-precision.
+## Start from a system
 
-| tutorial | method | system | wall time | tested against |
-|---|---|---|---|---|
-| [paracetamol](cMD/paracetamol.md) | cMD | **parameterise a molecule once**, then a box from that package: explicit TIP3P, 1800 atoms, 200 ps (release after 0.5.4) | ~1 min | `0.5.4` |
-| [chignolin](cMD/chignolin.md) | cMD | 10-residue peptide from 1UAO, explicit TIP3P, 2553 atoms, 1 ns at 4 fs | ~1 min | `0.5.4` |
-| [barnase–barstar](cMD/barnase-barstar.md) | cMD | protein–protein complex from 1BRS assembly 3, PROPKA protonation, explicit TIP3P, 29725 atoms, 10 ns (release after 0.5.4) | ~40 min | `0.5.4` |
-| [bromodomain + paracetamol](cMD/bromodomain-paracetamol.md) | cMD | protein–ligand complex from 4A9K assembly 1, a reused paracetamol package, PROPKA protonation, explicit TIP3P, 24036 atoms, 10 ns (release after 0.5.4) | ~35 min | `0.5.4` |
-| [paracetamol](REST2/paracetamol.md) | REST2 | the registered package from the cMD page, explicit TIP3P, 4 states, 10 ns per state, 1 GPU under MPS (release after 0.5.4) | ~20 min | `0.5.4` |
-| [chignolin](REST2/chignolin.md) | REST2 | 10-residue peptide from 1UAO, explicit TIP3P, 6 states, 10 ns per state, 6 GPUs | ~8 min | `0.5.4` |
-| [alanine dipeptide](AIS/alanine.md) | AIS | from a sequence, explicit TIP3P, 2 ns source + 64 switching paths, 1 GPU | ~12 min | `0.5.4` |
-| [paracetamol](AIS/paracetamol.md) | AIS | explicit TIP3P, 2 ns source + 64 switching paths, 1 GPU | ~13 min | `0.5.4` |
-| [TYK2 + ejm_31](protein-ligand-complex/README.md) | the system, and how it is prepared: structures, the ligand package, the complex build | — | — | `0.6.1` |
-| [TYK2 + ejm_31, selective REST2](protein-ligand-complex/REST2/README.md) | REST2 | protein–ligand complex from OpenFE's TYK2 benchmark, selective scaling of the ligand and of the ligand plus its pocket sidechains; four ladders run on CUDA, 8 and 12 states, 4 and 6 GPUs | 93.5 ns/day per state (8 rungs, 4 cards), 81.5 (12 rungs, 6 cards); two registered datasets | `0.6.1` |
+Each system page introduces the molecule, shows its structure, and builds it — explicit or implicit
+solvent — before handing you to a method. The systems are ordered by what they are for, not by
+size.
 
-Start with **cMD: paracetamol**. It explains each step, and it is where the ligand parameters the
-other paracetamol pages reuse are made; the others refer back to it.
+| system | what it is for | methods |
+|---|---|---|
+| [**Alanine dipeptide**](ALA/index.md) | the toy: two torsions with barriers a plain run crosses, so a method can be checked against the truth | AIS |
+| [**Paracetamol**](paracetamol/index.md) | a ligand on its own: parameterise once, reuse everywhere | cMD, REST2, AIS |
+| [**Chignolin**](chignolin/index.md) | a folding peptide: a real equilibrium, small enough to compare methods in a day | cMD, REST2 |
+| [**Bromodomain + paracetamol**](bromodomain-paracetamol/index.md) | a protein–ligand complex, reusing the ligand's own package | cMD |
+| [**Barnase + barstar**](barnase-barstar/index.md) | a protein–protein interface: the coordinate is between two molecules | cMD |
+| [**TYK2 + ejm_31**](tyk2-ejm31/index.md) | a kinase with a real inhibitor: where a hot region is worth CHOOSING | selective REST2 |
 
-## Before any of them
+## The methods, and where they are
 
-1. [Install md-tools](../install.md) with CUDA, and check `md-openmm --version`.
-2. [Configure the machine](../machine-configuration.md). CUDA is the default and is mandatory:
-   nothing falls back to the CPU on its own.
+| method | systems | state |
+|---|---|---|
+| **cMD** | paracetamol, chignolin, bromodomain, barnase–barstar | published |
+| **REST2** | paracetamol, chignolin, TYK2 | published |
+| **AIS** | alanine dipeptide, paracetamol | published |
+| **Umbrella sampling** | alanine dipeptide (φ), protein–ligand and protein–protein (centre-of-mass distance) | planned, 0.6.2 |
+| **Alchemical — TI and FEP** | every system | planned, 0.7.0 |
 
-## The shape every tutorial follows
+The two planned rows are listed so the shape of the set is visible. Neither is written, and neither
+is linked to a page that does not exist.
 
-```text
-md-openmm build-top   a structure       -> build/built.xml, built.pdb (the system)
-md-openmm build-md    a configuration   -> a run directory with run.sh
-./run.sh                                -> the stages, each an `md-openmm md-run`
-```
+Run on NVIDIA RTX 3080 GPUs with CUDA and mixed precision.
+
+| page | version it was run against |
+|---|---|
+| [paracetamol / cMD](paracetamol/cMD.md) | `0.5.4` |
+| [paracetamol / REST2](paracetamol/REST2.md) | `0.5.4` |
+| [paracetamol / AIS](paracetamol/AIS.md) | `0.5.4` |
+| [chignolin / cMD](chignolin/cMD.md) | `0.5.4` |
+| [chignolin / REST2](chignolin/REST2.md) | `0.5.4` |
+| [alanine dipeptide / AIS](ALA/AIS.md) | `0.5.4` |
+| [bromodomain + paracetamol / cMD](bromodomain-paracetamol/cMD.md) | `0.5.4` |
+| [barnase + barstar / cMD](barnase-barstar/cMD.md) | `0.5.4` |
+| [TYK2 + ejm_31 / selective REST2](tyk2-ejm31/REST2.md) | `0.6.1` |

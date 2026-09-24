@@ -139,13 +139,18 @@ starts from exactly these files.
     vacuum leg and refuse that mismatch, so the choice is made here, once, for every method that
     will use this system.
 
-## The methods
+## Where to go next
 
-| | what it shows | state |
+| method | what it is for | |
 |---|---|---|
-| [**Selective REST2**](REST2/README.md) | choosing the hot region: the ligand alone, or the ligand plus the sidechains lining the pocket | published, `0.6.1` |
-| **Plain cMD** | a long unbiased simulation of the same complex, as the reference every enhanced method is compared against | in preparation — a 1 µs run is in progress, and the page follows it |
-| **TI and FEP** | absolute and relative binding free energies on this complex | later release |
+| [**Selective REST2**](REST2.md) | choosing the hot region: the ligand alone, or the ligand plus the sidechains lining the pocket | published, `0.6.1` |
+| **cMD** | a long unbiased simulation of the same complex, as the reference every enhanced method is compared against | in preparation — a 1 µs run is in progress, and the page follows it |
+| **Umbrella sampling** | a potential of mean force along the ligand–protein centre-of-mass distance | planned, 0.6.2 |
+| **Alchemical (TI, FEP)** | absolute and relative binding free energies on this complex | planned, 0.7.0 |
+
+*Umbrella sampling arrives in 0.6.2 and the alchemical pages in 0.7.0. They are listed here so the
+shape of the set is visible; neither is written yet, and neither is linked to a page that does not
+exist.*
 
 The cMD page is written when its run finishes, not before: like every page here, its numbers are
 copied from the files a real run produced.
