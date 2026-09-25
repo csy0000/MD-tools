@@ -331,10 +331,16 @@ def _plan_placement(coordination, machine: dict[str, Any], *, cpu: bool, device:
         state = _measurement_state(coordinates)
         if state is not None:
             positions, box = state
+        # NO `-c` AT ALL is a real case, and the first version of this fix missed it: AIS starts
+        # its paths from frames of a source trajectory, so its command line carries no restart,
+        # and a multi-rank AIS launch reached this with the topology's unrelaxed coordinates and
+        # died on the same NaN a ladder used to. Relax them instead of benchmarking a structure
+        # nothing has minimised.
+        relax = 0 if state is not None else 200
         try:
             return placing.measure_device_throughput(
-                pair.system, positions, box_vectors=box, devices=hosts[mine["host"]],
-                precision=request.precision)
+                pair.system, positions, box_vectors=box, relax_iterations=relax,
+                devices=hosts[mine["host"]], precision=request.precision)
         except Exception as failure:                       # noqa: BLE001 - reported as refusal
             raise PreflightError(
                 f"{protocol}: measuring device throughput on {mine['host']} failed: "

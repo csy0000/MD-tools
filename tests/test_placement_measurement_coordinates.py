@@ -77,3 +77,41 @@ def test_an_absent_or_unreadable_restart_falls_back_rather_than_refusing(tmp_pat
     garbage = tmp_path / "not-a-state.xml"
     garbage.write_text("<State>this is not a serialised OpenMM state</State>")
     assert _measurement_state(str(garbage)) is None
+
+
+def test_a_launch_with_no_restart_relaxes_before_measuring(tmp_path):
+    """AIS has no `-c`, and the first version of this fix assumed every multi-rank launch did.
+
+    A ladder's `-c` is required and always present, so reading it fixed ladders completely. AIS
+    starts its paths from frames of a source trajectory and carries no restart at all, so
+    `_measurement_state` returns None and the measurement falls back to the topology's
+    coordinates -- the same unrelaxed `build/built.pdb` that produced the original NaN. A
+    multi-rank AIS launch on barnase-barstar then died with exactly the message the ladder fix
+    was written to remove:
+
+        rank 0 of 4: AIS: measuring device throughput failed: Particle coordinate is NaN
+
+    The fallback is a short minimisation, and the contract that matters is the one pinned here:
+    when there is nothing to read, the caller asks for relaxation rather than benchmarking a
+    structure nothing has minimised.
+    """
+    import inspect
+
+    from md_tools.openmm import placement as placing
+
+    signature = inspect.signature(placing.measure_device_throughput)
+    assert "relax_iterations" in signature.parameters, \
+        "the measurement cannot relax coordinates it was handed"
+    assert signature.parameters["relax_iterations"].default == 0, \
+        "relaxation must be opt-in: a caller passing a real -c has nothing to relax"
+
+    source = inspect.getsource(placing.measure_device_throughput)
+    assert "LocalEnergyMinimizer" in source, "relax_iterations does not actually minimise"
+
+    # The preflight asks for it exactly when it has no state to read, and not otherwise.
+    from md_tools.run import preflight
+
+    plan = inspect.getsource(preflight._plan_placement)
+    assert "relax_iterations=relax" in plan
+    assert "0 if state is not None else" in plan, \
+        "relaxation must be tied to the ABSENCE of -c, not applied unconditionally"

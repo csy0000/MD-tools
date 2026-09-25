@@ -668,7 +668,7 @@ def _why_doubled_up(plan: "LaunchPlan", mine: Mapping[str, Any]) -> str:
 # ---------------------------------------------------------------------------------------------
 
 def measure_device_throughput(system, positions, *, devices: int, precision: str,
-                              box_vectors=None,
+                              box_vectors=None, relax_iterations: int = 0,
                               warmup_steps: int = 50, min_seconds: float = 1.0,
                               max_steps: int = 5000, timestep_ps: float = 0.002,
                               clock=time.perf_counter) -> dict[str, Any]:
@@ -690,6 +690,13 @@ def measure_device_throughput(system, positions, *, devices: int, precision: str
     The caller therefore passes the run's own `-c`, and its box with it -- those same positions
     in the System's DEFAULT box are +7e11 kJ/mol, so taking one without the other trades a NaN
     for a worse one.
+
+    `relax_iterations` is the fallback for a launch that HAS no `-c`. AIS is one: it starts its
+    paths from frames of a source trajectory, so its command line carries no restart, and the
+    first fix for this bug covered ladders only -- multi-rank AIS reached the same measurement
+    with the same unrelaxed topology coordinates and the same NaN. A short minimisation removes
+    the stored contact energy that an energy-conserving integrator cannot shed; on a 30k-atom
+    complex 200 iterations cost under a second.
     """
     from openmm import Context, Platform, VerletIntegrator
 
@@ -703,6 +710,11 @@ def measure_device_throughput(system, positions, *, devices: int, precision: str
             if box_vectors is not None:
                 context.setPeriodicBoxVectors(*box_vectors)
             context.setPositions(positions)
+            if relax_iterations and device == 0:
+                from openmm import LocalEnergyMinimizer
+
+                LocalEnergyMinimizer.minimize(context, maxIterations=int(relax_iterations))
+                positions = context.getState(getPositions=True).getPositions()
             context.setVelocitiesToTemperature(300.0, 1)
             integrator.step(int(warmup_steps))
             context.getState(getEnergy=True)                   # synchronise before timing
