@@ -114,6 +114,8 @@ nav:
       - tutorial/README.md
       - Alanine dipeptide:
           - The system: tutorial/ALA/index.md
+          - cMD: tutorial/ALA/cMD.md
+          - REST2: tutorial/ALA/REST2.md
           - AIS: tutorial/ALA/AIS.md
       - Paracetamol:
           - The system: tutorial/paracetamol/index.md

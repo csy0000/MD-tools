@@ -43,9 +43,9 @@ renamed accordingly rather than run at a pressure that means nothing.
 
 | method | what it is for | |
 |---|---|---|
+| [**cMD**](cMD.md) | the unbiased reference every method here is checked against, 10 ns | published |
+| [**REST2**](REST2.md) | solute tempering, four states over τ 0 → 0.5 | published |
 | [**AIS**](AIS.md) | annealed importance sampling between two Hamiltonians, with the torsion reweighting checked against the plain simulation | published |
-| **cMD** | the unbiased reference | not written for this system |
-| **REST2** | solute tempering | not written for this system |
 | **Umbrella sampling** | a potential of mean force along φ | planned, 0.6.2 |
 | **Alchemical (TI, FEP)** | free energies by transformation | planned, 0.7.0 |
 
