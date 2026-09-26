@@ -21,8 +21,8 @@ size.
 | [**Alanine dipeptide**](ALA/index.md) | the toy: two torsions with barriers a plain run crosses, so a method can be checked against the truth | cMD, REST2, AIS |
 | [**Paracetamol**](paracetamol/index.md) | a ligand on its own: parameterise once, reuse everywhere | cMD, REST2, AIS |
 | [**Chignolin**](chignolin/index.md) | a folding peptide: a real equilibrium, small enough to compare methods in a day | cMD, REST2 |
-| [**Barnase + barstar**](barnase-barstar/index.md) | a protein–protein interface: the coordinate is between two molecules | cMD |
-| [**TYK2 + ejm_31**](tyk2-ejm31/index.md) | a kinase with a real inhibitor: where a hot region is worth CHOOSING | selective REST2 |
+| [**Barnase + barstar**](barnase-barstar/index.md) | a protein–protein interface: the coordinate is between two molecules | cMD, selective REST2, AIS |
+| [**TYK2 + ejm_31**](tyk2-ejm31/index.md) | a kinase with a real inhibitor: where a hot region is worth CHOOSING | selective REST2, AIS |
 
 ## The methods, and where they are
 
@@ -30,7 +30,7 @@ size.
 |---|---|---|
 | **cMD** | alanine dipeptide, paracetamol, chignolin, barnase–barstar | published |
 | **REST2** | alanine dipeptide, paracetamol, chignolin, TYK2 (selective), barnase–barstar (selective) | published |
-| **AIS** | alanine dipeptide, paracetamol | published |
+| **AIS** | alanine dipeptide, paracetamol; TYK2 and barnase–barstar as measured LIMITS | published |
 | **Umbrella sampling** | alanine dipeptide (φ), protein–ligand and protein–protein (centre-of-mass distance) | planned, 0.6.2 |
 | **Alchemical — TI and FEP** | every system | planned, 0.7.0 |
 
@@ -52,4 +52,6 @@ Run on NVIDIA RTX 3080 GPUs with CUDA and mixed precision.
 | [alanine dipeptide / cMD](ALA/cMD.md) | `0.6.1` |
 | [alanine dipeptide / REST2](ALA/REST2.md) | `0.6.1` |
 | [barnase + barstar / selective REST2](barnase-barstar/REST2.md) | `0.6.1` |
+| [barnase + barstar / AIS](barnase-barstar/AIS.md) | `0.6.1` |
+| [TYK2 + ejm_31 / AIS](tyk2-ejm31/AIS.md) | `0.6.1` |
 | [chignolin / choosing τ_max](chignolin/choosing-tau.md) | `0.5.4`, not re-run |
