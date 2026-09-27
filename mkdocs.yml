@@ -134,6 +134,7 @@ nav:
           - AIS: tutorial/barnase-barstar/AIS.md
       - TYK2 + ejm_31:
           - The system: tutorial/tyk2-ejm31/index.md
+          - cMD: tutorial/tyk2-ejm31/cMD.md
           - Selective REST2: tutorial/tyk2-ejm31/REST2.md
           - AIS: tutorial/tyk2-ejm31/AIS.md
           - Choosing the ladder: tutorial/tyk2-ejm31/choosing-the-ladder.md

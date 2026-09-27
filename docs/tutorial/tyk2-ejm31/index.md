@@ -174,7 +174,7 @@ starts from exactly these files.
 | method | what it is for | |
 |---|---|---|
 | [**Selective REST2**](REST2.md) | choosing the hot region: the ligand alone, or the ligand plus the sidechains lining the pocket | published, `0.6.1` |
-| **cMD** | a long unbiased simulation of the same complex, as the reference every enhanced method is compared against | in preparation — a 1 µs run is in progress, and the page follows it |
+| [**cMD**](cMD.md) | a long unbiased simulation of the same complex, as the reference every enhanced method is compared against | published, `0.6.1` — 1 µs |
 | [**AIS**](AIS.md) | annealing a weakened pocket back to full strength | published, `0.6.1` — usable for the ligand alone, not for the ligand plus its shell |
 | **Umbrella sampling** | a potential of mean force along the ligand–protein centre-of-mass distance | planned, 0.6.2 |
 | **Alchemical (TI, FEP)** | absolute and relative binding free energies on this complex | planned, 0.7.0 |
@@ -183,5 +183,5 @@ starts from exactly these files.
 shape of the set is visible; neither is written yet, and neither is linked to a page that does not
 exist.*
 
-The cMD page is written when its run finishes, not before: like every page here, its numbers are
-copied from the files a real run produced.
+Every page here copies its numbers from the files a real run produced, which is why the cMD page
+appeared only once its 1 µs run had finished — 4 days 6 h on one card.
