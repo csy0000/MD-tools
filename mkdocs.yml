@@ -130,8 +130,6 @@ nav:
       - Barnase + barstar:
           - The system: tutorial/barnase-barstar/index.md
           - cMD: tutorial/barnase-barstar/cMD.md
-          - Selective REST2: tutorial/barnase-barstar/REST2.md
-          - AIS: tutorial/barnase-barstar/AIS.md
       - TYK2 + ejm_31:
           - The system: tutorial/tyk2-ejm31/index.md
           - cMD: tutorial/tyk2-ejm31/cMD.md

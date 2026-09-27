@@ -153,8 +153,8 @@ Ser89 -- surface residues whose side chains were disordered in the crystal.
 | method | what it is for | |
 |---|---|---|
 | [**cMD**](cMD.md) | the complex simulated unbiased, 10 ns | published |
-| [**Selective REST2**](REST2.md) | heating the 39 interface sidechains across twelve rungs | published, `0.6.1` |
-| [**AIS**](AIS.md) | annealing the salt bridges back to full strength | published, `0.6.1` — measures a LIMIT: the estimator is not usable on an interface |
+| **Selective REST2** | heating the interface sidechains | not written for this system |
+| **AIS** | annealing a weakened interface back to full strength | not written for this system |
 | **Umbrella sampling** | a potential of mean force along the chain–chain centre-of-mass distance | planned, 0.6.2 |
 | **Alchemical (TI, FEP)** | free energies by transformation | planned, 0.7.0 |
 
