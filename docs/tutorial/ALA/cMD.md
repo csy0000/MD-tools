@@ -9,10 +9,10 @@ production run is 5 min 14 s.
 **Starts from a built system.** Do [the system page](index.md) first: it builds ACE-ALA-NME from a
 `.seq` with tleap, solvates it and writes `ALA/build/built.xml`.
 
-This is the page to read if you want the unbiased reference that
-[AIS: alanine dipeptide](AIS.md) is compared against. φ and ψ are the only interesting coordinates
-here, and 10 ns of plain MD crosses their barriers often enough to give a usable free-energy
-surface — which is exactly why this system is the one to check an enhanced-sampling method on.
+φ and ψ are the only interesting coordinates here, which is why this system is the one to check an
+enhanced-sampling method on. Ten nanoseconds is **not** the reference for that check, though — as
+[section 4](#4-what-10-ns-actually-sampled) shows, it misses a whole basin. The reference every
+method on this system is compared against is a separate 1 µs run.
 
 ## 1. Generate the run
 
@@ -99,22 +99,14 @@ set — 22 atoms of solute in 590 waters, and the water is nearly all of the cos
 
 ## 4. What 10 ns actually sampled
 
-The reason this system is in the set is that φ and ψ are the whole story, so it is cheap to ask
-what the run saw. [`compare_cmd_rest2.py`](../shared/compare_cmd_rest2.py), run from the dataset
-root:
-
-```bash
-python compare_cmd_rest2.py --system ALA \
-    --cmd cMD-run1 --cmd-build build --window 0 120 --out cmd-phi.png
-```
-
-```text
-ALA: phi (C-N-CA-C)  [degrees]
-  cMD   n=10000  mean=-84.14  sd=29.40  in-basin=0.00%  crossings=0
-        first/second half mean=-85.46 / -82.82
-```
+The reason this system is in the set is that φ and ψ are the whole story, so it is worth asking
+what the run saw of them.
 
 ![phi from 10 ns of plain MD: the alpha-L basin is empty](images/cmd-phi.png)
+
+| | φ mean | φ sd | time in the αL basin | crossings into it |
+|---|---|---|---|---|
+| 10 ns cMD | −84.1° | 29.4° | **0.00%** | **0** |
 
 The two negative-φ basins are well sampled and the halves of the run agree on them to 2.6°, which
 looks like a converged result. **It is not.** The αL basin at φ ≈ +55° — a real, populated feature
@@ -125,12 +117,6 @@ That is what makes a short unbiased run dangerous rather than merely imprecise: 
 smooth, stable, entirely convincing histogram of a distribution it has not sampled, and nothing in
 the run reports a problem. `status: completed` is true; the temperature and density are perfect;
 the two halves agree. The missing basin is invisible from inside the run.
-
-!!! warning "A torsion is periodic, so count basins and not sides of a threshold"
-    Counting crossings as `phi > 0` flips whenever the series wraps from −179° to +179°, which
-    never passed through zero. Done that way this run reports **2** crossings instead of 0 — both
-    of them wrap artifacts, on a coordinate it never actually left. The script counts entries and
-    exits of a *window* for exactly this reason.
 
 [The ladder](REST2.md) finds that basin 34 times in the same 10 ns, on the same Hamiltonian.
 
