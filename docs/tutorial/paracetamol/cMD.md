@@ -267,6 +267,39 @@ correctly built and equilibrated box looks like. The molecule is named **TYL** t
 `--resname` is applied to the package and to every build that reads it. 200 ps samples nothing in
 particular; for a real study, raise `production_steps`.
 
+## 7. What 200 ps sampled, against an answer we know exactly
+
+This molecule has a rare and useful property: **the exact answer for one coordinate is known by
+symmetry.** The ring is para-substituted, so rotating it 180° about the N–C bond maps the molecule
+onto itself. The distribution of that torsion must therefore repeat with period 180°, which means
+the window −90° to +90° and its complement each hold **exactly 50%** of the population. No
+simulation needed.
+
+[`compare_cmd_rest2.py`](../shared/compare_cmd_rest2.py), on this page's run:
+
+```bash
+python compare_cmd_rest2.py --system paracetamol \
+    --cmd cMD-run1 --cmd-build build --window -90 90 --out cmd-ring.png
+```
+
+```text
+paracetamol: ring rotation about N-C  [degrees]
+  cMD   n=200  mean=-25.03  sd=157.13  in-basin=0.00%  crossings=0
+```
+
+![the ring torsion over 200 ps: one side only](images/cmd-ring.png)
+
+**0.00% against an exact 50%.** In 200 ps the ring never rotated once. The run is not slightly
+under-sampled on this coordinate; it has no information about it at all, and the histogram it
+produces is a picture of one half of a symmetric distribution.
+
+Nothing in the run says so. The temperature, the density and the completion record are all exactly
+as they should be — this is a correct 200 ps simulation, and 200 ps is simply not long enough for
+this rotation. That is what the length caveat above means in a number.
+
+Raising `production_steps` to 10 ns takes it to 26.5%, still a long way from 50 and still only two
+crossings. [The ladder](REST2.md) reaches 48.5% in the same 10 ns.
+
 ## What it wrote
 
 ```text

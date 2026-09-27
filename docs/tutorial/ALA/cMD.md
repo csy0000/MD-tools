@@ -97,7 +97,44 @@ The temperature sits at the 300 K thermostat and the density at that of water, w
 correctly built and equilibrated box looks like. At 2758 ns/day this is the fastest system in the
 set — 22 atoms of solute in 590 waters, and the water is nearly all of the cost.
 
-## 4. What it wrote
+## 4. What 10 ns actually sampled
+
+The reason this system is in the set is that φ and ψ are the whole story, so it is cheap to ask
+what the run saw. [`compare_cmd_rest2.py`](../shared/compare_cmd_rest2.py), run from the dataset
+root:
+
+```bash
+python compare_cmd_rest2.py --system ALA \
+    --cmd cMD-run1 --cmd-build build --window 0 120 --out cmd-phi.png
+```
+
+```text
+ALA: phi (C-N-CA-C)  [degrees]
+  cMD   n=10000  mean=-84.14  sd=29.40  in-basin=0.00%  crossings=0
+        first/second half mean=-85.46 / -82.82
+```
+
+![phi from 10 ns of plain MD: the alpha-L basin is empty](images/cmd-phi.png)
+
+The two negative-φ basins are well sampled and the halves of the run agree on them to 2.6°, which
+looks like a converged result. **It is not.** The αL basin at φ ≈ +55° — a real, populated feature
+of this molecule's free-energy surface — was visited **zero times in 10 ns**. The run has 0.00% of
+its frames there and never once crossed into the window.
+
+That is what makes a short unbiased run dangerous rather than merely imprecise: it produces a
+smooth, stable, entirely convincing histogram of a distribution it has not sampled, and nothing in
+the run reports a problem. `status: completed` is true; the temperature and density are perfect;
+the two halves agree. The missing basin is invisible from inside the run.
+
+!!! warning "A torsion is periodic, so count basins and not sides of a threshold"
+    Counting crossings as `phi > 0` flips whenever the series wraps from −179° to +179°, which
+    never passed through zero. Done that way this run reports **2** crossings instead of 0 — both
+    of them wrap artifacts, on a coordinate it never actually left. The script counts entries and
+    exits of a *window* for exactly this reason.
+
+[The ladder](REST2.md) finds that basin 34 times in the same 10 ns, on the same Hamiltonian.
+
+## 5. What it wrote
 
 ```text
 ALA/

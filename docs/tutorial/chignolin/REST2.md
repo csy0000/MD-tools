@@ -276,6 +276,50 @@ Each state has its own trajectory, `solute_state<i>_prod1.nc`, 5000 frames of th
 The index is the **state's**, not the walker's: `solute_state0_prod1.nc` is the unscaled ensemble,
 which is the one to analyse.
 
+## 7. Checking state 0 against a plain run
+
+State 0 integrates the **unscaled** Hamiltonian at 300 K, so it must agree with ordinary cMD on the
+same box. Against a **length-matched** 10 ns cMD run — not the 1 ns the [cMD page](cMD.md)
+documents, which would compare lengths rather than methods:
+
+```bash
+python compare_cmd_rest2.py --system chignolin \
+    --cmd ../CHI-10ns/cMD-run1 --cmd-build ../CHI-10ns/build \
+    --rest2 REST2-run1 --rest2-build build \
+    --window 0.25 2.0 --out cmd-vs-rest2-rmsd.png
+```
+
+```text
+chignolin: backbone RMSD to the NMR model  [nm]
+  cMD            n=5000  mean=0.13  sd=0.02  in-basin=0.00%  crossings= 0
+  REST2 state 0  n=5000  mean=0.15  sd=0.06  in-basin=5.14%  crossings=80
+  cMD            statistical inefficiency g=45.0  ->  112 independent sample(s) of 5000
+  REST2 state 0  statistical inefficiency g=27.4  ->  183 independent sample(s) of 5000
+  two-sample KS on the INDEPENDENT samples: D=0.2644  p=8.82e-05
+```
+
+![cMD and REST2 state 0 on the backbone RMSD](images/cmd-vs-rest2-rmsd.png)
+
+Both are 10 ns of the same Hamiltonian at the same temperature. They agree on the folded peak at
+0.13 nm, and differ in the tail: the ladder's state 0 leaves the folded basin **80 times** and
+spends 5.14% of its frames beyond 0.25 nm, while the plain run does not leave it once.
+
+The right-hand panel is worth reading as a warning as well as a result. The ladder's crossings do
+not begin until about 20% of the way in, and they arrive in bursts. Had this run been three times
+shorter it would have reported zero too, and looked exactly as converged as the cMD run does.
+
+!!! note "Here the ladder's g is SMALLER, which is not a contradiction"
+    On [alanine dipeptide](../ALA/REST2.md#5-checking-the-answer-against-a-plain-run) the ladder's
+    statistical inefficiency came out *larger* than cMD's (14.6 against 8.0); here it comes out
+    smaller (27.4 against 45.0). Both are consistent, because `g` describes whatever series it is
+    handed. A trapped run's correlation time is measured within its basin, and how that compares to
+    a run that moves between basins depends on the coordinate — on φ the basin is narrow and
+    fast, on backbone RMSD the folded state drifts slowly.
+
+    That is why `g` is not a sampling-quality score. The crossing count is: **0 against 80** means
+    one of these runs has not seen the transition, and no correlation analysis of its own frames
+    will reveal that.
+
 ## Where this τ span comes from
 
 τ_max is 0.3 because 0.5 was tried and gave 1% acceptance — a ladder that completes, reports

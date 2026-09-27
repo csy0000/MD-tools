@@ -296,6 +296,54 @@ the saved states (`detection_route: saved-state`, and the sha256 of each).
     same ladder, acceptance near 0.22, the same round-trip counts to within the scatter of a
     different random trajectory. A shared card costs wall time, not correctness.
 
+## 7. Checking state 0 against a plain run, and against symmetry
+
+State 0 integrates the **unscaled** Hamiltonian, so it must agree with ordinary cMD on the same
+box. On this molecule there is a stronger check available than agreement: the ring is
+para-substituted, so a 180° rotation about the N–C bond maps the molecule onto itself, the torsion
+distribution repeats with period 180°, and the window −90° to +90° must hold **exactly 50%** of the
+population. The right answer is known before either simulation runs.
+
+Against a **length-matched** 10 ns cMD run of the same box — not the 200 ps the
+[cMD page](cMD.md) documents, which would be comparing lengths rather than methods:
+
+```bash
+python compare_cmd_rest2.py --system paracetamol \
+    --cmd ../PARA-10ns/cMD-run1 --cmd-build ../PARA-10ns/build \
+    --rest2 REST2-run1 --rest2-build build \
+    --window -90 90 --out cmd-vs-rest2-ring.png
+```
+
+```text
+paracetamol: ring rotation about N-C  [degrees]
+  cMD            n=5000  sd=137.22  in-basin=26.52%  crossings=  2
+  REST2 state 0  n=5000  sd=116.09  in-basin=48.54%  crossings=282
+  two-sample KS on the INDEPENDENT samples: D=0.1301  p=1.36e-17
+```
+
+![cMD and REST2 state 0 on the ring torsion](images/cmd-vs-rest2-ring.png)
+
+| | occupancy of −90…90° | crossings in 10 ns |
+|---|---|---|
+| exact, by symmetry | **50.00%** | — |
+| REST2 state 0 | **48.54%** | 282 |
+| cMD, 10 ns | 26.52% | 2 |
+| cMD, 200 ps (the [cMD page](cMD.md)) | 0.00% | 0 |
+
+**The ladder is within 1.5 points of an answer we know exactly; the length-matched plain run is out
+by 23.5.** Not because cMD is wrong — it samples the same Hamiltonian and would converge to 50%
+eventually — but because it crossed the barrier twice in 10 ns and cannot average over a transition
+it did not make. This is the same comparison as
+[alanine dipeptide's](../ALA/REST2.md#5-checking-the-answer-against-a-plain-run), with the
+advantage that here the target is not another simulation.
+
+!!! note "Symmetry is the best convergence test available, when you have one"
+    Every other check on this page compares one run against another, and two runs can be wrong in
+    the same direction. The 50% is not a measurement: it follows from the molecule's point group,
+    so a run's distance from it is an absolute error rather than a difference. Where a system
+    offers such a constraint — an equivalent pair of atoms, a symmetric dihedral, a degenerate
+    binding mode — it is worth more than any amount of agreement between trajectories.
+
 ## Next
 
 * where the parameters came from: [cMD: paracetamol](../paracetamol/cMD.md)

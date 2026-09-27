@@ -89,6 +89,36 @@ From `cMD.out`:
 
 `mdout.csv` opens at step 102500, not at zero: the step counter is absolute across the chain.
 
+## 4. What 1 ns sampled
+
+Chignolin is here because it has a real folding equilibrium. Asking what the run saw of it, with
+[`compare_cmd_rest2.py`](../shared/compare_cmd_rest2.py):
+
+```bash
+python compare_cmd_rest2.py --system chignolin \
+    --cmd cMD-run1 --cmd-build build --window 0.25 2.0 --out cmd-rmsd.png
+```
+
+```text
+chignolin: backbone RMSD to the NMR model  [nm]
+  cMD   n=500  mean=0.13  sd=0.01  in-basin=0.00%  crossings=0
+        first/second half mean=0.13 / 0.13
+```
+
+![backbone RMSD over 1 ns: a single narrow peak](images/cmd-rmsd.png)
+
+The peptide sits at 0.13 nm from the deposited structure and never leaves: **0.00% of frames above
+0.25 nm, and not one excursion.** The two halves agree to 0.00 nm.
+
+That is the correct result for 1 ns and tells you nothing about folding. Chignolin's unfolding
+happens on the microsecond scale, so a nanosecond samples fluctuations *within* the folded state
+and nothing else — the narrow peak is a picture of one basin, not of an equilibrium between two.
+A run like this is a good check that the build is sound and a bad basis for any statement about
+stability.
+
+Extending to 10 ns does not change it: still 0.00% and zero crossings.
+[The ladder](REST2.md) reaches 5.14% in 10 ns.
+
 ## Next
 
 1 ns is a demonstration. Chignolin folds on the microsecond scale, so raise `production_steps` —

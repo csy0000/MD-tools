@@ -135,13 +135,56 @@ Each state has its own trajectory, `solute_state<i>_prod1.nc`, 5000 frames of th
 The index is the **state's**, not the walker's: `solute_state0_prod1.nc` is the unscaled ensemble,
 and it is the one to analyse. No demultiplexing is needed.
 
-## Where to check the answer
+## 5. Checking the answer against a plain run
 
-Unusually for a ladder, you can. `solute_state0_prod1.nc` should reproduce the φ/ψ distribution
-that [10 ns of plain cMD](cMD.md) gives on the same box — both sample the same unscaled
-Hamiltonian at the same temperature, one with exchanges and one without. A REST2 ladder whose
-state 0 disagrees with an unbiased run of the same length is reporting a bug, not a result, and
-this is the one system in the set small enough for that comparison to be cheap.
+Unusually for a ladder, you can. State 0 integrates the **unscaled** Hamiltonian at the same
+temperature as [10 ns of plain cMD](cMD.md) on the same box, so at infinite sampling the two must
+agree on every equilibrium property. [`compare_cmd_rest2.py`](../shared/compare_cmd_rest2.py) puts
+them side by side:
+
+```bash
+python compare_cmd_rest2.py --system ALA \
+    --cmd ../ALA/cMD-run1 --cmd-build ../ALA/build \
+    --rest2 REST2-run1 --rest2-build build \
+    --window 0 120 --out cmd-vs-rest2-phi.png
+```
+
+```text
+ALA: phi (C-N-CA-C)  [degrees]
+  cMD            n=10000  mean=-84.14  sd=29.40  in-basin= 0.00%  crossings=  0
+  REST2 state 0  n= 5000  mean=-79.12  sd=36.78  in-basin= 2.80%  crossings= 34
+  cMD            statistical inefficiency g= 8.0  ->  1256 independent sample(s) of 10000
+  REST2 state 0  statistical inefficiency g=14.6  ->   342 independent sample(s) of  5000
+  two-sample KS on the INDEPENDENT samples: D=0.0856  p=0.0362
+```
+
+![cMD and REST2 state 0 on the same coordinate](images/cmd-vs-rest2-phi.png)
+
+**Both runs are 10 ns of the same Hamiltonian at the same temperature.** They agree closely on the
+two negative-φ basins — the histograms lie on top of each other — and differ entirely in the
+shaded αL window: the ladder's state 0 enters and leaves it **34 times** and spends 2.80% of its
+frames there, while the plain run never visits it at all.
+
+The ladder is saved half as often (2 ps against 1 ps), and a coarser frame interval can only *miss*
+crossings, so the 34-against-0 understates the gap.
+
+!!! note "Read the crossing count before the KS statistic"
+    `D = 0.086` says the two cumulative distributions differ by at most 8.6%. Since they sample
+    the same Hamiltonian, that gap would be 0 given enough sampling — so a difference means one of
+    them has not converged, and the crossing counts say which. Here cMD crossed zero times. The
+    disagreement is the plain run's missing basin, not a fault in the ladder.
+
+    If both runs crossed freely and they *still* disagreed, the suspicion would point the other
+    way: velocities rescaled on exchange, walker-indexed trajectories written as state-indexed, or
+    a `tau` claim that did not match the saved state. None of those appear in any completion
+    record — every one of them would still report `status: completed`.
+
+!!! warning "A smaller g does not mean better sampling"
+    cMD's statistical inefficiency is **8.0** against the ladder's **14.6**, which reads backwards
+    until you see why: a run trapped in one basin has a short correlation time *within that basin*.
+    Its 1256 "independent samples" are 1256 draws from a distribution missing a whole feature. The
+    ladder's larger g is the signature of a series that keeps changing basin. `g` describes the
+    series it was given, not the one it missed.
 
 ## Next
 
