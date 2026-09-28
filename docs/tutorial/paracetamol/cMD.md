@@ -297,6 +297,13 @@ Folding the angle into its unique range, −90° to +90°, gives the coordinate 
 | 200 ps cMD — this page | 157.1° | — *(one orientation only; see below)* |
 | 10 ns cMD | 137.2° | **25.1°** |
 | 10 ns REST2, state 0 | 116.1° | **25.5°** |
+| **1 µs cMD — the reference** | 120.6° | **25.6°** |
+
+The 1 µs run is here only as a reference: it is not part of the workflow this page teaches, and
+nothing below asks anyone to run one. Its job is to say what the answer IS, so the short runs can
+be marked against it rather than against each other. On the folded coordinate **10 ns of plain cMD
+is already within 0.5° of the microsecond**, and the ladder within 0.1°. The physical width of this
+torsion is not what either method struggles with.
 
 **In 200 ps the ring never rotated once.** The run has no information about this coordinate at
 all, and the histogram it produces is a picture of one half of a symmetric distribution. Nothing in
@@ -308,6 +315,14 @@ rotation.
     Because the two orientations are equivalent, a fully converged run must spend **exactly 50%**
     of its time on each side. Measuring that costs nothing and needs no reference: 200 ps gives
     0.00%, 10 ns gives 26.5%, [the ladder](REST2.md) gives 48.5% in the same 10 ns.
+
+    **The 1 µs reference gives 44.2%, not 50%** — and that is the useful part. It crossed the
+    barrier 165 times in a microsecond, and an occupancy estimated from N crossings carries an
+    uncertainty of roughly 1/sqrt(N), here about 8%. So 44.2% is consistent with the exact answer
+    and pins it no more tightly than that. **This test converges with the number of crossings, not
+    with simulation length**: a thousand times the sampling bought about 80 times the crossings,
+    because the rate is what it is. Quoting "1 µs" says nothing about how well this coordinate was
+    sampled; quoting 165 crossings says everything.
 
     It is a test of **ergodicity over the rotation**, not of any physical quantity. On the folded
     coordinate — the one that carries physics — the 10 ns run and the ladder agree to half a
