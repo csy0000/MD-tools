@@ -630,7 +630,12 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
             loaded.system, hot, tuple(taus), excluded_bonds=excluded,
             unscaled_impropers=impropers,
             torsion_central_bonds=arguments["torsion_central_bonds"],
-            cmap_terms=arguments["cmap_terms"])
+            cmap_terms=arguments["cmap_terms"],
+            # AIS's two end states are combined into ONE System, and OpenMM rejects two Forces
+            # declaring `rest2_scale_gb` with different defaults. Writing the GB factor as a
+            # literal avoids the global entirely and leaves the tau = 0 state an untouched clone,
+            # so a degenerate pair still has nothing to switch. No ladder passes this.
+            gb_literal=method in TWO_STATE_METHODS)
     except Exception as broken:
         raise ConfigError(f"the scaled Systems could not be constructed: "
                           f"{type(broken).__name__}: {broken}") from None

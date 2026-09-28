@@ -2211,13 +2211,23 @@ def _ais_schedule_claim(*, ais, source_config, dynamics, where, system0, system1
             f"{where}: ais.lambda_schedule_tau0 is {tau0}, but -s {Path(system0).name} is the "
             f"saved state at tau {identity['tau']} ({identity['record']}). The schedule would "
             f"follow a scaling V0 does not have.")
-    source_sha = load_scaler_record(Path(identity["record"]))["source"]["system_sha256"]
-    if source_sha != file_facts(system1)["sha256"]:
+    record = load_scaler_record(Path(identity["record"]))
+    source_sha = record["source"]["system_sha256"]
+    # V1 may be EITHER the recorded unscaled source, or the record's own tau = 0 state. Those are
+    # byte-identical -- the tau = 0 state IS an untouched clone -- so this is belt and braces
+    # rather than a real widening: it lets a caller name the end state the way the scaler wrote it
+    # (`system_state0.xml`) instead of having to reach back to `built.xml`. Both are the physical
+    # end state, and the digests are what say so.
+    physical = {source_sha}
+    physical |= {state["sha256"] for state in record.get("states", ())
+                 if abs(float(state["tau"])) <= 1e-9 and state.get("sha256")}
+    if file_facts(system1)["sha256"] not in physical:
+        listed = ", ".join(sorted(sha[:16] + "..." for sha in physical))
         raise PreflightError(
-            f"{where}: ais.lambda_schedule is tau-linear, but -s2 {Path(system1).name} is not the "
-            f"System -s was scaled from ({identity['record']} records sha256 "
-            f"{source_sha[:16]}...). tau-linear switches the scaling off, so V1 must be the "
-            f"unscaled source of V0.")
+            f"{where}: ais.lambda_schedule is tau-linear, but -s2 {Path(system1).name} is neither "
+            f"the System -s was scaled from nor that record's tau = 0 state "
+            f"({identity['record']} records sha256 {listed}). tau-linear switches the scaling off, "
+            f"so V1 must be the unscaled physical end state of V0.")
     return kind, tau0
 
 

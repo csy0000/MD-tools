@@ -374,7 +374,7 @@ def _scale_cmap(force, solute, solute_solute, duplicates=None, scaled_terms=None
 REST2_GB_SCALE_PARAMETER = "rest2_scale_gb"
 
 
-def _scale_customgb(force, system, solute, solute_environment):
+def _scale_customgb(force, system, solute, solute_environment, *, as_literal=False):
     """Scale the ENTIRE generalised-Born energy by the LINEAR factor, `(1 - tau)`.
 
     The whole GB contribution is a solute-environment interaction: it is the solute's coupling to a
@@ -406,6 +406,26 @@ def _scale_customgb(force, system, solute, solute_environment):
             f"{len(missing)} of {system.getNumParticles()} particles are outside it "
             f"({shown}{more}). A generalised-Born energy is not separable per atom.")
 
+    # `as_literal` writes the factor into the expression instead of behind a global parameter.
+    # AIS needs it: its two end states are combined into ONE System, and two Forces declaring
+    # `rest2_scale_gb` with different defaults is rejected by OpenMM outright. A literal also
+    # keeps the tau = 0 state a byte-identical untouched clone, so a degenerate pair -- a System
+    # against its own unscaled state -- still has nothing to switch and is still refused.
+    # REST2 and cMD keep the global: their saved states' bytes are a compatibility surface.
+    factor = float(solute_environment)
+    if as_literal:
+        if factor == 1.0:
+            return                      # unscaled: leave the force exactly as it was
+        for term in range(force.getNumEnergyTerms()):
+            expression, computation = force.getEnergyTermParameters(term)
+            if ";" in expression:
+                head, tail = expression.split(";", 1)
+                scaled = f"{factor!r}*({head});{tail}"
+            else:
+                scaled = f"{factor!r}*({expression})"
+            force.setEnergyTermParameters(term, scaled, computation)
+        return
+
     existing = {force.getGlobalParameterName(i)
                 for i in range(force.getNumGlobalParameters())}
     if REST2_GB_SCALE_PARAMETER not in existing:
@@ -423,7 +443,7 @@ def _scale_customgb(force, system, solute, solute_environment):
 
     index = [force.getGlobalParameterName(i)
              for i in range(force.getNumGlobalParameters())].index(REST2_GB_SCALE_PARAMETER)
-    force.setGlobalParameterDefaultValue(index, float(solute_environment))
+    force.setGlobalParameterDefaultValue(index, factor)
 
 
 #: Force classes this module knows how to scale. Each has an explicit `_scale_*` implementation.
@@ -481,12 +501,25 @@ def audit_force_classes(system, where="tau scaling"):
 
 
 def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=(),
-                        unscaled_impropers=True, torsion_central_bonds=None, cmap_terms=None):
+                        unscaled_impropers=True, torsion_central_bonds=None, cmap_terms=None,
+                        gb_literal=False):
     """A copy of `base_system` with the solute Hamiltonian scaled for this rung.
 
-    At tau = 0 the result is an untouched clone. (A `prepare_for_switching` flag used to make that
-    clone carry the CustomGBForce scale parameter for the single-topology AIS, which switched tau
-    on a live Context; it was retired with that AIS in 0.5.4.)
+    At tau = 0 the result is an untouched clone, in every mode. (A `prepare_for_switching` flag
+    used to make that clone carry the CustomGBForce scale parameter for the single-topology AIS,
+    which switched tau on a live Context; it was retired with that AIS in 0.5.4 and has NOT come
+    back -- see `gb_literal` for why the obvious revival is the wrong fix.)
+
+    `gb_literal` writes the generalised-Born factor into the energy expression instead of behind
+    the `rest2_scale_gb` global parameter. Only AIS passes it, and it exists because AIS combines
+    its two end states into ONE System: two Forces declaring that global with different defaults
+    is rejected by OpenMM, so the scaled state cannot carry it. Writing the factor as a literal
+    leaves the tau = 0 state an untouched clone, which keeps a DEGENERATE pair -- a System against
+    its own unscaled state -- with nothing to switch, and therefore still refused. Giving the
+    tau = 0 clone an inert `rest2_scale_gb = 1.0` would have matched the layouts and silently
+    defeated that guard.
+
+    Explicit solvent has no CustomGBForce, so this is a no-op there and the flag costs nothing.
 
     `solute_indices` is the NONBONDED hot set: its atoms carry `(1-tau)` on charge and `(1-tau)^2`
     on epsilon. With `torsion_central_bonds` and `cmap_terms` both None, torsions and CMAP follow
@@ -533,5 +566,6 @@ def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=(),
         elif isinstance(force, CMAPTorsionForce):
             _scale_cmap(force, solute, solute_solute, scaled_terms=terms)
         elif isinstance(force, CustomGBForce):
-            _scale_customgb(force, system, solute, solute_environment)
+            _scale_customgb(force, system, solute, solute_environment,
+                            as_literal=gb_literal)
     return system

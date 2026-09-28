@@ -356,7 +356,7 @@ def apply_ladder_restraints(system, restraints):
 
 def build_rung_systems(base_system, solute_indices, taus, *, excluded_bonds=(),
                        pressure_bar=None, restraints=(), unscaled_impropers=True,
-                       torsion_central_bonds=None, cmap_terms=None):
+                       torsion_central_bonds=None, cmap_terms=None, gb_literal=False):
     """One scaled System per tau rung, plus the complete force audit. THE one implementation.
 
     Called from two places, deliberately: `Protocol.build_systems` (the driver's route) and the
@@ -375,11 +375,15 @@ def build_rung_systems(base_system, solute_indices, taus, *, excluded_bonds=(),
             "approximated.")
     # `torsion_central_bonds` and `cmap_terms` are a SELECTIVE region's (0.6.1); None is the
     # whole-solute rule, unchanged.
+    # `gb_literal` is AIS's: it writes the GB factor into the expression rather than behind a
+    # global parameter, because AIS combines both end states into one System and OpenMM rejects two
+    # Forces declaring one global with different defaults. A ladder never passes it.
     systems = [build_scaled_system(base_system, solute_indices, tau,
                                    excluded_bonds=excluded_bonds,
                                    unscaled_impropers=unscaled_impropers,
                                    torsion_central_bonds=torsion_central_bonds,
-                                   cmap_terms=cmap_terms)
+                                   cmap_terms=cmap_terms,
+                                   gb_literal=gb_literal)
                for tau in taus]
     if restraints:
         # The same bias on every rung, added after scaling; see `apply_ladder_restraints`.
