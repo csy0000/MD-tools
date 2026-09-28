@@ -46,9 +46,9 @@ renamed accordingly rather than run at a pressure that means nothing.
 | [**cMD**](cMD.md) | the unbiased reference every method here is checked against, 10 ns | published |
 | [**REST2**](REST2.md) | solute tempering, four states over τ 0 → 0.5 | published |
 | [**AIS**](AIS.md) | annealed importance sampling between two Hamiltonians, with the torsion reweighting checked against the plain simulation | published |
-| **Umbrella sampling** | a potential of mean force along φ | planned, 0.6.2 |
+| **Umbrella sampling** | a potential of mean force along φ | planned, 0.6.3 |
 | **Alchemical (TI, FEP)** | free energies by transformation | planned, 0.7.0 |
 
-*Umbrella sampling arrives in 0.6.2 and the alchemical pages in 0.7.0. They are listed here so the
+*Umbrella sampling arrives in 0.6.3 and the alchemical pages in 0.7.0. They are listed here so the
 shape of the set is visible; neither is written yet, and neither is linked to a page that does not
 exist.*

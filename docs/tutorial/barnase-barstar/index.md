@@ -155,9 +155,9 @@ Ser89 -- surface residues whose side chains were disordered in the crystal.
 | [**cMD**](cMD.md) | the complex simulated unbiased, 10 ns | published |
 | **Selective REST2** | heating the interface sidechains | not written for this system |
 | **AIS** | annealing a weakened interface back to full strength | not written for this system |
-| **Umbrella sampling** | a potential of mean force along the chain–chain centre-of-mass distance | planned, 0.6.2 |
+| **Umbrella sampling** | a potential of mean force along the chain–chain centre-of-mass distance | planned, 0.6.3 |
 | **Alchemical (TI, FEP)** | free energies by transformation | planned, 0.7.0 |
 
-*Umbrella sampling arrives in 0.6.2 and the alchemical pages in 0.7.0. They are listed here so the
+*Umbrella sampling arrives in 0.6.3 and the alchemical pages in 0.7.0. They are listed here so the
 shape of the set is visible; neither is written yet, and neither is linked to a page that does not
 exist.*

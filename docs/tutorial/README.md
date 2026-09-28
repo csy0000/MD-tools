@@ -31,7 +31,7 @@ size.
 | **cMD** | alanine dipeptide, paracetamol, chignolin, barnase–barstar, TYK2 (1 µs) | published |
 | **REST2** | alanine dipeptide, paracetamol, chignolin, TYK2 (selective) | published |
 | **AIS** | alanine dipeptide, paracetamol; TYK2 as a measured LIMIT | published |
-| **Umbrella sampling** | alanine dipeptide (φ), protein–ligand and protein–protein (centre-of-mass distance) | planned, 0.6.2 |
+| **Umbrella sampling** | alanine dipeptide (φ), protein–ligand and protein–protein (centre-of-mass distance) | planned, 0.6.3 |
 | **Alchemical — TI and FEP** | every system | planned, 0.7.0 |
 
 The two planned rows are listed so the shape of the set is visible. Neither is written, and neither

@@ -65,9 +65,9 @@ Four Na⁺ against two Cl⁻ because chignolin carries −2. What every key mean
 | [**cMD**](cMD.md) | the unbiased reference, 1 ns at 4 fs with HMR | published |
 | [**REST2**](REST2.md) | solute tempering over the whole peptide | published |
 | **AIS** | annealed importance sampling | not written for this system |
-| **Umbrella sampling** | a potential of mean force along an end-to-end distance | planned, 0.6.2 |
+| **Umbrella sampling** | a potential of mean force along an end-to-end distance | planned, 0.6.3 |
 | **Alchemical (TI, FEP)** | free energies by transformation | planned, 0.7.0 |
 
-*Umbrella sampling arrives in 0.6.2 and the alchemical pages in 0.7.0. They are listed here so the
+*Umbrella sampling arrives in 0.6.3 and the alchemical pages in 0.7.0. They are listed here so the
 shape of the set is visible; neither is written yet, and neither is linked to a page that does not
 exist.*
