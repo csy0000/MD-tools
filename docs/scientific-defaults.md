@@ -319,6 +319,13 @@ say nothing about whether the two produce the same energy, and that is the only 
 means to whoever cites it. What the record states instead is what it can stand behind:
 `implicit_model`, `radii`, `radius_assignment_method`, `nonpolar` and `parameter_coverage`.
 
+The comparison was subsequently run — `docs/release-notes/20260928-amber-igb8-cross-engine-evidence.md`,
+CPU `pmemd` 26.0 against the same prmtop. Bonded terms agree exactly and totals agree to 2.6e-4
+relative at worst, which is good agreement and **not** bit-for-bit. The GB discrepancy is ten
+times larger under mbondi3 than under mbondi2 on the same molecule at the same coordinates, so the
+removed field had claimed parity most confidently where the agreement is weakest. Quote a
+tolerance from that table if a comparison with Amber is needed; do not reintroduce the word.
+
 *Evidence: **CE** for the peptide route; the ligand route is labelled experimental and is not
 claimed at all.*
 
