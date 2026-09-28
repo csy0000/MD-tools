@@ -1300,6 +1300,31 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
                 _add(a, b, "double_bond", residue, evidence)
 
     central.sort(key=lambda e: (UNSCALED_BOND_CLASSES.index(e["class"]), e["bond"]))
+
+    # An amide candidate ANOTHER RULE HAS ALREADY CLASSIFIED is not undecided.
+    #
+    # `_amide_candidates` finds every C-N bond whose carbon also bears an oxygen, structurally,
+    # from the topology. A C-N bond INSIDE an aromatic ring meets that description, and can never
+    # match `[CX3](=[OX1])[NX3]`: SMARTS `C` is an ALIPHATIC carbon and RDKit aromatises the ring,
+    # so the pattern fails on the carbon before the nitrogen is even considered. Folate's pterin
+    # 4-oxo lactam is the standard example, in either tautomer.
+    #
+    # Such a bond is already in `central_bonds` as `aromatic_ring`, and its torsions are already
+    # protected -- a torsion across an aromatic ring bond cannot rotate in the first place. Leaving
+    # it in `unclassified` refuses the build over an ambiguity that does not exist, and the
+    # refusal is unanswerable: the exclusions file only ADDS protection, which the bond has.
+    #
+    # This does not weaken "a torsion nobody can classify is refused". It says a bond classified
+    # by the aromatic or double-bond rule HAS been classified. A candidate no rule placed is still
+    # refused, and `bond: None` entries -- a whole residue with no bond orders at all -- are never
+    # dropped, because nothing about that residue was classified.
+    classified = {tuple(entry["bond"]) for entry in central}
+    resolved = [u for u in unknown
+                if u["bond"] is not None and tuple(sorted(u["bond"])) in classified]
+    unknown = [u for u in unknown if u not in resolved]
+    for entry in resolved:
+        pair = tuple(sorted(entry["bond"]))
+        entry["resolved_by"] = next(e["class"] for e in central if tuple(e["bond"]) == pair)
     method += ("; aromatic ring and double bonds from PROTEIN_UNSCALED_BONDS for protein residues "
                "and from SDF bond orders otherwise; impropers "
                + ("unscaled" if unscaled_impropers else "scaled"))
@@ -1308,6 +1333,12 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         "central_bonds": central,
         "proline_like_scaled_bonds": [c["bond"] for c in proline],
         "unclassified": unknown,
+        # Amide candidates the aromatic or double-bond rule placed instead. Recorded rather than
+        # dropped silently: the amide test could not read these, and which rule did is the whole
+        # reason the build was allowed to proceed.
+        "amide_candidates_resolved_by_another_rule": [
+            {"bond": list(e["bond"]), "resolved_by": e["resolved_by"],
+             "amide_test": e["ambiguous"]} for e in resolved],
         "unscaled_impropers": bool(unscaled_impropers),
         "detection_method": method,
         "detector_version": 2,

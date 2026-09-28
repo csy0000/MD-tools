@@ -197,3 +197,70 @@ def test_a_table_that_disagreed_with_the_classifier_refuses_the_region(monkeypat
     monkeypatch.setitem(sidechains.SIDECHAIN_BONDS, "PHE", lying)
     with pytest.raises(SelectionError, match="disagree"):
         _select(fixture, config, tmp_path)
+
+
+# --- an aromatic ring C-N bond is classified, not "undecided" -------------------------------
+#
+# Reported from a student's folate build, 2026-09-28. `build-top --rest2-scaler` refused with
+# "1 item(s) could not be classified ... bond 29-31: FOL0 C -> FOL0 N: RDKit found no
+# ordinary-amide match", over a bond it had ALREADY protected.
+
+FOLATE_SMILES = "c1cc(ccc1C(=O)N[C@@H](CCC(=O)O)C(=O)O)NCc2cnc3c(n2)C(=O)N=C(N3)N"
+
+
+def _folate_topology_and_sdf(tmp_path):
+    from openff.toolkit.topology import Molecule
+
+    mol = Molecule.from_smiles(FOLATE_SMILES, allow_undefined_stereo=True)
+    mol.generate_conformers(n_conformers=1)
+    mol.name = "FOL"
+    sdf = tmp_path / "FOL.sdf"
+    mol.to_file(str(sdf), file_format="sdf")
+    topology = mol.to_topology().to_openmm()
+    for residue in topology.residues():
+        residue.name = "FOL"
+    return topology, sdf
+
+
+@pytest.mark.slow
+def test_an_aromatic_ring_c_n_bond_is_not_an_undecided_amide(tmp_path):
+    """Folate's pterin 4-oxo lactam is a C-N bond whose carbon bears an oxygen, so it reaches the
+    amide test -- and can NEVER match `[CX3](=[OX1])[NX3]`, because SMARTS `C` is an ALIPHATIC
+    carbon and RDKit aromatises the ring. Both folate tautomers fail it identically.
+
+    The bond is already `aromatic_ring` in `central_bonds`, so its torsions are already unscaled
+    and nothing is undecided. Refusing the build over it stopped a correct calculation, and the
+    refusal could not be answered: the exclusions file only ADDS protection, which it has.
+    """
+    topology, sdf = _folate_topology_and_sdf(tmp_path)
+    report = classify_unscaled_torsions(topology, list(range(topology.getNumAtoms())),
+                                        ligand_sdf=sdf)
+
+    assert report["unclassified"] == [], (
+        "an amide candidate another rule already classified must not block the build")
+
+    protected = {tuple(e["bond"]): e["class"] for e in report["central_bonds"]}
+    assert protected.get((26, 28)) == "aromatic_ring", protected
+
+    # The decision is RECORDED, with the amide test's own reason, rather than dropped silently.
+    resolved = report["amide_candidates_resolved_by_another_rule"]
+    assert [e["bond"] for e in resolved] == [[26, 28]]
+    assert resolved[0]["resolved_by"] == "aromatic_ring"
+    assert "no ordinary-amide match" in resolved[0]["amide_test"]
+
+    # And the REAL amide is still an amide, not quietly swept into the same bucket.
+    assert protected.get((6, 8)) == "amide_omega", protected
+
+
+@pytest.mark.slow
+def test_a_candidate_no_rule_can_place_is_still_refused(tmp_path):
+    """The guard on the fix: dropping resolved candidates must not drop unresolvable ones.
+
+    With no SDF at all there are no bond orders, so nothing about this residue is classified --
+    and it must still refuse, or the fix would have turned a real ambiguity into silence.
+    """
+    topology, _ = _folate_topology_and_sdf(tmp_path)
+    report = classify_unscaled_torsions(topology, list(range(topology.getNumAtoms())))
+
+    assert report["unclassified"], "a solute with no bond orders must still be refused"
+    assert report["amide_candidates_resolved_by_another_rule"] == []

@@ -88,3 +88,8 @@ src/md_tools/_commit.py
 
 # --- agent worktrees and settings, never committed ---
 /.claude/
+
+# A scratch area for reproductions and student work. Root-anchored, like every pattern here:
+# a bare `sandbox/` would match at any depth and could silently exclude a real source directory,
+# which is exactly how `build/` once hid src/md_tools/build/ from every commit.
+/sandbox/
