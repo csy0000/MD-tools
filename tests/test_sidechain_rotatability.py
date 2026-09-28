@@ -18,6 +18,7 @@ PLATFORM_POLICY_EXEMPTION: topologies and tables; no System is created and no Co
 """
 from __future__ import annotations
 
+from pathlib import Path
 import pytest
 
 openmm = pytest.importorskip("openmm")
@@ -225,8 +226,13 @@ def _folate_topology_and_sdf(tmp_path):
 @pytest.mark.slow
 def test_an_aromatic_ring_c_n_bond_is_not_an_undecided_amide(tmp_path):
     """Folate's pterin 4-oxo lactam is a C-N bond whose carbon bears an oxygen, so it reaches the
-    amide test -- and can NEVER match `[CX3](=[OX1])[NX3]`, because SMARTS `C` is an ALIPHATIC
-    carbon and RDKit aromatises the ring. Both folate tautomers fail it identically.
+    amide test -- and fails `[CX3](=[OX1])[NX3]` for a DIFFERENT reason in each tautomer, measured
+    on the SDF as the classifier reads it:
+
+        1H (this molecule)  the lactam N has no hydrogen and two connections -> [NX3] fails
+        3H (standard)       the N is fine; the CARBON is aromatic, and SMARTS `C` is ALIPHATIC
+
+    Neither matches, so switching tautomer is not a workaround.
 
     The bond is already `aromatic_ring` in `central_bonds`, so its torsions are already unscaled
     and nothing is undecided. Refusing the build over it stopped a correct calculation, and the
@@ -264,3 +270,43 @@ def test_a_candidate_no_rule_can_place_is_still_refused(tmp_path):
 
     assert report["unclassified"], "a solute with no bond orders must still be refused"
     assert report["amide_candidates_resolved_by_another_rule"] == []
+
+
+@pytest.mark.slow
+def test_relaxing_the_amide_carbon_to_any_element_would_scale_an_aromatic_ring_bond():
+    """Why the one-line SMARTS fix was NOT taken, pinned so nobody takes it later.
+
+    `[#6X3](=[OX1])[#7X3]` is the obvious repair for an aromatic carbonyl carbon. On folate's
+    STANDARD 3H tautomer it does match the pterin lactam -- and that nitrogen sits in a
+    6-membered ring, inside `max_proline_ring_size` (7), so the bond would then be classified
+    proline-like and therefore SCALED. An aromatic ring bond that is currently protected would
+    start having its torsions scaled, silently.
+
+    This test asserts the two facts that make that true, so a future relaxation has to confront
+    them rather than discover the consequence in a production run.
+    """
+    import tempfile
+
+    from openff.toolkit.topology import Molecule
+    from rdkit import Chem
+
+    three_h = "c1cc(ccc1C(=O)N[C@@H](CCC(=O)O)C(=O)O)NCc2cnc3c(n2)C(=O)NC(=N3)N"
+    mol = Molecule.from_smiles(three_h, allow_undefined_stereo=True)
+    mol.generate_conformers(n_conformers=1)
+    mol.name = "FOL"
+    path = Path(tempfile.mkdtemp()) / "fol3h.sdf"
+    mol.to_file(str(path), file_format="sdf")
+    rd = Chem.MolFromMolFile(str(path), removeHs=False)
+
+    def matches(pattern):
+        return any(sorted(m[0::2]) == [26, 28]
+                   for m in rd.GetSubstructMatches(Chem.MolFromSmarts(pattern)))
+
+    assert not matches("[CX3](=[OX1])[NX3]"), "the shipped pattern must still not match it"
+    assert matches("[#6X3](=[OX1])[#7X3]"), (
+        "if this stops matching, the hazard below no longer applies and this test is obsolete")
+
+    rings = [len(r) for r in rd.GetRingInfo().AtomRings() if 28 in r]
+    assert rings and min(rings) <= 7, (
+        f"N28 rings {rings}: the proline-like bound is 7, so a match would make this bond "
+        f"proline-like and SCALE an aromatic ring bond")
