@@ -149,8 +149,7 @@ cards lands on the same files.
 !!! warning "`AIS.out` shows only this rank's paths"
     Under `NPROC=4`, `AIS.out` holds rank 0's 16 paths and the others go to `AIS.out.rank01`…
     `AIS_paths.csv` is the authoritative table with all 64. Reading the summary as if it were the
-    campaign is an easy way to quote a quarter of your data — it happened while this page was
-    being written.
+    campaign quotes a quarter of the data, and the numbers look entirely plausible.
 
 ## 4. Results
 

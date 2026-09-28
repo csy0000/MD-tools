@@ -5,10 +5,10 @@
 is the evidence for the settings it uses, the datasets they produced, and the two numbers on them
 that mislead.
 
-!!! note "Four ladders were run on 2026-09-21 and 2026-09-22; every number here is copied from their files"
-    RTX 3080s, 2 ranks per card under MPS, CUDA mixed precision, md-tools 0.6.1 on branch
-    `work/0.6.1-selection`. The system is the prepared TYK2 fixture with `ejm_31`. Route A and
-    the comparison ladder used four cards; route B, at twelve rungs, used six.
+!!! note "Four ladders, and every number here is copied from their files"
+    RTX 3080s, 2 ranks per card under MPS, CUDA mixed precision, md-tools 0.6.1. The system is
+    TYK2 with `ejm_31`, prepared as [the system page](index.md) describes. Route A and the
+    comparison ladder used four cards; route B, at twelve rungs, used six.
 
     **One check on this page did not pass**: the recorded exchange energies were recomputed
     against the saved states and came out at 0.077–0.121 kT, against a 0.05 kT tolerance that had

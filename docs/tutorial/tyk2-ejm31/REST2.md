@@ -41,12 +41,12 @@ the χs**.
    cp <package>/L31.sdf build/L31.sdf
    ```
 
-   !!! warning "A workaround with a date on it"
+   !!! warning "A workaround, until build-top writes the file itself"
        `build-top`'s complex route does not yet write `<RESNAME>.sdf` beside the System, so
        `--rest2-scaler` cannot read the ligand's bond orders and refuses — correctly, since which
-       of its torsions stay unscaled cannot be guessed. Recorded as a defect on 2026-09-21; the
-       fix writes the file at build time from the package's own molecule, and this step then
-       disappears. Until it lands, copy the file; do not skip the refusal.
+       of its torsions stay unscaled cannot be guessed. The planned fix writes the file at build
+       time from the package's own molecule, and this step then disappears. Until it does, copy
+       the file; do not skip the refusal.
 
 3. **Four GPUs, and they must be the same model.** In a ladder every rank meets every other at the
    exchange barrier, so a faster card cannot make the ladder faster — it waits for the slowest
