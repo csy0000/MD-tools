@@ -1403,14 +1403,37 @@ def unscaled_torsions(topology, solute_atoms: Iterable[int], *,
     if not unknown or not enforce:
         return result
     shown = unknown[:5]
+    atoms = list(topology.atoms())
+
+    def _named(index) -> str:
+        """The atom's OWN name, with its element when the name does not already say it.
+
+        This used to print the literal letters "C" and "N" -- the element of each end, not the
+        atoms. Two different bonds of one residue then produced the same text, and reading those
+        letters as atom names sends a reader to the wrong bond entirely: on folate, "FOL0 C ->
+        FOL0 N" reads exactly like the PDB component's benzoylglutamate amide (its atoms really
+        are named `C` and `N`) while the bond in question was the pterin lactam. The index was
+        always there and always right; the label was the part that lied.
+        """
+        if index is None or not 0 <= int(index) < len(atoms):
+            return "?"
+        atom = atoms[int(index)]
+        name = (atom.name or "").strip()
+        symbol = getattr(atom.element, "symbol", "?")
+        if not name:
+            return symbol
+        return name if name.upper().startswith(symbol.upper()) else f"{name} ({symbol})"
+
     lines = []
     for c in shown:
         if c.get("bond") is None:
             lines.append(f"  residue {c['residue']}{c['residue_index']}: {c['ambiguous']}")
         else:
             lines.append(f"  bond {c['bond'][0]}-{c['bond'][1]}: "
-                         f"{c.get('carbon_residue')}{c.get('carbon_residue_index')} C -> "
-                         f"{c.get('nitrogen_residue')}{c.get('nitrogen_residue_index')} N: "
+                         f"{c.get('carbon_residue')}{c.get('carbon_residue_index')} "
+                         f"{_named(c.get('carbon'))} -> "
+                         f"{c.get('nitrogen_residue')}{c.get('nitrogen_residue_index')} "
+                         f"{_named(c.get('nitrogen'))}: "
                          f"{c['ambiguous']}")
     if len(unknown) > len(shown):
         lines.append(f"  ... and {len(unknown) - len(shown)} more")

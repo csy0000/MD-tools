@@ -310,3 +310,50 @@ def test_relaxing_the_amide_carbon_to_any_element_would_scale_an_aromatic_ring_b
     assert rings and min(rings) <= 7, (
         f"N28 rings {rings}: the proline-like bound is 7, so a match would make this bond "
         f"proline-like and SCALE an aromatic ring bond")
+
+
+@pytest.mark.slow
+def test_the_refusal_names_the_ATOMS_not_just_their_elements(tmp_path):
+    """The message used to print the literal letters "C" and "N" -- the elements, not the atoms.
+
+    Every amide candidate in a residue therefore produced the same text, and the letters read
+    exactly like atom NAMES. On folate that is actively misleading: the PDB component's
+    benzoylglutamate amide really does have atoms named `C` and `N`, so "FOL0 C -> FOL0 N" points
+    a reader at that bond while the bond in question was the pterin lactam. The bond INDEX in the
+    same line was correct throughout; only the label lied. (It cost a wrong diagnosis on
+    2026-09-28, and the correction had to be retracted in turn.)
+    """
+    import tempfile
+
+    from openff.toolkit.topology import Molecule
+    from rdkit import Chem
+
+    from md_tools.ligands.package import default_atom_names
+    from md_tools.openmm.system import UnclassifiedTorsionError, unscaled_torsions
+
+    # A deprotonated benzoyl amide: the ordinary amide fails the test, so the message fires.
+    smi = "c1cc(ccc1C(=O)[N-][C@@H](CCC(=O)O)C(=O)O)NCc2cnc3c(n2)C(=O)N=C(N3)N"
+    mol = Molecule.from_smiles(smi, allow_undefined_stereo=True)
+    mol.generate_conformers(n_conformers=1)
+    mol.name = "FOL"
+    sdf = Path(tempfile.mkdtemp()) / "FOL.sdf"
+    mol.to_file(str(sdf), file_format="sdf")
+    topology = mol.to_topology().to_openmm()
+    for atom, name in zip(topology.atoms(),
+                          default_atom_names(Chem.AddHs(Chem.MolFromSmiles(smi)))):
+        atom.name = name
+    for residue in topology.residues():
+        residue.name = "FOL"
+
+    with pytest.raises(UnclassifiedTorsionError) as refusal:
+        unscaled_torsions(topology, list(range(topology.getNumAtoms())), ligand_sdf=sdf)
+
+    line = next(ln.strip() for ln in str(refusal.value).splitlines()
+                if ln.strip().startswith("bond "))
+    atoms = list(topology.atoms())
+    index = [int(x) for x in line.split(":")[0].removeprefix("bond ").split("-")]
+    for i in index:
+        assert atoms[i].name in line, (
+            f"the refusal must name atom {i} ({atoms[i].name}); got: {line}")
+    # And it must not be the bare element letters that started this.
+    assert " C -> " not in line and line.count(" N:") == 0, line
