@@ -155,11 +155,8 @@ def build_forcefield_record(*, resolved: dict[str, Any], route: str, record: dic
             "radius_policy_requested": implicit_report.get("radius_policy_requested"),
             "radius_assignment_method": implicit_report.get("radius_assignment_method"),
             "peptide_like_mbondi3": implicit_report.get("peptide_like_mbondi3"),
-            **_implicit_support_status(
-                is_ligand=is_ligand,
-                coverage=implicit_report.get("parameter_coverage") or {},
-                nonpolar_sasa=bool(implicit_report.get(
-                    "nonpolar_sasa", implicit_solvent.get("nonpolar_sasa", False)))),
+            **_implicit_support_status(is_ligand=is_ligand,
+                                       coverage=implicit_report.get("parameter_coverage") or {}),
         } if implicit else None,
 
         "nonbonded": _nonbonded_record(implicit=implicit, nonbonded=nonbonded_report,
@@ -334,15 +331,22 @@ def _hmr_inconsistent(constraints, build, hmr):
         f"repartitioned System without evidence that one was built.")
 
 
-def _implicit_support_status(*, is_ligand: bool, coverage: dict[str, Any],
-                             nonpolar_sasa: bool = False) -> dict[str, Any]:
+def _implicit_support_status(*, is_ligand: bool, coverage: dict[str, Any]) -> dict[str, Any]:
     """`supported` or `experimental`, decided by what was measured, not by the route label.
 
-    `nonpolar_sasa` gates the PARITY claim, not the support status. Amber's `igb=8` parity is
-    parity with `gbsa=0` -- no nonpolar term at all -- so a System carrying the ACE term is not
-    that System, however well supported the rest of it is. Nor is it Amber's `gbsa=1`: that is
-    LCPO, a different nonpolar model from ACE. With the term on there is no Amber setting to claim
-    parity WITH, which is why this says so by name instead of quietly keeping the old basis string.
+    `amber_igb8_parity_claimed` and `amber_igb8_parity_basis` are GONE (0.6.2). They asserted
+    bit-for-bit equivalence with another program, and this package has never run that program:
+    no test, no evidence page and no release note ever compared an md-tools implicit energy with
+    a `pmemd` one. The value was computed from `status == "supported"`, which comes from a route
+    label plus an element-coverage check -- premises about the INGREDIENTS Amber would use, which
+    say nothing about whether the two produce the same energy. That is the only thing "parity"
+    means to whoever cites it, and `forcefield.json` is exactly the file someone quotes when
+    comparing an md-tools number against a published Amber one.
+
+    Nothing branched on it and no schema carried it, so removing it loses no capability. What the
+    record can actually stand behind is already beside it and is all verifiable: `implicit_model`,
+    `radii`, `radius_assignment_method`, `nonpolar` and `parameter_coverage`. A reader who needs
+    the comparison can make it; the record no longer makes it for them without having looked.
     """
     measured = bool(coverage.get("measured"))
     fully_covered = bool(coverage.get("all_atoms_covered_by_gbn2_fit"))
@@ -352,23 +356,7 @@ def _implicit_support_status(*, is_ligand: bool, coverage: dict[str, Any],
         status, note = "experimental", _IMPLICIT_EXPERIMENTAL_LIGAND
     else:
         status, note = "supported", _IMPLICIT_SUPPORTED
-    parity = bool(status == "supported") and not nonpolar_sasa
-    if parity:
-        basis = ("ff14SB topology from tleap with PBRadii mbondi3, GBn2 with useSASA=False, "
-                 "matching igb=8 with gbsa=0")
-    elif status == "supported":
-        basis = ("not claimed: the ACE surface-area nonpolar term is present, so this is not "
-                 "igb=8 with gbsa=0, and ACE is not Amber's gbsa=1 (LCPO) either. The polar part "
-                 "is unchanged; set implicit_solvent.nonpolar_sasa: false for the parity build.")
-    else:
-        basis = "not claimed: see support_note and parameter_coverage"
-    return {
-        "support_status": status,
-        "support_note": note,
-        # The exact-parity claim, stated only where the evidence supports it.
-        "amber_igb8_parity_claimed": parity,
-        "amber_igb8_parity_basis": basis,
-    }
+    return {"support_status": status, "support_note": note}
 
 
 def _box_geometry_record(geometry: dict[str, Any]) -> dict[str, Any]:

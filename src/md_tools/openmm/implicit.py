@@ -547,8 +547,8 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
         "n_particles": system.getNumParticles(),
         "n_constraints": system.getNumConstraints(),
         "uses_periodic_boundary_conditions": system.usesPeriodicBoundaryConditions(),
-        # Which atoms the GB-Neck2 fit actually covers, read off the built CustomGBForce. This is
-        # what decides whether an "igb=8 / mbondi3" claim is true for this particular solute.
+        # Which atoms the GB-Neck2 fit actually covers, read off the built CustomGBForce --
+        # a measurement of THIS solute, not a property of the route it came in by.
         "parameter_coverage": coverage,
         "hmr": hmr_record,
     }

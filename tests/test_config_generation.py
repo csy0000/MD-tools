@@ -606,33 +606,6 @@ def test_the_two_libraries_unfitted_gamma_still_differ_by_exactly_what_is_record
     assert abs(openmm_gamma - parmed_gamma - 0.001) < 1e-9, (openmm_gamma, parmed_gamma)
 
 
-def test_the_ace_term_costs_the_amber_igb8_parity_claim():
-    """`igb=8` parity is parity with `gbsa=0`, which means NO nonpolar term.
-
-    The default build carries ACE from 0.6.2, so it is not that System -- and it is not Amber's
-    `gbsa=1` either, because that is LCPO and ACE is not. A record that kept claiming parity while
-    the Hamiltonian gained a term would be the most expensive kind of wrong: it is exactly the
-    sentence somebody cites when comparing against an Amber number.
-    """
-    from md_tools.openmm.forcefield_record import _implicit_support_status
-
-    covered = {"measured": True, "all_atoms_covered_by_gbn2_fit": True}
-
-    parity = _implicit_support_status(is_ligand=False, coverage=covered, nonpolar_sasa=False)
-    assert parity["support_status"] == "supported"
-    assert parity["amber_igb8_parity_claimed"] is True
-    assert "useSASA=False" in parity["amber_igb8_parity_basis"]
-
-    with_ace = _implicit_support_status(is_ligand=False, coverage=covered, nonpolar_sasa=True)
-    # The SUPPORT status is unchanged -- the polar model is just as well supported either way.
-    assert with_ace["support_status"] == "supported"
-    assert with_ace["amber_igb8_parity_claimed"] is False
-    basis = with_ace["amber_igb8_parity_basis"]
-    assert "gbsa=1" in basis and "LCPO" in basis, \
-        "the record must say why there is no Amber setting to claim parity with"
-    assert "nonpolar_sasa: false" in basis, "and how to get the parity build"
-
-
 def test_the_forcefield_record_states_the_nonpolar_choice():
     from md_tools.openmm.system_config import resolve_sys_config
     from md_tools.openmm.system_defaults import sys_defaults

@@ -234,19 +234,18 @@ Three consequences follow directly and are implemented:
    and no GB model has been reparameterised against them; GBn2 belongs to the ff99SB/ff14SB
    lineage. `resolve_sys_config` **refuses** the ff19SB + GBn2 pair rather than warning about it,
    because that pair runs to completion and produces plausible numbers.
-2. **The SASA term is ON by default, and it costs the `igb=8` parity claim.** GBn2's parameters
-   reproduce PB *polar* solvation; the surface-area nonpolar term is a separate model. Amber's
-   `igb=8` with `gbsa=0` is the context the parameters were fit in; OpenMM's `implicit/gbn2.xml`
-   adds the ACE term by default, and the two differ by ~16 kJ/mol (~6 kT) on ACE-ALA-NME on this
-   machine. **Since 0.6.2 this repository follows OpenMM** (`implicit_solvent.nonpolar_sasa:
-   true`), with the surface tension adjustable through `nonpolar_surften`.
+2. **The SASA term is ON by default.** GBn2's parameters reproduce PB *polar* solvation; the
+   surface-area nonpolar term is a separate model. Amber's `igb=8` with `gbsa=0` is the context
+   the parameters were fit in; OpenMM's `implicit/gbn2.xml` adds the ACE term by default, and the
+   two differ by ~16 kJ/mol (~6 kT) on ACE-ALA-NME on this machine. **Since 0.6.2 this repository
+   follows OpenMM** (`implicit_solvent.nonpolar_sasa: true`), with the surface tension adjustable
+   through `nonpolar_surften`. Set `nonpolar_sasa: false` to build without it; the polar part is
+   identical either way. The choice is stated in `forcefield.json`, never inherited.
 
-   The consequence is stated rather than glossed: a default implicit build is **no longer Amber
-   `igb=8`/`gbsa=0` parity**, and it is not `gbsa=1` either — Amber's `gbsa=1` is LCPO, a
-   different nonpolar model from ACE. `amber_igb8_parity_claimed` is therefore `false` on a
-   default build and the basis string says why. Set `nonpolar_sasa: false` for the parity build;
-   the polar part is identical either way. The choice is stated in `forcefield.json`, never
-   inherited.
+   Worth knowing when reading Amber literature, though this document does not turn it into a
+   claim: `gbsa=0` means no nonpolar term, and Amber's `gbsa=1` is LCPO, which is a *different*
+   nonpolar model from ACE. So neither setting of `nonpolar_sasa` corresponds to an Amber run
+   this package has ever checked itself against.
 3. **The construction route is part of the Hamiltonian.** The System is built through
    `parmed.Structure.createSystem`, not `AmberPrmtopFile`, and that is recorded.
 
@@ -297,15 +296,13 @@ atoms carry the unfitted triple, and publishes the result:
     "mbondi3_reduces_to_mbondi2": true,
     "all_atoms_covered_by_gbn2_fit": false
   },
-  "support_status": "experimental",
-  "amber_igb8_parity_claimed": false
+  "support_status": "experimental"
 }
 ```
 
 The rules, implemented in `forcefield_record._implicit_support_status`:
 
-* **peptide/protein route, all atoms covered** → `support_status: "supported"`,
-  `amber_igb8_parity_claimed: true`.
+* **peptide/protein route, all atoms covered** → `support_status: "supported"`.
 * **ligand route, all atoms covered** (a C/H/N/O/S-only drug-like molecule) →
   `support_status: "experimental"`. The elements are in the fit but the *chemistry* was not: GBn2
   was trained on peptides and proteins, and nothing published validates it for drug-like scaffolds
@@ -313,9 +310,14 @@ The rules, implemented in `forcefield_record._implicit_support_status`:
 * **any atom outside the fit** → `support_status: "experimental"`, and `build-top` prints a warning
   naming the atomic numbers.
 
-Exact Amber `igb=8`/`mbondi3`/`gbsa=0` parity is claimed **only** in the first case *and* only
-when `nonpolar_sasa: false`, because parity with `gbsa=0` means no nonpolar term at all. The record
-carries the basis, or the reason there is none, in `amber_igb8_parity_basis`.
+**No Amber parity is claimed anywhere, and the fields that used to claim it are gone.**
+`amber_igb8_parity_claimed` and `amber_igb8_parity_basis` were removed in 0.6.2. They asserted
+bit-for-bit equivalence with a program this package has never run: no test and no evidence page
+has ever compared an md-tools implicit energy with a `pmemd` one. The value was derived from the
+route label and the element coverage above — facts about the *ingredients* Amber would use, which
+say nothing about whether the two produce the same energy, and that is the only thing "parity"
+means to whoever cites it. What the record states instead is what it can stand behind:
+`implicit_model`, `radii`, `radius_assignment_method`, `nonpolar` and `parameter_coverage`.
 
 *Evidence: **CE** for the peptide route; the ligand route is labelled experimental and is not
 claimed at all.*
@@ -808,8 +810,8 @@ Read this section before quoting anything above as support for a result.
    that fact [2].
 4. **GBn2 is not validated for non-peptidic chemistry.** The GBn2 paper says so
    [15], and §6 measures the consequence on the built System. The implicit ligand route
-   is labelled experimental in the record and in this document, and no `igb=8` parity is claimed for
-   it.
+   is labelled experimental in the record and in this document. No `igb=8` parity is claimed for
+   it, or for any other route — see §5.
 5. **1.5 nm padding is not a guarantee.** It is common practice in protein–ligand production work
    [9] for solutes that stay folded. Nothing about it bounds the self-interaction of a
    conformation that has not happened yet [18].
@@ -881,7 +883,7 @@ explicitly; `unknown` means "not recorded" and is never upgraded to a guess.
 | protein force field, and which file inside a wrapper carried it | `inputs/forcefield.json → protein.openmm_resource`, `protein.openmm_resource_includes` |
 | water model and the qualified resource loaded | `→ water.model`, `water.openmm_resource`; packing substitution under `explicit_solvent.water_packing_*` |
 | ligand force field and charge route | `→ ligand.openff_resource`, `ligand.charge_method`, `ligand.charge_model` |
-| implicit model, radii, SASA state, GB coverage, support status | `→ implicit_solvent.*`, including `parameter_coverage` and `amber_igb8_parity_claimed` |
+| implicit model, radii, SASA state, GB coverage, support status | `→ implicit_solvent.*`, including `nonpolar` and `parameter_coverage` |
 | the full nonbonded treatment (§8) | `→ nonbonded.{method, cutoff_nm, switching, switch_distance_nm, dispersion_correction, ewald_error_tolerance}` |
 | the four box distances (§7.1) | `→ explicit_solvent.box_geometry.*`, plus `box_vectors_nm` and `box_volume_nm3` |
 | salt versus neutralising counterions | `→ explicit_solvent.salt` |
