@@ -115,7 +115,8 @@ atom is the centre of an unscaled improper; the numbers are the atom indices `sc
 ![paracetamol: unscaled torsions in red](images/paracetamol-rest2-unscaled.png)
 
 The amide (1–3) and the whole ring are protected. What REST2 *does* heat are the 18 torsion terms
-left: the methyl rotation, the rotation of the ring about the N–C bond (3–4), and the O–H rotation.
+left: the methyl rotation, the ring's rotation about the N–C bond — the **1-3-4-5** torsion, in the
+atom numbering this picture and `scaler.yaml` use — and the O–H rotation.
 
 ## 4. Generate the ladder
 
@@ -260,30 +261,34 @@ physical state to the hottest and back:
 round trips (0 -> top -> 0), per walker: 56, 48, 54, 46
 ```
 
-**The unscaled amide stays planar.** Measured on `solute_state<i>_prod1.nc`, 5000 frames each. An
-angle needs a circular standard deviation — 179° and −179° are 2° apart, not 358°:
+**The unscaled amide stays planar, and the scaled ring loosens.** Measured on
+`solute_state<i>_prod1.nc`, 5000 frames each, as circular standard deviations — 179° and −179° are
+2° apart, not 358°, so an arithmetic spread is meaningless for an angle:
 
-| torsion | scaled? | state 0 (τ = 0) | state 1 | state 2 | state 3 (τ = 0.5) |
-|---|---|---|---|---|---|
-| amide ω, atoms 0-1-3-4 | no | 12.2° | 12.3° | 12.0° | 11.7° |
-| ring about N–C, atoms 1-3-4-5 | yes | 148.5° | 139.2° | 174.1° | 138.6° |
+| torsion | fold | scaled? | state 0 (τ = 0) | state 1 | state 2 | state 3 (τ = 0.5) |
+|---|---|---|---|---|---|---|
+| amide ω, 0-1-3-4 | 1 | no | 12.2° | 12.3° | 12.0° | 11.7° |
+| ring, **1-3-4-5** | **2** | yes | **26.4°** | **37.9°** | **60.1°** | **54.6°** |
 
-and **not one cis frame in any state** — 0 of 5000 with \|ω\| < 90°, state 0 to state 3. The amide
-looks the same in the hottest state as in the physical one, which is the point of leaving it
-unscaled: a hot state that isomerised it would sample a geometry state 0 never visits, and every
-exchange would carry that geometry down the ladder. **That is the robust result on this page**: the
-12° and the zero cis frames come back unchanged from one run to the next.
+The amide is unmoved from the physical state to the hottest, and there is **not one cis frame in
+any state** — 0 of 5000 with \|ω\| < 90°. That is the point of leaving it unscaled: a hot state
+that isomerised it would sample a geometry state 0 never visits, and every exchange would carry
+that geometry down the ladder. The ring, which REST2 is meant to free, widens from 26° to about
+55–60° across the ladder.
 
-!!! warning "The ring row does not show what it looks like it should"
-    A reader expects the scaled torsion to widen with τ, and an earlier run of this page obliged —
-    126.7°, 138.6°, 160.2°, 161.1°. This one does not: 148.5°, 139.2°, 174.1°, 138.6°, with the
-    hottest state *narrower* than the physical one. Nothing is wrong with either run. The ring has
-    two equivalent faces, so its distribution is multi-modal, and a circular standard deviation
-    over a multi-modal distribution is a weighted sum of population occupancies that 10 ns does
-    not pin down. It is the wrong statistic for this torsion, and no number of extra digits fixes
-    that. To show that REST2 frees the rotation, compare the *populations* — or the barrier
-    crossing rate, which is what τ_max should be chosen by (see
-    [choosing τ_max](../chignolin/choosing-tau.md)).
+!!! warning "The ring is 2-fold degenerate, and the raw angle hides that"
+    Quoting the ring's spread *without folding it* gives 148.5°, 139.2°, 174.1°, 138.6° — no trend,
+    and the hottest state apparently narrower than the physical one. Nothing is wrong with the run.
+    The ring is para-substituted, so a 180° rotation maps the molecule onto itself and the raw
+    distribution carries two copies of every feature; a spread computed over both copies measures
+    the gap between them, which 10 ns does not pin down, rather than the width of the basin.
+
+    The **fold** is the number of equivalent positions, and it is a property of the molecular graph
+    rather than of any conformation: the symmetry operations that fix the torsion's first three
+    atoms carry the fourth onto {C4, C8}, the two ortho carbons, so the fold is 2. Folding the
+    angle into −90°…+90° before taking the statistic gives the row above, and the expected trend
+    appears. The same test returns 3 for a methyl rotation and 1 for the amide ω and the O–H,
+    which have no degeneracy — so it needs no per-molecule judgement.
 
 The files follow the thermodynamic **state**: `solute_state0_prod1.nc` is the physical ensemble, and
 no demultiplexing is needed before analysing it. `solute.yaml` records that the ladder integrated
@@ -296,53 +301,41 @@ the saved states (`detection_route: saved-state`, and the sha256 of each).
     same ladder, acceptance near 0.22, the same round-trip counts to within the scatter of a
     different random trajectory. A shared card costs wall time, not correctness.
 
-## 7. Checking state 0 against a plain run, and against symmetry
+## 7. Checking state 0 against a plain run
 
-State 0 integrates the **unscaled** Hamiltonian, so it must agree with ordinary cMD on the same
-box. On this molecule there is a stronger check available than agreement: the ring is
-para-substituted, so a 180° rotation about the N–C bond maps the molecule onto itself, the torsion
-distribution repeats with period 180°, and the window −90° to +90° must hold **exactly 50%** of the
-population. The right answer is known before either simulation runs.
+State 0 integrates the **unscaled** Hamiltonian, so it must agree with ordinary cMD of the same
+box. Against a **length-matched** 10 ns cMD run — not the 200 ps the [cMD page](cMD.md) documents,
+which would compare lengths rather than methods:
 
-Against a **length-matched** 10 ns cMD run of the same box — not the 200 ps the
-[cMD page](cMD.md) documents, which would be comparing lengths rather than methods:
+| | folded ring spread | occupancy of −90…90° | crossings in 10 ns |
+|---|---|---|---|
+| exact, by symmetry | — | **50.00%** | — |
+| 10 ns REST2, state 0 \* | **25.5°** | 48.5% | 282 |
+| 10 ns cMD | **25.1°** | 26.5% | 2 |
+| 200 ps cMD ([cMD page](cMD.md)) | — | 0.00% | 0 |
 
-```bash
-python compare_cmd_rest2.py --system paracetamol \
-    --cmd ../PARA-10ns/cMD-run1 --cmd-build ../PARA-10ns/build \
-    --rest2 REST2-run1 --rest2-build build \
-    --window -90 90 --out cmd-vs-rest2-ring.png
-```
+\* four replicas, so about 4× the aggregate sampling and GPU-seconds of the plain run.
 
-```text
-paracetamol: ring rotation about N-C  [degrees]
-  cMD            n=5000  sd=137.22  in-basin=26.52%  crossings=  2
-  REST2 state 0  n=5000  sd=116.09  in-basin=48.54%  crossings=282
-  two-sample KS on the INDEPENDENT samples: D=0.1301  p=1.36e-17
-```
+**On the coordinate that carries physics the two agree to half a degree** — 25.5° against 25.1°,
+with the preferred orientation within 2°. The ladder has not found a different answer; it has found
+the same answer.
 
-![cMD and REST2 state 0 on the ring torsion](images/cmd-vs-rest2-ring.png)
+Where they differ is the **occupancy**, and that is a convergence diagnostic rather than a physical
+quantity. Because the two ring orientations are equivalent, a converged run must sit at exactly
+50/50; the ladder reaches 48.5% and the length-matched plain run only 26.5%, having crossed the
+barrier twice in 10 ns against the ladder's 282.
 
-| | occupancy of −90…90° | crossings in 10 ns |
-|---|---|---|
-| exact, by symmetry | **50.00%** | — |
-| REST2 state 0 | **48.54%** | 282 |
-| cMD, 10 ns | 26.52% | 2 |
-| cMD, 200 ps (the [cMD page](cMD.md)) | 0.00% | 0 |
+!!! note "Being far from 50/50 does not make an average wrong"
+    It is tempting to read 26.5% against an exact 50% as the plain run being badly in error. It is
+    not. The two orientations are **indistinguishable**, so no physical observable can tell them
+    apart, and a run that failed to interconvert them still reports the correct distribution for
+    everything that depends on the molecule's geometry — as the folded spreads show.
 
-**The ladder is within 1.5 points of an answer we know exactly; the length-matched plain run is out
-by 23.5.** Not because cMD is wrong — it samples the same Hamiltonian and would converge to 50%
-eventually — but because it crossed the barrier twice in 10 ns and cannot average over a transition
-it did not make. This is the same comparison as
-[alanine dipeptide's](../ALA/REST2.md#5-checking-the-answer-against-a-microsecond), with the
-advantage that here the target is not another simulation.
-
-!!! note "Symmetry is the best convergence test available, when you have one"
-    Every other check on this page compares one run against another, and two runs can be wrong in
-    the same direction. The 50% is not a measurement: it follows from the molecule's point group,
-    so a run's distance from it is an absolute error rather than a difference. Where a system
-    offers such a constraint — an equivalent pair of atoms, a symmetric dihedral, a degenerate
-    binding mode — it is worth more than any amount of agreement between trajectories.
+    What the 50% test does measure is **ergodicity over that rotation**, and it costs nothing: no
+    reference simulation, no error bar, just the molecule's point group. That makes it worth
+    reporting even though it constrains no average. It matters when something else is *coupled* to
+    the rotation — a neighbouring group, a binding pose — because then the two orientations stop
+    being equivalent and the failure to interconvert becomes a real one.
 
 ## Next
 

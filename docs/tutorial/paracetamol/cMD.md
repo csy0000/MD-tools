@@ -267,38 +267,52 @@ correctly built and equilibrated box looks like. The molecule is named **TYL** t
 `--resname` is applied to the package and to every build that reads it. 200 ps samples nothing in
 particular; for a real study, raise `production_steps`.
 
-## 7. What 200 ps sampled, against an answer we know exactly
+## 7. What 200 ps sampled, and a coordinate that is not what it looks like
 
-This molecule has a rare and useful property: **the exact answer for one coordinate is known by
-symmetry.** The ring is para-substituted, so rotating it 180° about the N–C bond maps the molecule
-onto itself. The distribution of that torsion must therefore repeat with period 180°, which means
-the window −90° to +90° and its complement each hold **exactly 50%** of the population. No
-simulation needed.
+The ring's rotation about the **1-3-4-5** torsion — atoms C2–N1–C3–C4, in the numbering
+`scaler.yaml` and the unscaled-torsion picture use — is the slow coordinate of this molecule, and
+it comes with a trap.
 
-[`compare_cmd_rest2.py`](../shared/compare_cmd_rest2.py), on this page's run:
+**The ring is para-substituted, so turning it 180° maps the molecule onto itself.** Two
+orientations separated by 180° are not two states; they are the same state, reached by relabelling
+two equivalent carbons. That has three consequences, and a tutorial that ignores them reports
+numbers that look fine and mean nothing:
 
-```bash
-python compare_cmd_rest2.py --system paracetamol \
-    --cmd cMD-run1 --cmd-build build --window -90 90 --out cmd-ring.png
-```
+* The raw distribution shows **two copies of every feature**, so its spread measures the gap
+  between the copies rather than the width of the basin.
+* An arithmetic mean of the raw angle returns the point midway between the copies, which is the
+  **barrier**, not the preferred geometry.
+* A "transition" from one copy to the other changes no physical property at all.
 
-```text
-paracetamol: ring rotation about N-C  [degrees]
-  cMD   n=200  mean=-25.03  sd=157.13  in-basin=0.00%  crossings=0
-```
+The fold is a property of the molecular graph, not of any one conformation: it is the number of
+symmetry operations that fix the first three atoms of the torsion and carry the fourth onto another
+atom bonded to the third. For this ring that orbit is {C4, C8}, the two ortho carbons, so the fold
+is **2**. The same test gives **3** for a methyl rotation and **1** for the amide ω and the
+hydroxyl O–H, which have no such degeneracy.
 
-![the ring torsion over 200 ps: one side only](images/cmd-ring.png)
+Folding the angle into its unique range, −90° to +90°, gives the coordinate that means something:
 
-**0.00% against an exact 50%.** In 200 ps the ring never rotated once. The run is not slightly
-under-sampled on this coordinate; it has no information about it at all, and the histogram it
-produces is a picture of one half of a symmetric distribution.
+| | raw spread | **folded spread** |
+|---|---|---|
+| 200 ps cMD — this page | 157.1° | — *(one orientation only; see below)* |
+| 10 ns cMD | 137.2° | **25.1°** |
+| 10 ns REST2, state 0 | 116.1° | **25.5°** |
 
-Nothing in the run says so. The temperature, the density and the completion record are all exactly
-as they should be — this is a correct 200 ps simulation, and 200 ps is simply not long enough for
-this rotation. That is what the length caveat above means in a number.
+**In 200 ps the ring never rotated once.** The run has no information about this coordinate at
+all, and the histogram it produces is a picture of one half of a symmetric distribution. Nothing in
+the run says so: the temperature, the density and the completion record are all exactly as they
+should be. This is a correct 200 ps simulation, and 200 ps is simply not long enough for this
+rotation.
 
-Raising `production_steps` to 10 ns takes it to 26.5%, still a long way from 50 and still only two
-crossings. [The ladder](REST2.md) reaches 48.5% in the same 10 ns.
+!!! note "Symmetry gives a free convergence test, and it is not a test of accuracy"
+    Because the two orientations are equivalent, a fully converged run must spend **exactly 50%**
+    of its time on each side. Measuring that costs nothing and needs no reference: 200 ps gives
+    0.00%, 10 ns gives 26.5%, [the ladder](REST2.md) gives 48.5% in the same 10 ns.
+
+    It is a test of **ergodicity over the rotation**, not of any physical quantity. On the folded
+    coordinate — the one that carries physics — the 10 ns run and the ladder agree to half a
+    degree. A run can be a long way from 50/50 and still give the right answer for every
+    observable, because the states it failed to interconvert are indistinguishable.
 
 ## What it wrote
 
