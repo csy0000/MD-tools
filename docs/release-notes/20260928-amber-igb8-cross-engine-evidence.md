@@ -44,14 +44,69 @@ ACE-ALA-NME          pmemd        md-tools      delta
 The worst total-energy disagreement measured is **2.6e-4 relative**, on the charged mbondi3
 peptide (−523.90 vs −524.0338 kcal/mol).
 
-## What the fourth row means
+## What the fourth row means: five arginine hydrogens
 
 Rows 3 and 4 are the **same molecule at the same coordinates with the same charges**. Only the
-radius set differs, and the discrepancy moves by a factor of ten. So it is not charge and not
-size — row 2 rules out size at 83 neutral atoms, row 3 rules out charge at 124 charged ones.
+radius set differs, and the discrepancy moves by a factor of ten. Size is ruled out by row 2 at 83
+neutral atoms; charge by row 3 at 124 charged ones.
 
-**It tracks mbondi3, which is md-tools' default.** The old field claimed parity most confidently
-exactly where the agreement is weakest.
+The two prmtops differ in **11 of 124 atoms**, which is exactly the mbondi3 signature:
+
+```text
+  ASP OD1/OD2, GLU OE1/OE2, C-terminal O/OXT   1.500 -> 1.400 A   (6 atoms)
+  ARG HE, HH11, HH12, HH21, HH22               1.300 -> 1.170 A   (5 atoms)
+```
+
+Applying one rule at a time, each engine reading the same prmtop, isolates it completely:
+
+| variant | radii fingerprint | EGB relative |
+|---|---|---|
+| mbondi2 baseline | `eb77f422` | 3.19e-5 |
+| + carboxylate O → 1.40 Å only | `f794f15b` | 3.21e-5 — **no effect** |
+| + ARG HE/HH → 1.17 Å only | `aaf49eb2` | **3.20e-4** |
+| full mbondi3 | `a589989e` | 3.06e-4 |
+
+**It is not mbondi3 broadly. It is GBn2 at hydrogens of radius 1.17 Å**, which mbondi3 applies
+only to arginine. Six of the eleven changed atoms contribute nothing measurable; five account for
+the whole effect. A solute with no ARG therefore sits at the mbondi2 agreement of ~3e-5 whatever
+radius policy is requested.
+
+!!! warning "\"10x\" is a ratio between two negligible numbers — read the kT column"
+    Quoting the relative figures alone invites a conclusion they do not support. At 300 K:
+
+    | quantity | kcal/mol | kT |
+    |---|---|---|
+    | what the mbondi3 ARG correction DOES to EGB | −21.0393 | **−35.3** |
+    | engine disagreement at full mbondi3 | −0.1246 | −0.21 |
+    | engine disagreement at mbondi2 | −0.0121 | −0.02 |
+
+    The radius choice is worth 35 kT; the disagreement it exposes is worth 0.2 kT, a factor of
+    169. So this table is not a reason to prefer mbondi2: that would trade a real modelling
+    correction for a better agreement between two codes. `pmemd` is not ground truth either —
+    GBn2 was fit against Poisson–Boltzmann polar solvation, not against Amber's implementation of
+    it — so agreement here is a reproducibility statement, not a correctness one.
+
+    What the measurement licenses: **md-tools and pmemd agree on implicit GB to a fifth of kT at
+    worst**, and the mbondi3 arginine hydrogens are where the residual concentrates. An earlier
+    draft of this page led with "10x worse under mbondi3", which is true as arithmetic and
+    misleading as a headline; a peer session read it as a reason to choose different physics.
+
+!!! warning "A trap in reproducing this"
+    `build_implicit_system` ALWAYS calls `changeRadii(radii)`, so passing `radii="mbondi3"` while
+    handing it a prmtop with custom radii silently overwrites them and returns the same energy for
+    every variant. The first attempt at this table did exactly that and produced four identical
+    numbers. The rows above are built WITHOUT the radii step, so the prmtop is the only variable,
+    and each carries a per-atom radii fingerprint proving the four inputs really differ.
+
+### The residue-name dependency
+
+mbondi3 keys on residue NAMES. A single-residue ligand named `UNL` that chemically contains an
+arginine gets no mbondi3 adjustment at all — the build logs `mbondi3 reduces to mbondi2` and the
+radii are mbondi2. Such a solute lands on the good agreement above, and also never receives the
+correction mbondi3 exists to apply. `apply_peptide_like_mbondi3` is the pass that applies mbondi3
+from mapped chemistry rather than names, and `radius_assignment_method` in the build record says
+which path was actually used. Worth checking for any peptidic ligand built as one residue.
+(Raised by hpREST2 from their cyclo-RGDfV builds, 2026-09-28.)
 
 ## What was ruled out
 

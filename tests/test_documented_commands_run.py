@@ -30,7 +30,7 @@ CLI = [sys.executable, "-m", "md_tools.cli.md_openmm"]
 pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("documented-commands")]
 
 #: The pages whose command blocks are contractual.
-PAGES = [REPO / "README.md", REPO / "CLAUDE.md", REPO / "docs" / "md-run.md",
+PAGES = [REPO / "README.md", REPO / "CLAUDE.md", REPO / "docs" / "basics" / "md-run.md",
          REPO / "docs" / "openmm_methods" / "cMD" / "README.md",
          REPO / "docs" / "openmm_methods" / "REST2" / "README.md",
          REPO / "docs" / "openmm_methods" / "AIS" / "README.md"]
