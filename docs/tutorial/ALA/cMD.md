@@ -11,7 +11,7 @@ production run is 5 min 14 s.
 
 φ and ψ are the only interesting coordinates here, which is why this system is the one to check an
 enhanced-sampling method on. Ten nanoseconds is **not** the reference for that check, though — as
-[section 4](#4-what-10-ns-actually-sampled) shows, it misses a whole basin. The reference every
+[section 4](#4-what-10-ns-sampled-against-a-microsecond) shows, it misses a whole basin. The reference every
 method on this system is compared against is a separate 1 µs run.
 
 ## 1. Generate the run
@@ -97,28 +97,41 @@ The temperature sits at the 300 K thermostat and the density at that of water, w
 correctly built and equilibrated box looks like. At 2758 ns/day this is the fastest system in the
 set — 22 atoms of solute in 590 waters, and the water is nearly all of the cost.
 
-## 4. What 10 ns actually sampled
+## 4. What 10 ns sampled, against a microsecond
 
-The reason this system is in the set is that φ and ψ are the whole story, so it is worth asking
-what the run saw of them.
+φ and ψ are the whole story for this molecule, so it is worth asking what the run saw of them —
+and on this system the honest answer needs something to compare against. The reference is a
+separate **1 µs** run of the same box: 250 000 000 steps at 4 fs, 2821 ns/day, **8 h 32 m** on one
+RTX A5000.
 
-![phi from 10 ns of plain MD: the alpha-L basin is empty](images/cmd-phi.png)
+![phi from 10 ns, from 1 us, and from the ladder](images/phi-1us-reference.png)
 
-| | φ mean | φ sd | time in the αL basin | crossings into it |
-|---|---|---|---|---|
-| 10 ns cMD | −84.1° | 29.4° | **0.00%** | **0** |
+| run | time in the αL basin | entries into it | per ns |
+|---|---|---|---|
+| **1 µs cMD — the reference** | **2.76%** | 16 | 0.02 |
+| 10 ns cMD — this page | **0.00%** | **0** | 0.00 |
+| 10 ns REST2, state 0 | 2.80% | 34 | 3.40 |
 
-The two negative-φ basins are well sampled and the halves of the run agree on them to 2.6°, which
-looks like a converged result. **It is not.** The αL basin at φ ≈ +55° — a real, populated feature
-of this molecule's free-energy surface — was visited **zero times in 10 ns**. The run has 0.00% of
-its frames there and never once crossed into the window.
+The two negative-φ basins are well sampled at 10 ns and the halves of the run agree on them to
+2.6°, which looks like a converged result. **It is not.** The αL basin at φ ≈ +55° holds 2.76% of
+the population, and 10 ns of plain MD visited it **zero times**.
 
 That is what makes a short unbiased run dangerous rather than merely imprecise: it produces a
 smooth, stable, entirely convincing histogram of a distribution it has not sampled, and nothing in
 the run reports a problem. `status: completed` is true; the temperature and density are perfect;
-the two halves agree. The missing basin is invisible from inside the run.
+the two halves agree. The missing basin is invisible from inside the run — it took a hundredfold
+longer simulation to see that it was missing.
 
-[The ladder](REST2.md) finds that basin 34 times in the same 10 ns, on the same Hamiltonian.
+!!! note "Even the microsecond is thin where it matters"
+    The reference spent 2.76% of a microsecond in αL, but it **entered the basin only 16 times**.
+    An occupancy built from 16 independent visits carries roughly a quarter of its own value as
+    uncertainty, however many frames were written. Length bought the basin; it did not buy
+    precision on the basin, because precision comes from the number of times the barrier was
+    crossed and that number stayed small.
+
+    This is the argument for the ladder rather than for a longer run:
+    [10 ns of REST2](REST2.md) crosses that barrier **34 times** — more events than the
+    microsecond — and lands on 2.80% against the reference's 2.76%.
 
 ## 5. What it wrote
 

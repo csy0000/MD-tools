@@ -334,7 +334,7 @@ paracetamol: ring rotation about N-C  [degrees]
 by 23.5.** Not because cMD is wrong — it samples the same Hamiltonian and would converge to 50%
 eventually — but because it crossed the barrier twice in 10 ns and cannot average over a transition
 it did not make. This is the same comparison as
-[alanine dipeptide's](../ALA/REST2.md#5-checking-the-answer-against-a-plain-run), with the
+[alanine dipeptide's](../ALA/REST2.md#5-checking-the-answer-against-a-microsecond), with the
 advantage that here the target is not another simulation.
 
 !!! note "Symmetry is the best convergence test available, when you have one"

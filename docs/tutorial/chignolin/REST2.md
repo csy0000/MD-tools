@@ -309,7 +309,7 @@ not begin until about 20% of the way in, and they arrive in bursts. Had this run
 shorter it would have reported zero too, and looked exactly as converged as the cMD run does.
 
 !!! note "Here the ladder's g is SMALLER, which is not a contradiction"
-    On [alanine dipeptide](../ALA/REST2.md#5-checking-the-answer-against-a-plain-run) the ladder's
+    On [alanine dipeptide](../ALA/REST2.md#5-checking-the-answer-against-a-microsecond) the ladder's
     statistical inefficiency came out *larger* than cMD's (14.6 against 8.0); here it comes out
     smaller (27.4 against 45.0). Both are consistent, because `g` describes whatever series it is
     handed. A trapped run's correlation time is measured within its basin, and how that compares to

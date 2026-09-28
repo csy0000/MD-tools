@@ -135,35 +135,44 @@ Each state has its own trajectory, `solute_state<i>_prod1.nc`, 5000 frames of th
 The index is the **state's**, not the walker's: `solute_state0_prod1.nc` is the unscaled ensemble,
 and it is the one to analyse. No demultiplexing is needed.
 
-## 5. Checking the answer against a plain run
+## 5. Checking the answer against a microsecond
 
-Unusually for a ladder, you can. State 0 integrates the **unscaled** Hamiltonian at the same
-temperature as [10 ns of plain cMD](cMD.md) on the same box, so at infinite sampling the two must
-agree on every equilibrium property.
+State 0 integrates the **unscaled** Hamiltonian at 300 K, so it must agree with ordinary MD of the
+same box. The thing to check it against is not the 10 ns run on the [cMD page](cMD.md) — that one
+never reaches the αL basin at all — but a **1 µs** reference, 100 times longer.
 
-![cMD and REST2 state 0 on the same coordinate](images/cmd-vs-rest2-phi.png)
+![the ladder against 10 ns and against the microsecond](images/phi-1us-reference.png)
 
-| | time in the αL basin | crossings into it |
-|---|---|---|
-| 10 ns cMD | 0.00% | **0** |
-| 10 ns REST2, state 0 | 2.80% | **34** |
+| run | cost | time in the αL basin | entries | per ns |
+|---|---|---|---|---|
+| 1 µs cMD — the reference | 8 h 32 m | **2.76%** | 16 | 0.02 |
+| 10 ns cMD | 5 min 14 s | 0.00% | 0 | 0.00 |
+| **10 ns REST2, state 0** | **6 min 14 s** | **2.80%** | **34** | **3.40** |
 
-**Both runs are 10 ns of the same Hamiltonian at the same temperature.** They agree closely on the
-two negative-φ basins — the histograms lie on top of each other — and differ entirely in the
-shaded αL window: the ladder's state 0 enters and leaves it **34 times** and spends 2.80% of its
-frames there, while the plain run never visits it at all.
+**The ladder reproduces the microsecond in ten nanoseconds.** 2.80% against 2.76% — a difference
+of 0.04 percentage points — for about 1% of the compute, and the histograms lie on top of each
+other across the whole range including the αL peak that the length-matched plain run misses
+entirely.
 
-The ladder is saved half as often (2 ps against 1 ps), and a coarser frame interval can only *miss*
-crossings, so the 34-against-0 understates the gap.
+The crossing rate is where the mechanism shows: **3.40 entries per nanosecond against 0.02**, a
+factor of 170. That is what the exchanges buy. Nothing about state 0's Hamiltonian differs from
+the plain run's; the walkers occupying it have simply been up the ladder, crossed the barrier
+while the torsion was weakened, and come back down.
 
-The two distributions lie on top of each other wherever the plain run went, and differ entirely in
-the shaded window. Where the runs disagree, the one that never crossed the barrier is the one that
-has not converged — not the ladder.
+!!! note "The ladder's estimate is better determined than the reference's"
+    This reads backwards until you count events rather than frames. The microsecond wrote 100 000
+    frames but entered αL **16 times**; the ladder wrote 5000 frames and entered **34 times**. An
+    occupancy is determined by the number of independent visits, not by how often the trajectory
+    was sampled, so the 10 ns ladder constrains that 2.8% roughly 1.5× more tightly than the run
+    that took a hundred times longer.
 
-If both runs crossed freely and they *still* disagreed, the suspicion would point the other way:
+    The same fact is why a still-longer unbiased run is the expensive way out of this: crossings
+    accumulate linearly in time, so matching the ladder's 34 events would take about 1.7 µs.
+
+If the two had disagreed while **both** crossed freely, the suspicion would point the other way —
 velocities rescaled on exchange, walker-indexed trajectories written as state-indexed, or a `tau`
-claim that did not match the saved state. None of those appear in any completion record — every
-one of them would still report `status: completed`.
+claim that did not match the saved state. None of those appear in any completion record; every one
+of them would still report `status: completed`.
 
 ## Next
 
