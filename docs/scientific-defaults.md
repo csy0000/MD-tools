@@ -47,7 +47,7 @@ frequency, for instance — that is said plainly.
 | water | TIP3P (`amber14/tip3p.xml`) | OPC (`amber19/opc.xml`) | **JP** (§3) | TIP3P misrepresents bulk water; ff14SB relies on error cancellation with it |
 | ligand force field | OpenFF Sage 2.2.1 (`openff-2.2.1`) | GAFF, resolved to an exact version (§4.1) | **CE** + **CB** at Sage 2.0 (§4) | 2.2.1 itself has no published protein–ligand benchmark; GAFF2 has no dedicated publication |
 | ligand charges | AM1-BCC via AmberTools `sqm` | `am1bcc_nagl` (explicit) | **JP** with Sage (§4) | NAGL predicts AM1-BCC ELF10, it does not compute it |
-| implicit solvent | GBn2 + mbondi3, no SASA | — | **JP** with ff99SB/ff14SB (§5) | peptides and proteins only; see §6 |
+| implicit solvent | GBn2 + mbondi3, ACE SASA | — | **JP** with ff99SB/ff14SB (§5) | peptides and proteins only; see §6 |
 | box | rhombic dodecahedron | `cube`, `octahedron` | **CE** (§7) | a cube needs ~1.4× the water for the same clearance |
 | padding | 1.5 nm | 2.0 nm | **CB** (§7) | not a guarantee for any future conformation |
 | electrostatics | PME, 1.0 nm real-space cutoff | — | **CE** + **ID** (§8) | finite-size artifacts are reduced, not removed |
@@ -220,7 +220,7 @@ continuing a series.
 
 ---
 
-## 5. Implicit solvent: ff14SB + GBn2 + mbondi3, no surface-area term
+## 5. Implicit solvent: ff14SB + GBn2 + mbondi3, with the ACE surface-area term
 
 GB-Neck2 (GBn2) was developed **with ff99SB**, and its parameters were fit to Poisson–Boltzmann
 polar solvation energies and effective Born radii, not to explicit-solvent or experimental data
@@ -234,11 +234,19 @@ Three consequences follow directly and are implemented:
    and no GB model has been reparameterised against them; GBn2 belongs to the ff99SB/ff14SB
    lineage. `resolve_sys_config` **refuses** the ff19SB + GBn2 pair rather than warning about it,
    because that pair runs to completion and produces plausible numbers.
-2. **No SASA term.** GBn2's parameters reproduce PB *polar* solvation; the surface-area nonpolar
-   term is a separate model. Amber's `igb=8` with `gbsa=0` is the context the parameters were fit
-   in, and that is what this repository builds. OpenMM's `implicit/gbn2.xml` turns the ACE term on
-   by default and ParmEd leaves it off — the two differ by ~16 kJ/mol (~6 kT) on ACE-ALA-NME on
-   this machine — so the choice is stated in `forcefield.json`, never inherited.
+2. **The SASA term is ON by default, and it costs the `igb=8` parity claim.** GBn2's parameters
+   reproduce PB *polar* solvation; the surface-area nonpolar term is a separate model. Amber's
+   `igb=8` with `gbsa=0` is the context the parameters were fit in; OpenMM's `implicit/gbn2.xml`
+   adds the ACE term by default, and the two differ by ~16 kJ/mol (~6 kT) on ACE-ALA-NME on this
+   machine. **Since 0.6.2 this repository follows OpenMM** (`implicit_solvent.nonpolar_sasa:
+   true`), with the surface tension adjustable through `nonpolar_surften`.
+
+   The consequence is stated rather than glossed: a default implicit build is **no longer Amber
+   `igb=8`/`gbsa=0` parity**, and it is not `gbsa=1` either — Amber's `gbsa=1` is LCPO, a
+   different nonpolar model from ACE. `amber_igb8_parity_claimed` is therefore `false` on a
+   default build and the basis string says why. Set `nonpolar_sasa: false` for the parity build;
+   the polar part is identical either way. The choice is stated in `forcefield.json`, never
+   inherited.
 3. **The construction route is part of the Hamiltonian.** The System is built through
    `parmed.Structure.createSystem`, not `AmberPrmtopFile`, and that is recorded.
 
@@ -305,8 +313,9 @@ The rules, implemented in `forcefield_record._implicit_support_status`:
 * **any atom outside the fit** → `support_status: "experimental"`, and `build-top` prints a warning
   naming the atomic numbers.
 
-Exact Amber `igb=8`/`mbondi3`/`gbsa=0` parity is claimed **only** in the first case, and the record
-carries the basis for the claim in `amber_igb8_parity_basis`.
+Exact Amber `igb=8`/`mbondi3`/`gbsa=0` parity is claimed **only** in the first case *and* only
+when `nonpolar_sasa: false`, because parity with `gbsa=0` means no nonpolar term at all. The record
+carries the basis, or the reason there is none, in `amber_igb8_parity_basis`.
 
 *Evidence: **CE** for the peptide route; the ligand route is labelled experimental and is not
 claimed at all.*

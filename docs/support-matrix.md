@@ -71,7 +71,7 @@ The evidence for every default, classified by strength, is in
 | explicit, peptide or protein, ff14SB + TIP3P | supported | each pair is internally consistent; see §3 |
 | explicit, protein + Sage ligand, ff14SB + TIP3P | supported | §3.3 — the specific triple with Sage 2.2.1 is an extrapolation from the Sage 2.x benchmarks, and is labelled one |
 | explicit, ff19SB + OPC | supported alternative | §3.4 — no joint benchmark of ff19SB with Sage exists |
-| implicit, peptide or protein, ff14SB + GBn2/mbondi3 | supported; Amber `igb=8` parity claimed | §5 |
+| implicit, peptide or protein, ff14SB + GBn2/mbondi3 | supported; Amber `igb=8` parity claimed only with `nonpolar_sasa: false` | §5 |
 | implicit, Sage small molecule | **experimental**, recorded as such in `forcefield.json` | §6 — mbondi3 reduces to mbondi2 for a one-residue ligand, and any element outside {H, C, N, O, S} gets GB-Neck2's unfitted fallback |
 | 2 fs, unmodified hydrogen masses | supported baseline | §11.1 |
 | 4 fs with HMR at 3.024 amu | supported for stability and equilibrium free energies; **not** for kinetics | §11.3 |

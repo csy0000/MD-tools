@@ -243,11 +243,16 @@ def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT,
         "implicit_solvent": {
             "model": "GBn2",
             "radii": "mbondi3",
-            # The ACE surface-area nonpolar term. False matches Amber's igb=8 with gbsa=0, which
-            # is the context GBn2's parameters were fit in; OpenMM's implicit/gbn2.xml turns it on
-            # by default. The two differ by ~16 kJ/mol (~6 kT) on ACE-ALA-NME, so this is a
-            # modelling choice and is stated rather than inherited.
-            "nonpolar_sasa": False,
+            # The ACE surface-area nonpolar term. True matches OpenMM's implicit/gbn2.xml, which
+            # turns it on by default; False matches Amber's igb=8 with gbsa=0, the context GBn2's
+            # POLAR parameters were fit in. The two differ by ~16 kJ/mol (~6 kT) on ACE-ALA-NME,
+            # so this is a modelling choice and is stated rather than inherited.
+            "nonpolar_sasa": True,
+            # The surface tension in that term, in kcal/mol/A^2. null means ACE's own 0.0054,
+            # which reproduces OpenMM's hard-coded prefactor exactly. Amber's `pmemd` GB default
+            # is 0.005. OpenMM offers no way to set this -- md-tools rewrites the built term --
+            # so it is a real parameter here and is recorded as one.
+            "nonpolar_surften": None,
         },
         # The MD-data dataset identity. Disabled by default: a plain inputs/ + MD/ tree needs no
         # manifest, and a manifest cannot be written from values this package would have to guess.

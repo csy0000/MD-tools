@@ -16,8 +16,7 @@ from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 
-from openmm import (CMAPTorsionForce, CustomGBForce, NonbondedForce,
-                    PeriodicTorsionForce, XmlSerializer)
+from openmm import NonbondedForce, XmlSerializer
 
 
 WATER_RESIDUE_NAMES = frozenset({"HOH", "WAT", "SOL", "TIP3", "TIP", "H2O"})
@@ -1768,233 +1767,19 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
     return info
 
 
-
-
 # ---------------------------------------------------------------------------------------------
-# REST2 Hamiltonian scaling
+# The REST2 scaling that used to live here is gone.
 #
-# Solute charges scale by sqrt(s) and solute epsilons by s, which gives
-#   U_s = s*U_solute + sqrt(s)*U_solute-solvent + U_solvent
-# for a pairwise nonbonded force. PeriodicTorsion and CMAP (ff19SB) are handled too.
+# It was a second, whole-solute implementation of `md_tools.rest2.hamiltonian`: its own
+# `_scale_nonbonded_force`, `_scale_torsion_force`, `_scale_cmap_force`, `_scale_customgb_force`,
+# `REST2_GB_SCALE_PARAMETER`, `SCALED_FORCE_CLASSES`, `DELIBERATELY_UNSCALED_FORCE_CLASSES`,
+# `ENERGY_FREE_FORCE_CLASSES`, `UnclassifiedForceError`, `audit_force_classes` and
+# `build_rest2_scaled_system`. Nothing outside this file imported any of them -- every caller
+# reaches the live ones through `md_tools.rest2.scaler` -- and the classifier frozensets had
+# drifted into two copies of the same list that no test compared.
+#
+# Two classifiers is the defect, not the duplication: a force class added to one and not the
+# other makes `audit_force_classes` refuse in one code path and scale in the other, and the one
+# that runs is decided by which module the caller happened to import. `md_tools.rest2.hamiltonian`
+# is the one authority. See docs/change_from_md_tools.md, 0.6.2.
 # ---------------------------------------------------------------------------------------------
-def _clone_system(system):
-    """Deep-copy an OpenMM System via XML serialization."""
-    return XmlSerializer.deserialize(XmlSerializer.serialize(system))
-
-
-def _scale_nonbonded_force(force: NonbondedForce, solute_atom_indices: set[int], scale_factor: float) -> None:
-    sqrt_scale = math.sqrt(scale_factor)
-    for atom_index in range(force.getNumParticles()):
-        charge, sigma, epsilon = force.getParticleParameters(atom_index)
-        if atom_index in solute_atom_indices:
-            force.setParticleParameters(atom_index, charge * sqrt_scale, sigma, epsilon * scale_factor)
-    for exception_index in range(force.getNumExceptions()):
-        atom_i, atom_j, charge_prod, sigma, epsilon = force.getExceptionParameters(exception_index)
-        n_solute = int(atom_i in solute_atom_indices) + int(atom_j in solute_atom_indices)
-        if n_solute == 2:
-            force.setExceptionParameters(exception_index, atom_i, atom_j,
-                                         charge_prod * scale_factor, sigma, epsilon * scale_factor)
-        elif n_solute == 1:
-            force.setExceptionParameters(exception_index, atom_i, atom_j,
-                                         charge_prod * sqrt_scale, sigma, epsilon * sqrt_scale)
-
-
-def _scale_torsion_force(force: PeriodicTorsionForce, solute_atom_indices: set[int], scale_factor: float,
-                         exclude_central_bonds: set | None = None) -> None:
-    exclude = exclude_central_bonds or set()
-    for torsion_index in range(force.getNumTorsions()):
-        atom_i, atom_j, atom_k, atom_l, periodicity, phase, k_value = force.getTorsionParameters(torsion_index)
-        if all(atom in solute_atom_indices for atom in [atom_i, atom_j, atom_k, atom_l]) \
-                and frozenset((int(atom_j), int(atom_k))) not in exclude:
-            force.setTorsionParameters(torsion_index, atom_i, atom_j, atom_k, atom_l,
-                                       periodicity, phase, k_value * scale_factor)
-
-
-def _scale_cmap_force(force: CMAPTorsionForce, solute_atom_indices: set[int], scale_factor: float) -> None:
-    solute_map_indices: set[int] = set()
-    non_solute_map_indices: set[int] = set()
-    for torsion_index in range(force.getNumTorsions()):
-        map_index, a1, a2, a3, a4, b1, b2, b3, b4 = force.getTorsionParameters(torsion_index)
-        atoms = [a1, a2, a3, a4, b1, b2, b3, b4]
-        if all(atom in solute_atom_indices for atom in atoms):
-            solute_map_indices.add(map_index)
-        else:
-            non_solute_map_indices.add(map_index)
-    shared = solute_map_indices & non_solute_map_indices
-    if shared:
-        raise RuntimeError("Cannot selectively scale CMAP terms because a CMAP map is shared "
-                           "between solute and non-solute torsions.")
-    for map_index in solute_map_indices:
-        size, energy = force.getMapParameters(map_index)
-        force.setMapParameters(map_index, size, [v * scale_factor for v in energy])
-
-
-#: Name of the global parameter injected into every CustomGBForce energy term. Chosen not to clash
-#: with any parameter already present in the GBn2 or HCT expressions.
-REST2_GB_SCALE_PARAMETER = "rest2_scale_gb"
-
-
-def _scale_customgb_force(force, system, solute_set: set, scale_factor: float) -> None:
-    """Scale the ENTIRE generalised-Born energy by `s`.
-
-    Charge scaling alone is not enough, and this is the part that is easy to get wrong. GBn2 has
-    three energy terms: two are proportional to charge products and would follow `charge * sqrt(s)`
-    correctly, but the third is a non-polar / dispersion correction with no charge dependence. It
-    still has to be scaled by `s` under REST2, and scaling charges leaves it untouched. Multiplying
-    every term by one global parameter scales all three uniformly.
-
-    The whole system must be the enhanced region. A GB energy is not decomposable into per-atom
-    contributions the way a bonded term is: every atom's Born radius depends on every other atom's
-    position, so a partial selection would need a validated treatment of the solute-environment
-    cross terms, and there is none here. Refused rather than approximated.
-
-    The expressions are rewritten in place and the parameter is added to the System, so this MUST
-    happen before a Context is created -- the compiled kernels have to already reference it.
-    """
-    n_particles = system.getNumParticles()
-    missing = [i for i in range(n_particles) if i not in solute_set]
-    if missing:
-        shown = ", ".join(str(i) for i in missing[:8])
-        more = f" and {len(missing) - 8} more" if len(missing) > 8 else ""
-        raise ValueError(
-            f"implicit REST2 requires the entire system to be the enhanced region, but "
-            f"{len(missing)} of {n_particles} particles are outside it ({shown}{more}).\n"
-            "  A generalised-Born energy is not separable per atom: every Born radius depends on "
-            "every other atom's\n"
-            "  position, so a partial selection needs a validated treatment of the "
-            "solute-environment cross terms.\n"
-            "  Refusing rather than approximating it. Set the enhanced region to the whole solute."
-        )
-
-    existing = {force.getGlobalParameterName(i)
-                for i in range(force.getNumGlobalParameters())}
-    if REST2_GB_SCALE_PARAMETER not in existing:
-        force.addGlobalParameter(REST2_GB_SCALE_PARAMETER, 1.0)
-        for term in range(force.getNumEnergyTerms()):
-            expression, computation = force.getEnergyTermParameters(term)
-            # Only the leading expression is scaled; everything after the first ';' defines
-            # intermediate variables, and multiplying those would change what they mean.
-            if ";" in expression:
-                head, tail = expression.split(";", 1)
-                scaled = f"{REST2_GB_SCALE_PARAMETER}*({head});{tail}"
-            else:
-                scaled = f"{REST2_GB_SCALE_PARAMETER}*({expression})"
-            force.setEnergyTermParameters(term, scaled, computation)
-
-    index = [force.getGlobalParameterName(i)
-             for i in range(force.getNumGlobalParameters())].index(REST2_GB_SCALE_PARAMETER)
-    force.setGlobalParameterDefaultValue(index, float(scale_factor))
-
-
-#: Force classes this module knows how to scale. Each has an explicit ``_scale_*`` implementation.
-SCALED_FORCE_CLASSES = frozenset({
-    "NonbondedForce", "PeriodicTorsionForce", "CMAPTorsionForce", "CustomGBForce",
-})
-
-#: Energy-bearing forces left unscaled ON PURPOSE, following the standard REST2 convention: bond
-#: and angle terms are not scaled. Scaling them would change the molecule's covalent geometry with
-#: temperature, which is not what REST2 does -- the solute's *conformational* barriers are what the
-#: scaling is meant to lower, not its bond lengths.
-DELIBERATELY_UNSCALED_FORCE_CLASSES = frozenset({
-    "HarmonicBondForce", "HarmonicAngleForce",
-})
-
-#: Forces that contribute no potential energy, so scaling them is meaningless rather than wrong.
-#: A barostat's Monte Carlo move is not a term in U; the centre-of-mass remover only removes drift.
-ENERGY_FREE_FORCE_CLASSES = frozenset({
-    "CMMotionRemover", "MonteCarloBarostat", "MonteCarloAnisotropicBarostat",
-    "MonteCarloFlexibleBarostat", "MonteCarloMembraneBarostat", "AndersenThermostat",
-    "RMSDForce",
-})
-
-
-class UnclassifiedForceError(ValueError):
-    """A System carries an energy-bearing force this module does not know how to scale.
-
-    Raised instead of scaling what is recognised and leaving the rest alone. A force left at s = 1
-    inside a ladder whose other terms are scaled is not a smaller effect -- it is a different
-    Hamiltonian from the one the ladder claims, and it fails silently: the run completes, the
-    exchange log looks healthy, and the acceptance ratio absorbs the discrepancy.
-    """
-
-
-def audit_force_classes(system, *, where: str = "REST2 scaling") -> dict:
-    """Classify every force in *system*; raise on any energy-bearing force we cannot place.
-
-    Returns ``{"scaled": [...], "unscaled_by_convention": [...], "energy_free": [...]}`` with the
-    force indices in each bucket, so a manifest can record what was scaled rather than assert it.
-    """
-    scaled, by_convention, energy_free, unknown = [], [], [], []
-    for index in range(system.getNumForces()):
-        name = system.getForce(index).__class__.__name__
-        if name in SCALED_FORCE_CLASSES:
-            scaled.append((index, name))
-        elif name in DELIBERATELY_UNSCALED_FORCE_CLASSES:
-            by_convention.append((index, name))
-        elif name in ENERGY_FREE_FORCE_CLASSES:
-            energy_free.append((index, name))
-        else:
-            unknown.append((index, name))
-    if unknown:
-        listed = ", ".join(f"force[{i}] {n}" for i, n in unknown)
-        raise UnclassifiedForceError(
-            f"{where}: the System carries {len(unknown)} force(s) this module cannot classify: "
-            f"{listed}.\n"
-            "  Refusing rather than leaving them at the wrong scale. An unscaled energy term inside "
-            "a scaled ladder\n"
-            "  is a different Hamiltonian from the one the ladder claims, and nothing downstream "
-            "reports it: the run\n"
-            "  completes and the acceptance ratio quietly absorbs the discrepancy.\n"
-            f"  Known scalable: {sorted(SCALED_FORCE_CLASSES)}\n"
-            f"  Unscaled by REST2 convention: {sorted(DELIBERATELY_UNSCALED_FORCE_CLASSES)}\n"
-            f"  Carry no potential energy: {sorted(ENERGY_FREE_FORCE_CLASSES)}\n"
-            "  If one of these SHOULD be scaled, add an explicit handler; if it carries no energy, "
-            "add it to ENERGY_FREE_FORCE_CLASSES with a reason."
-        )
-    return {"scaled": scaled, "unscaled_by_convention": by_convention, "energy_free": energy_free}
-
-
-def build_rest2_scaled_system(base_system, solute_atom_indices: np.ndarray, scale_factor: float,
-                              exclude_central_bonds=None):
-    """Return a deep copy of *base_system* with REST2 Hamiltonian scaling applied.
-
-    Parameters
-    ----------
-    base_system:
-        Unscaled OpenMM System (scale_factor == 1.0 corresponds to no scaling).
-    solute_atom_indices:
-        Integer array of solute atom indices (0-based).  For alanine dipeptide
-        implicit runs this is ``np.arange(22)``.
-    scale_factor:
-        REST2 scale factor ``s = T_bath / T_effective``.  Use 1.0 for the
-        physical (U0) system and the actual replica value for higher replicas.
-    exclude_central_bonds:
-        Optional iterable of {i, j} atom-index pairs whose torsion terms are left
-        unscaled (e.g. the omega bond of non-proline-like amides).  Torsion-only.
-
-    Returns
-    -------
-    openmm.System
-        Scaled copy; the original *base_system* is not modified.
-    """
-    # Before touching anything: refuse a System carrying an energy term we cannot place. Doing this
-    # first means the failure is "this System has a force I do not understand", not a half-scaled
-    # System that looks finished.
-    audit_force_classes(base_system)
-    system = _clone_system(base_system)
-    solute_set = {int(i) for i in solute_atom_indices}
-    exclude = ({frozenset((int(a), int(b))) for a, b in exclude_central_bonds}
-               if exclude_central_bonds is not None else set())
-    for force_index in range(system.getNumForces()):
-        force = system.getForce(force_index)
-        if isinstance(force, NonbondedForce):
-            _scale_nonbonded_force(force, solute_set, scale_factor)
-        elif isinstance(force, PeriodicTorsionForce):
-            _scale_torsion_force(force, solute_set, scale_factor, exclude)
-        elif isinstance(force, CMAPTorsionForce):
-            _scale_cmap_force(force, solute_set, scale_factor)
-        elif isinstance(force, CustomGBForce):
-            _scale_customgb_force(force, system, solute_set, scale_factor)
-    return system
-
-

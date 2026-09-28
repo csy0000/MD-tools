@@ -357,6 +357,37 @@ def constraint_option(name):
                                       "None": None}[str(name)]
 
 
+def set_ace_surften(system, surften):
+    """Rewrite the ACE nonpolar term's hard-coded surface tension, in place.
+
+    `28.3919551` is `4*pi*0.0054 kcal/mol/A^2` converted to kJ/mol/nm^2, written into the energy
+    expression as a literal by `openmm/app/internal/customgbforces.py`. No argument changes it,
+    so the term is located by its expression -- energy terms have no names and their order depends
+    on the GB model -- and the prefactor substituted. Anything other than exactly one match is
+    refused: editing the wrong term would change the POLAR solvation energy under a nonpolar name.
+    """
+    import math
+
+    import openmm as mm
+
+    gb = [f for f in system.getForces() if isinstance(f, mm.CustomGBForce)]
+    if len(gb) != 1:
+        raise RuntimeError(f"expected one CustomGBForce to carry the ACE term; found {len(gb)}")
+    force = gb[0]
+    hits = [i for i in range(force.getNumEnergyTerms())
+            if "(radius+0.14)^2" in force.getEnergyTermParameters(i)[0]]
+    if len(hits) != 1:
+        raise RuntimeError(
+            f"expected one ACE energy term in the CustomGBForce; found {len(hits)}. Either the "
+            "nonpolar term was not built or OpenMM's ACE expression has changed.")
+    expression, computation = force.getEnergyTermParameters(hits[0])
+    if "28.3919551" not in expression:
+        raise RuntimeError(f"the ACE term has an unexpected prefactor:\n    {expression}")
+    prefactor = 4.0 * math.pi * float(surften) * 4.184 * 100.0
+    force.setEnergyTermParameters(
+        hits[0], expression.replace("28.3919551", f"{prefactor:.7f}"), computation)
+
+
 # ---------------------------------------------------------------------------------------------
 # Explicit solvent: hydrogens, box, water and ions, System.
 # ---------------------------------------------------------------------------------------------
@@ -673,8 +704,18 @@ def implicit_system(prmtop: Path, rst7: Path, settings: dict):
         removeCMMotion=bool(implicit["remove_cm_motion"]),
         **({"hydrogenMass": float(b["hydrogen_mass_amu"]) * unit.dalton}
            if scope != "none" else {}))
+    surften = None
+    if implicit["nonpolar_sasa"]:
+        # OpenMM and ParmEd hard-code the ACE surface tension into the energy expression, so the
+        # only way to honour the recorded value is to rewrite the built term. This duplicates
+        # md_tools.openmm.implicit.set_ace_surften on purpose -- this file imports nothing from
+        # md-tools -- and the byte-identity test is what keeps the two from drifting.
+        surften = implicit.get("nonpolar_surften")
+        surften = 0.0054 if surften is None else float(surften)
+        set_ace_surften(system, surften)
     say("system", f"{implicit['model']}, {implicit['radii']} radii, no cutoff, "
-                  f"{b['constraints']}, SASA term {implicit['nonpolar_sasa']}, hydrogen mass "
+                  f"{b['constraints']}, ACE nonpolar "
+                  f"{('surften %g kcal/mol/A^2' % surften) if surften else 'off'}, hydrogen mass "
                   f"{b['hydrogen_mass_amu'] if scope != 'none' else 'as parameterised'}")
     return system
 

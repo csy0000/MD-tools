@@ -724,7 +724,12 @@ def standalone_settings(record: dict[str, Any], structure: Path, system: Path,
                                     else None),
         "implicit": ({"model": "GBn2", "radii": "mbondi3", "remove_cm_motion": True,
                       "nonpolar_sasa": bool((cfg.get("implicit_solvent") or {})
-                                            .get("nonpolar_sasa", False))}
+                                            .get("nonpolar_sasa", True)),
+                      # Carried so the standalone rebuild applies the same surface tension. It
+                      # cannot be left to the library: OpenMM has no argument for it, so a
+                      # bundle that omitted it would rebuild at ACE's 0.0054 whatever the run used.
+                      "nonpolar_surften": (cfg.get("implicit_solvent") or {})
+                      .get("nonpolar_surften")}
                      if implicit else None),
         "expected": {"system": {"file": system.name, "sha256": _digest(system)},
                      "topology": {"file": topology.name, "sha256": _digest(topology)}},

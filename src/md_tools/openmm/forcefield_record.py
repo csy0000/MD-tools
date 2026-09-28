@@ -133,9 +133,16 @@ def build_forcefield_record(*, resolved: dict[str, Any], route: str, record: dic
             # Whether the ACE surface-area nonpolar term is in the Hamiltonian. Recorded because
             # the two choices differ by ~16 kJ/mol and because ParmEd and OpenMM default
             # differently: a bundle that does not say is a bundle nobody can reproduce.
+            # The legacy fallback stays False, and deliberately does not follow the configuration
+            # default. An absent key means a record written before the nonpolar term worked at
+            # all, and those builds have no ACE term in them; defaulting it to today's True would
+            # relabel every one of them as something they are not.
             "nonpolar_sasa": implicit_report.get(
                 "nonpolar_sasa", implicit_solvent.get("nonpolar_sasa", False)),
             "nonpolar_model": implicit_report.get("nonpolar_model"),
+            # The method BY NAME and the surface tension WITH ITS UNITS. A bool stopped
+            # identifying this Hamiltonian the moment the tension became adjustable.
+            "nonpolar": implicit_report.get("nonpolar"),
             "polar_reference": "GB-Neck2 (Nguyen, Roe & Simmerling, JCTC 2013); Amber igb=8",
             # Measured on the built CustomGBForce: which atoms carry parameters from the GB-Neck2
             # fit and which carry ParmEd's generic fallback. See implicit.gb_parameter_coverage.
@@ -148,8 +155,11 @@ def build_forcefield_record(*, resolved: dict[str, Any], route: str, record: dic
             "radius_policy_requested": implicit_report.get("radius_policy_requested"),
             "radius_assignment_method": implicit_report.get("radius_assignment_method"),
             "peptide_like_mbondi3": implicit_report.get("peptide_like_mbondi3"),
-            **_implicit_support_status(is_ligand=is_ligand,
-                                       coverage=implicit_report.get("parameter_coverage") or {}),
+            **_implicit_support_status(
+                is_ligand=is_ligand,
+                coverage=implicit_report.get("parameter_coverage") or {},
+                nonpolar_sasa=bool(implicit_report.get(
+                    "nonpolar_sasa", implicit_solvent.get("nonpolar_sasa", False)))),
         } if implicit else None,
 
         "nonbonded": _nonbonded_record(implicit=implicit, nonbonded=nonbonded_report,
@@ -324,8 +334,16 @@ def _hmr_inconsistent(constraints, build, hmr):
         f"repartitioned System without evidence that one was built.")
 
 
-def _implicit_support_status(*, is_ligand: bool, coverage: dict[str, Any]) -> dict[str, Any]:
-    """`supported` or `experimental`, decided by what was measured, not by the route label."""
+def _implicit_support_status(*, is_ligand: bool, coverage: dict[str, Any],
+                             nonpolar_sasa: bool = False) -> dict[str, Any]:
+    """`supported` or `experimental`, decided by what was measured, not by the route label.
+
+    `nonpolar_sasa` gates the PARITY claim, not the support status. Amber's `igb=8` parity is
+    parity with `gbsa=0` -- no nonpolar term at all -- so a System carrying the ACE term is not
+    that System, however well supported the rest of it is. Nor is it Amber's `gbsa=1`: that is
+    LCPO, a different nonpolar model from ACE. With the term on there is no Amber setting to claim
+    parity WITH, which is why this says so by name instead of quietly keeping the old basis string.
+    """
     measured = bool(coverage.get("measured"))
     fully_covered = bool(coverage.get("all_atoms_covered_by_gbn2_fit"))
     if measured and not fully_covered:
@@ -334,15 +352,22 @@ def _implicit_support_status(*, is_ligand: bool, coverage: dict[str, Any]) -> di
         status, note = "experimental", _IMPLICIT_EXPERIMENTAL_LIGAND
     else:
         status, note = "supported", _IMPLICIT_SUPPORTED
+    parity = bool(status == "supported") and not nonpolar_sasa
+    if parity:
+        basis = ("ff14SB topology from tleap with PBRadii mbondi3, GBn2 with useSASA=False, "
+                 "matching igb=8 with gbsa=0")
+    elif status == "supported":
+        basis = ("not claimed: the ACE surface-area nonpolar term is present, so this is not "
+                 "igb=8 with gbsa=0, and ACE is not Amber's gbsa=1 (LCPO) either. The polar part "
+                 "is unchanged; set implicit_solvent.nonpolar_sasa: false for the parity build.")
+    else:
+        basis = "not claimed: see support_note and parameter_coverage"
     return {
         "support_status": status,
         "support_note": note,
         # The exact-parity claim, stated only where the evidence supports it.
-        "amber_igb8_parity_claimed": bool(status == "supported"),
-        "amber_igb8_parity_basis": (
-            "ff14SB topology from tleap with PBRadii mbondi3, GBn2 with useSASA=False, matching "
-            "igb=8 with gbsa=0" if status == "supported" else
-            "not claimed: see support_note and parameter_coverage"),
+        "amber_igb8_parity_claimed": parity,
+        "amber_igb8_parity_basis": basis,
     }
 
 
