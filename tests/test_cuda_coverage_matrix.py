@@ -224,6 +224,29 @@ CUDA_SITES = {
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
 #: named exemption rather than an omission -- and the reason is checkable by reading the callsite.
 NON_CUDA_CONTEXT_SITES = {
+    "openmm/implicit.py::set_ace_surften":
+        "matched as `derive` by `system.getForces()`, which is the System's own list of Force "
+        "objects, not `State.getForces()`. It rewrites the surface-tension prefactor inside the "
+        "ACE energy term of the built `CustomGBForce` -- a string substitution in an energy "
+        "EXPRESSION, done on the host during `md-openmm build-top`, before any Context exists. It "
+        "asks no device for anything, and the System it edits is then serialised to XML.",
+    "reference/standalone_build.py::set_ace_surften":
+        "the same substitution, duplicated on purpose: a reference bundle's `build_system.py` "
+        "imports nothing from md-tools, and the byte-identity test is what keeps the two copies "
+        "from drifting. Host-side, no Context, for the same reason as the entry above.",
+    "rest2/pocket.py::interface_residues":
+        "matched as `derive` by `topology.getPeriodicBoxVectors()` -- the Topology's own box, not "
+        "`State.getPeriodicBoxVectors()`. The generalisation of `pocket_residues` to two named "
+        "sides (`--int1`/`--int2`), measuring heavy-atom distances on the host from coordinates a "
+        "PDB reader handed it, so the helper can PRINT the residues lining an interface. It "
+        "creates no Context, runs before any simulation exists, and resolves nothing at run time. "
+        "See the `pocket_residues` entry below, which it now wraps.",
+    "run/preflight.py::_measurement_state":
+        "matched as `derive` by reading positions and box vectors -- from the `-c` INPUT "
+        "COORDINATE FILE on disk, through a file reader, not off a device. It supplies the "
+        "throughput measurement with a real starting configuration so device placement is not "
+        "ranked on a System at its serialised coordinates. The measurement it feeds does touch "
+        "CUDA and is classified separately; this function only opens a file.",
     "rest2/pocket.py::pocket_residues":
         "matched as `derive` by `topology.getPeriodicBoxVectors()`, which is the Topology's own "
         "box, not `State.getPeriodicBoxVectors()`. It measures heavy-atom distances between a "
