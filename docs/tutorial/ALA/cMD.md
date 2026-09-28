@@ -110,7 +110,22 @@ RTX A5000.
 |---|---|---|---|
 | **1 µs cMD — the reference** | **2.76%** | 16 | 0.02 |
 | 10 ns cMD — this page | **0.00%** | **0** | 0.00 |
-| 10 ns REST2, state 0 | 2.80% | 34 | 3.40 |
+| 10 ns REST2, state 0 \* | 2.80% | 34 | 3.40 |
+\* **The ladder is not free.** Its four replicas each ran 10 ns, so it spent **40 ns of
+aggregate sampling and about 4.8× the GPU-seconds** of the plain 10 ns run (4 × 374 s
+against 314 s). Only state 0's 10 ns is usable output; the other three states exist to
+ferry configurations across the barrier. The like-for-like question is therefore whether
+40 ns of plain MD would have found the basin — it would not have: the 1 µs reference needs
+about 60 ns per entry.
+
+
+Watching the same 10 ns as a time series rather than a histogram makes the difference concrete:
+
+![phi against time for the plain run and the ladder's cold state](images/phi-time-10ns.png)
+
+The plain run never leaves the negative-φ region. The ladder's cold state — the **same**
+Hamiltonian at the same temperature — visits αL seven separate times, and each visit lasts long
+enough to be sampled rather than glanced at.
 
 The two negative-φ basins are well sampled at 10 ns and the halves of the run agree on them to
 2.6°, which looks like a converged result. **It is not.** The αL basin at φ ≈ +55° holds 2.76% of

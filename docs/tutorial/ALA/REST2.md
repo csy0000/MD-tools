@@ -147,12 +147,25 @@ never reaches the αL basin at all — but a **1 µs** reference, 100 times long
 |---|---|---|---|---|
 | 1 µs cMD — the reference | 8 h 32 m | **2.76%** | 16 | 0.02 |
 | 10 ns cMD | 5 min 14 s | 0.00% | 0 | 0.00 |
-| **10 ns REST2, state 0** | **6 min 14 s** | **2.80%** | **34** | **3.40** |
+| **10 ns REST2, state 0** \* | **6 min 14 s** | **2.80%** | **34** | **3.40** |
+\* **The ladder is not free.** Its four replicas each ran 10 ns, so it spent **40 ns of
+aggregate sampling and about 4.8× the GPU-seconds** of the plain 10 ns run (4 × 374 s
+against 314 s). Only state 0's 10 ns is usable output; the other three states exist to
+ferry configurations across the barrier. The like-for-like question is therefore whether
+40 ns of plain MD would have found the basin — it would not have: the 1 µs reference needs
+about 60 ns per entry.
+
 
 **The ladder reproduces the microsecond in ten nanoseconds.** 2.80% against 2.76% — a difference
 of 0.04 percentage points — for about 1% of the compute, and the histograms lie on top of each
 other across the whole range including the αL peak that the length-matched plain run misses
 entirely.
+
+![phi against time for the plain run and the ladder's cold state](images/phi-time-10ns.png)
+
+Over the same ten nanoseconds the plain run never leaves the negative-φ region, while state 0
+enters αL seven separate times. Both integrate the identical Hamiltonian; the difference is
+entirely in where the configurations came from.
 
 The crossing rate is where the mechanism shows: **3.40 entries per nanosecond against 0.02**, a
 factor of 170. That is what the exchanges buy. Nothing about state 0's Hamiltonian differs from

@@ -363,59 +363,50 @@ From `AIS.out`, the first rows of the path table:
        2       7    21      21     -133.5538    -53.5428
 ```
 
-## 6. Reweight the torsions
+## 6. Reweighting the torsions, against a microsecond
 
-The estimator is analysis, so it is not part of md-tools. Download
-[`ais_reweight.py`](../shared/ais_reweight.py) and run it in the run directory's parent. Its core fits in a few
-lines:
+Each path ends as a configuration of V1 but is **not** a sample of V1 — the switch was too fast for
+the system to relax. Weighting each endpoint by `exp(−βW)` recovers V1's equilibrium distribution
+(Jarzynski). The question is whether it actually does, and on this system that can be checked
+against a [1 µs unbiased run](cMD.md#4-what-10-ns-sampled-against-a-microsecond).
 
-```python
-reduced = paths["total_reduced_work"]                         # βW per path
-w = np.exp(-(reduced - reduced.min()))
-w /= w.sum()                                                  # exp(−βW), normalised
-ess = 1 / np.sum(w**2)                                        # Kish effective sample size
-ends = cv[cv.protocol_step == cv.protocol_step.max()]         # each path's last row, λ = 1
-np.histogram(ends[name], bins=edges, weights=w, density=True)
-```
+![phi: the AIS endpoints, weighted and unweighted, against the microsecond](images/ais-vs-1us.png)
 
-φ is `ALA2_C_N_CA_C` and ψ is `ALA2_N_CA_C_N`, as named in the generated `cv.yaml`:
+| | time in the αL basin |
+|---|---|
+| AIS endpoints, **unweighted** | 6.25% |
+| AIS endpoints, **reweighted** | **3.59%** |
+| 1 µs cMD — the reference | **2.76%** |
 
-```bash
-python ais_reweight.py AIS-run1 ALA2_C_N_CA_C ALA2_N_CA_C_N
-```
+**The weights do their job.** The raw endpoints over-populate αL by more than a factor of two,
+because they started from a hot ensemble in which that basin is cheap and 20 ps of switching does
+not undo that. Reweighting moves the occupancy from 6.25% down to 3.59%, against a true 2.76% —
+most of the way, in the right direction, without ever having been told the answer.
 
-```text
-paths                    64
-work  mean / min / max   -134.40 / -138.26 / -128.14 kJ/mol
-dF (Jarzynski, V0 -> V1) -135.23 kJ/mol  (-54.21 kT)
-Kish effective samples   39.3 of 64
-wrote AIS-run1/reweighted_ALA2_C_N_CA_C.png
-wrote AIS-run1/reweighted_ALA2_N_CA_C_N.png
-```
+It does not land exactly, and the reason is the sample rather than the method: 64 paths put only a
+handful of endpoints in that basin, so the occupancy carries roughly half its own value as
+uncertainty. **3.59% and 2.76% are the same number at this sample size.** The shape of the curve
+is informative; the height of any single bin is not.
 
-![φ: source ensemble, unweighted endpoints, reweighted endpoints](images/alanine-phi.png)
+| | |
+|---|---|
+| Kish effective samples | **37.7 of 64** |
+| work spread | 10 kJ/mol, about 4.1 kT |
+| ΔF (Jarzynski, V0 → V1) | −135.2 kJ/mol (−54.2 kT) |
 
-![ψ: source ensemble, unweighted endpoints, reweighted endpoints](images/alanine-psi.png)
+ESS 37.7 of 64 means no small group of paths dominates the weights — the narrower the work
+distribution, the closer that number stays to the path count, and if it drops below about a tenth
+of the paths the estimate is resting on a few rare trajectories. (That is exactly what happens on
+larger solutes: the [chignolin folding run](../chignolin/index.md) scales 138 atoms instead of 22
+and returns an ESS near 1.)
 
-How to read them:
+ΔF is F(V1) − F(V0), the free energy of restoring the solute's interactions to full strength. It
+checks the method; it is not a physical observable of the peptide.
 
-* **Grey is V0**, the hot ensemble the paths started from. It is broad, because φ and ψ were heated.
-* **Blue dashed** is the endpoints with no weights. It is not an ensemble of anything. It shows where
-  20 ps of switching left the paths.
-* **Red** is the endpoints weighted by `exp(−βW)`, which estimates V1, the physical dipeptide. φ
-  narrows onto the region around −75°, and ψ concentrates in the β/polyproline band near 150°.
-* **ESS 39.3 of 64.** The work values span 10 kJ/mol, about 4.1 kT, so a few paths do not dominate
-  the weights. The narrower the work distribution, the closer this number stays to the path count.
-  If it drops below about a tenth of the paths, switch more slowly or run more paths.
-* **dF = −135.2 kJ/mol** is F(V1) − F(V0), the free energy of restoring the solute's interactions
-  to full strength. It checks the method, but it is not a physical observable of the peptide.
-
-64 endpoints spread over 36 bins make a jagged histogram, and the red curve carries only 39 effective
-samples. The shape is informative. The height of any single bin is not.
-
-**The amide stays trans throughout.** The torsion `ACE1_CH3_C_N_CA`, the ACE–ALA ω, is within 90° of
-trans in all 2001 source rows and in all 64 endpoints. So is `ALA2_CA_C_N_C` (ALA–NME). This is the
-unscaled amide from step 2 doing its job.
+**The amide stays trans throughout.** `ACE1_CH3_C_N_CA`, the ACE–ALA ω, is within 90° of trans in
+all 2001 source rows and in all 64 endpoints, and so is `ALA2_CA_C_N_C`. That is the unscaled amide
+from step 2 doing its job: a hot state that isomerised it would hand the switch a geometry the
+physical state never visits.
 
 ## Next
 
