@@ -450,6 +450,19 @@ def md_run_main(argv: list[str] | None = None) -> int:
                       f"and bound to the digest the windows check their rebuild against.",
                       file=sys.stderr)
                 return 2
+        # THE LEG, AFTER the flags above: a flag that is wrong is wrong whatever
+        # directory it points at, and it is what the person just typed.
+        # THE LEG, checked HERE, before `-odir` is created and `resolved.config` written into it.
+        # `window_main` checks it too -- it is the same function -- but by the time the dispatch
+        # runs the directory exists, and a `-odir` holding a `resolved.config` is
+        # indistinguishable from a run that happened. A mistyped `-odir` is exactly the case.
+        from ..alchemy.generated import GeneratedWindowError, require_prepared_leg
+
+        try:
+            require_prepared_leg(Path(args.out_dir))
+        except GeneratedWindowError as refusal:
+            print(f"md-run: {refusal}", file=sys.stderr)
+            return 2
     replicas = (int(resolved["rest2"]["number_of_replicas"])
                 if protocol == "REST2" else None)
     # A LADDER READS -s ONLY FROM ITS GROUP FILE (0.5.4). Refused by name here, before -odir or

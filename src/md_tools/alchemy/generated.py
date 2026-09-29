@@ -53,6 +53,24 @@ def leg_directory(directory: Path) -> Path:
     return Path(directory) / "leg"
 
 
+def require_prepared_leg(directory: Path) -> Path:
+    """`leg/leg.json` beside `directory`, or a refusal naming what is missing.
+
+    ONE implementation with TWO callers, and the second one is why it is a function.
+    `window_main` runs it, and `md-run` runs it too -- BEFORE it creates `-odir` and writes
+    `resolved.config`. Left to `window_main` alone, the refusal would arrive after the output
+    directory existed, and a `-odir` holding a `resolved.config` is indistinguishable from a run
+    that happened. That is the ordinary case of the mistake this refuses: a mistyped `-odir`.
+    """
+    leg = leg_directory(directory)
+    if not (leg / "leg.json").is_file():
+        raise GeneratedWindowError(
+            f"{leg}/leg.json does not exist, so this directory declares a ladder whose leg was "
+            f"never prepared. `md-openmm build-md` writes it when it generates the run; a run "
+            f"directory without it cannot say which end states the windows run between.")
+    return leg
+
+
 def window_ids(resolved: dict[str, Any]) -> list[str]:
     """Every window id of this ladder, in lambda order, from the resolved configuration alone.
 
@@ -204,12 +222,7 @@ def window_main(resolved: dict[str, Any], *, directory: Path, windows: Sequence[
     from .campaign import run_leg
 
     directory = Path(directory)
-    leg = leg_directory(directory)
-    if not (leg / "leg.json").is_file():
-        raise GeneratedWindowError(
-            f"{leg}/leg.json does not exist, so this directory declares a ladder whose leg was "
-            f"never prepared. `md-openmm build-md` writes it when it generates the run; a run "
-            f"directory without it cannot say which end states the windows run between.")
+    leg = require_prepared_leg(directory)
     _, hamiltonian = hamiltonian_from(directory, resolved)
     settings = window_settings(resolved)
     results = run_leg(leg, hamiltonian=hamiltonian, settings=settings, windows=list(windows),

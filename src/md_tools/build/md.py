@@ -2640,6 +2640,20 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
     # `built.xml`. `build-md` used to generate a cMD run in a bare directory and leave every one
     # of those questions to the first stage that opened the System, which is the whole-chain
     # preflight `--all-in-one` carried and the split form did not.
+    # THE PLAN, checked HERE, before `run_root` is created. A ladder's equivalent of the built
+    # System below: it is the pair of end states, it is read at generation, and a generation that
+    # is going to refuse for want of it must not have made its output directory first. The full
+    # `load_plan` happens further down, where the leg is prepared; this is the existence check,
+    # and it is deliberately the same message.
+    if resolved["protocol"] == "alchemical":
+        stated_plan = Path((resolved.get("alchemical") or {}).get("plan") or "")
+        if not stated_plan.is_absolute() and config_path is not None:
+            stated_plan = (Path(config_path).parent / stated_plan).resolve()
+        if not (stated_plan / "plan.json").is_file():
+            raise ConfigError(
+                f"alchemical.plan = {(resolved.get('alchemical') or {}).get('plan')!r} does not "
+                f"hold a plan.json ({stated_plan}). `md-openmm combine-topology` writes the plan "
+                f"directory; the ladder runs between the two end states it records.")
     #
     # EXCEPT AN ALCHEMICAL LADDER, which has no `built.xml` to be validated against and must not
     # acquire one. Its System is the leg's, built here from `alchemical.plan` -- the plan carries

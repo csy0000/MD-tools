@@ -155,7 +155,34 @@ def test_a_single_window_is_refused_whichever_way_it_is_written():
 
 
 # --- the knot of a staged path ------------------------------------------------------------------
+#
+# STAGED IS REFUSED SINCE X1, and these five keep their assertions rather than being deleted.
+#
+# They were written when the Hamiltonian moved two components. It moves THREE
+# (`ALCHEMICAL_COMPONENTS`): `lambda_bonded` carries the common-core bonded terms that differ
+# between the end states, and a staged path has no place to put it that somebody has chosen. Which
+# stage carries it changes the path every window samples, so `alchemical_path` refuses `staged`
+# and says why.
+#
+# `strict=True` deliberately: when the decision is recorded and staged is wired, these go from
+# xfail to XPASS and the lane fails, which is how the next person finds the arithmetic that was
+# already written for it instead of writing it again.
+STAGED_PENDING = pytest.mark.xfail(
+    strict=True, reason="alchemical.lambda_path: `staged` is refused until a scientific decision "
+                        "places lambda_bonded relative to the knot (X1)")
 
+
+def test_staged_is_refused_and_names_the_decision_it_is_waiting_on():
+    """The refusal a person actually meets, and the only staged behaviour there is today."""
+    with pytest.raises(ConfigError) as refusal:
+        _resolve(lambda_path="staged", staged_knot=0.5)
+    message = str(refusal.value)
+    assert "lambda_bonded" in message and "not implemented" in message
+    # It points at what to do instead rather than only at what is wrong.
+    assert "lambda_path: linear" in message
+
+
+@STAGED_PENDING
 def test_a_staged_path_needs_its_knot_and_a_linear_one_refuses_it():
     with pytest.raises(ConfigError, match=r"alchemical\.staged_knot is not set"):
         _resolve(lambda_path="staged")
@@ -163,12 +190,14 @@ def test_a_staged_path_needs_its_knot_and_a_linear_one_refuses_it():
         _resolve(staged_knot=0.5)
 
 
+@STAGED_PENDING
 def test_a_window_count_that_lands_on_the_knot_is_accepted():
     """11 windows are spaced 1/10, and the knot at 0.5 is window 5."""
     resolved = _resolve(lambda_path="staged", staged_knot=0.5)
     assert resolved["alchemical"]["staged_knot"] == 0.5
 
 
+@STAGED_PENDING
 def test_a_window_count_that_misses_the_knot_is_refused_with_the_arithmetic():
     """NOT ROUNDED, and not moved to the nearest grid point.
 
@@ -185,6 +214,7 @@ def test_a_window_count_that_misses_the_knot_is_refused_with_the_arithmetic():
     assert "lambda_values" in message
 
 
+@STAGED_PENDING
 def test_written_out_values_may_place_a_window_on_an_awkward_knot():
     """The escape the refusal above points at, and proof that it is a real one."""
     resolved = _resolve(number_of_windows=None, lambda_path="staged", staged_knot=0.4,
@@ -192,6 +222,7 @@ def test_written_out_values_may_place_a_window_on_an_awkward_knot():
     assert resolved["alchemical"]["lambda_path"] == "staged"
 
 
+@STAGED_PENDING
 def test_a_knot_at_an_end_of_the_path_is_refused():
     """A stage of zero width is a linear path with a component that never moves; say that."""
     with pytest.raises(ConfigError, match="not strictly between 0 and 1"):
@@ -312,8 +343,12 @@ def test_an_alchemical_input_resolves_back_to_exactly_its_resolved_config(tmp_pa
     from md_tools.build.md import in_file_text
     from md_tools.run.inputs import parse_run_input
 
+    # `lambda_path` and `staged_knot` are the two keys this cannot depart on: `staged` is refused
+    # (see STAGED_PENDING above), so `linear` is both the default and the only value. When staged
+    # is wired, put it back here -- a round trip that only ever writes the default for a key has
+    # not shown that the key survives the trip.
     resolved = _resolve(number_of_windows=None, lambda_values="0.0, 0.25, 0.5, 0.75, 1.0",
-                        lambda_path="staged", staged_knot=0.5, sc=False, scalpha=0.25,
+                        lambda_path="linear", sc=False, scalpha=0.25,
                         scbeta=6.0, sc_boundary_14="unscaled", equilibration_steps=5000,
                         minimize_iterations=100)
     written = tmp_path / "alchemical.in"
@@ -352,28 +387,62 @@ def test_a_preparation_input_carries_no_alchemical_block(tmp_path):
     assert "protocol" not in text, text
 
 
-# --- the two surfaces that cannot yet run one -------------------------------------------------
+# --- the two surfaces, which now RUN one ------------------------------------------------------
+#
+# Until X1 both of these refused, and the two refusals were this branch's acceptance criteria:
+# "when a window runs end to end from a generated directory, they come out." They came out. What
+# each test asserts now is the behaviour that replaced its refusal, in the same place, so the
+# transition is visible rather than a deletion.
+#
+# The END-TO-END evidence is `tests/test_alchemy_generated.py`, which needs a real plan. What is
+# checked here is what this file has always checked: that the CONFIGURATION reaches the right
+# place, and that a refusal still arrives before anything is created.
 
-def test_build_md_refuses_to_generate_an_alchemical_run_and_writes_nothing(tmp_path):
-    """The configuration is wired and the script generation is not, and it SAYS so.
+def test_build_md_generates_an_alchemical_run_and_needs_a_real_plan(tmp_path):
+    """`alchemical.plan` is read at generation, and a directory is not created without one.
 
-    `stage_plan` hands back the preparation chain for this protocol -- minimisation and
-    equilibration, correct in themselves -- so a generated directory would run to completion
-    having sampled no window at all. A directory that looks like a finished run is worse than a
-    refusal.
+    `COMPLETE` names `transform/`, which does not exist. The refusal must be about THE PLAN -- the
+    pair of end states -- and not about script generation being unimplemented, which is what it
+    used to say.
     """
     from md_tools.build.md import build_scripts
 
     config = _config(tmp_path, COMPLETE)
     out_dir = tmp_path / "alchemical-run1"
-    with pytest.raises(ConfigError, match="does not yet write the per-window run scripts"):
+    with pytest.raises(ConfigError, match="does not hold a plan.json"):
         build_scripts(config_path=config, out_dir=out_dir, echo=False)
     assert not out_dir.exists(), "a refused generation created its output directory"
 
 
-def test_md_run_refuses_an_alchemical_input_before_it_creates_anything(tmp_path, capsys):
-    """An accepted protocol that reached the stage chain would run the PREPARATION of a campaign
-    and report the success of the campaign."""
+def test_md_run_dispatches_an_alchemical_input_and_refuses_a_directory_with_no_leg(tmp_path,
+                                                                                  capsys):
+    """The input now REACHES the window dispatch, and is refused there by what is missing.
+
+    `-odir` holding no `leg/` is a directory that declares a ladder whose leg was never prepared.
+    That is a different statement from "this surface cannot run one", and it is the one a person
+    who mistyped `-odir` needs.
+    """
+    from md_tools.build.md import in_file_text
+    from md_tools.run.main import md_run_main
+
+    written = tmp_path / "alchemical.in"
+    written.write_text(in_file_text(_resolve()), encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    code = md_run_main(["-i", str(written), "-odir", str(out_dir), "--window", "w000", "--cpu"])
+    assert code == 2
+    message = capsys.readouterr().err
+    assert "leg.json" in message and "never prepared" in message
+    assert not out_dir.exists(), "a refused invocation created its output directory"
+
+
+def test_md_run_refuses_a_second_system_for_the_windows(tmp_path, capsys):
+    """`-p` and `-s` are refused BY NAME for a ladder, before -odir exists.
+
+    They are not merely unused: a window's topology and System are the prepared leg, whose digest
+    the runtime checks its rebuild against, so a second one named here would leave which of the
+    two ran depending on which the runtime read.
+    """
     from md_tools.build.md import in_file_text
     from md_tools.run.main import md_run_main
 
@@ -382,8 +451,7 @@ def test_md_run_refuses_an_alchemical_input_before_it_creates_anything(tmp_path,
     out_dir = tmp_path / "out"
 
     code = md_run_main(["-i", str(written), "-p", str(tmp_path / "built.pdb"),
-                        "-s", str(tmp_path / "built.xml"), "-odir", str(out_dir),
-                        "-log", str(out_dir / "run.log")])
+                        "-odir", str(out_dir), "--window", "w000", "--cpu"])
     assert code == 2
-    assert "does not yet dispatch" in capsys.readouterr().err
-    assert not out_dir.exists(), "a refused invocation created its output directory"
+    assert "refused for an alchemical ladder" in capsys.readouterr().err
+    assert not out_dir.exists()
