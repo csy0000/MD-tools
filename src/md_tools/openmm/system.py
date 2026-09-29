@@ -1430,6 +1430,47 @@ def unscaled_torsions(topology, solute_atoms: Iterable[int], *,
             return symbol
         return name if name.upper().startswith(symbol.upper()) else f"{name} ({symbol})"
 
+    # The LOCAL ENVIRONMENT of each undecided bond, in the message itself.
+    #
+    # Naming the bond says WHICH one; it does not say where in the molecule it sits, and for a
+    # thirty-atom ligand that is the whole difficulty. Everything needed is already computed here:
+    # the bond graph, and what the other rules decided about the neighbourhood. Printing it costs
+    # nothing, needs no file, cannot be reaped from under the reader, and works over ssh and in a
+    # CI log, where an image helps nobody.
+    neighbours: dict[int, list[int]] = {}
+    for bond in topology.bonds():
+        neighbours.setdefault(bond.atom1.index, []).append(bond.atom2.index)
+        neighbours.setdefault(bond.atom2.index, []).append(bond.atom1.index)
+
+    nearby: dict[int, list[str]] = {}
+    for entry in result.get("central_bonds", ()):
+        pair = entry.get("bond")
+        if not pair:
+            continue
+        label = f"{_named(pair[0])}-{_named(pair[1])} {entry.get('class')}"
+        for end in pair:
+            nearby.setdefault(int(end), []).append(label)
+
+    def _indexed(index) -> str:
+        """`C7 [12]`. The INDEX is carried because a name need not be unique within a residue.
+
+        A small molecule's atoms are routinely named after their element, so "C bonded to N, O, N"
+        says nothing about which nitrogen. The index is the identifier the rest of this message
+        quotes and the one the depiction annotates, so it is the one that can be acted on.
+        """
+        return f"{_named(index)} [{int(index)}]"
+
+    def _environment(index) -> list[str]:
+        if index is None or not 0 <= int(index) < len(atoms):
+            return []
+        index = int(index)
+        bonded = ", ".join(_indexed(n) for n in sorted(neighbours.get(index, ()))) or "nothing"
+        out = [f"      {_indexed(index)} bonded to {bonded}"]
+        placed = sorted(set(nearby.get(index, ())))
+        if placed:
+            out.append(f"        already classified here: {'; '.join(placed)}")
+        return out
+
     lines = []
     for c in shown:
         if c.get("bond") is None:
@@ -1441,6 +1482,8 @@ def unscaled_torsions(topology, solute_atoms: Iterable[int], *,
                          f"{c.get('nitrogen_residue')}{c.get('nitrogen_residue_index')} "
                          f"{_named(c.get('nitrogen'))}: "
                          f"{c['ambiguous']}")
+            lines.extend(_environment(c.get("carbon")))
+            lines.extend(_environment(c.get("nitrogen")))
     if len(unknown) > len(shown):
         lines.append(f"  ... and {len(unknown) - len(shown)} more")
     raise UnclassifiedTorsionError(

@@ -521,3 +521,86 @@ def test_a_built_small_molecule_gets_its_picture_listed_in_the_record(tmp_path):
     from md_tools.build.record import sha256_file
     assert sha256_file(png) == facts["sha256"]
     assert _red_pixels(png) > 50
+
+
+# --- the refusal draws the picture that answers it ------------------------------------------------
+
+#: A urea: the carbonyl carbon carries two nitrogens, so `_amide_candidates` refuses it
+#: structurally, from the topology, and no bond-order evidence can settle which C-N is the omega.
+UREA_LIGAND = "CNC(=O)NC"
+
+
+def _refusal_config(**over):
+    """The three keys `_refusal_pictures` reads out of a resolved scaler configuration."""
+    return dict({"sdf_filelist": None, "proline_like_residues": ["PRO"],
+                 "max_proline_ring_size": 7}, **over)
+
+
+def test_a_refused_classification_draws_the_atom_index_picture_beside_the_system(tmp_path):
+    """The refusal names a bond by topology index; the picture is what says WHERE that bond is.
+
+    It used to be drawn only on success, into a staging directory renamed into place at the end,
+    so a refused build produced nothing at all -- and the one artefact that answers the refusal
+    did not exist precisely when it was needed.
+    """
+    from md_tools.build.scaler import _refusal_pictures            # noqa: PLC2701
+
+    topology, solute = _ligands(tmp_path, [("URE", UREA_LIGAND)])
+    note = _refusal_pictures(topology, solute, tmp_path, tmp_path / "scaler.config",
+                             _refusal_config())
+
+    picture = tmp_path / "URE-unscaled.png"
+    assert picture.is_file(), f"no picture was drawn; the note said: {note}"
+    assert picture.stat().st_size > 0
+    assert str(picture) in note, f"the refusal must say where the picture went; got: {note}"
+    assert "topology index" in note
+
+
+def test_a_second_refusal_never_overwrites_the_first_picture(tmp_path):
+    """A refusal is something you iterate on, so the previous diagnostic is what you compare to.
+
+    Losing it to the next attempt is losing the comparison, which is the whole reason to look.
+    """
+    from md_tools.build.scaler import _refusal_pictures            # noqa: PLC2701
+
+    topology, solute = _ligands(tmp_path, [("URE", UREA_LIGAND)])
+    first = _refusal_pictures(topology, solute, tmp_path, tmp_path / "scaler.config",
+                              _refusal_config())
+    original = (tmp_path / "URE-unscaled.png").read_bytes()
+
+    second = _refusal_pictures(topology, solute, tmp_path, tmp_path / "scaler.config",
+                               _refusal_config())
+
+    assert (tmp_path / "URE-unscaled.png").read_bytes() == original, "the first was overwritten"
+    assert (tmp_path / "URE-unscaled.1.png").is_file(), "the second needs a name of its own"
+    assert str(tmp_path / "URE-unscaled.1.png") in second
+    assert str(tmp_path / "URE-unscaled.png") in first
+    # The suffix goes before the extension, so every copy is still a .png a viewer opens.
+    assert not (tmp_path / "URE-unscaled.png.1").exists()
+
+
+def test_drawing_the_diagnostic_never_replaces_the_refusal_it_explains(tmp_path):
+    """An exception raised while explaining an exception hides the real one.
+
+    The no-SDF case is exactly the one that refuses, so it must report prose, not raise.
+    """
+    from md_tools.build.scaler import _refusal_pictures            # noqa: PLC2701
+
+    topology, solute = _ligands(tmp_path, [("URE", UREA_LIGAND)], write=False)
+    note = _refusal_pictures(topology, solute, tmp_path, tmp_path / "scaler.config",
+                             _refusal_config())
+
+    assert "no SDF" in note.lower() or "no picture" in note.lower(), note
+    assert not list(tmp_path.glob("*.png"))
+
+
+def test_the_refusal_message_carries_the_picture_path_end_to_end(tmp_path):
+    """Through `build_scaled_states`, where a user meets it. XAA has no SDF, so it says so."""
+    from md_tools.build.strict import ConfigError
+
+    build = _dataset(tmp_path / "XAA", rename_alanine="XAA")
+    with pytest.raises(ConfigError) as refusal:
+        _scale(build, _config(build, "method: REST2\n"))
+    assert "XAA" in str(refusal.value)
+    assert "no SDF" in str(refusal.value).lower() or "no picture" in str(refusal.value).lower()
+    assert not (build / "REST2").exists(), "a refusal still creates no output directory"

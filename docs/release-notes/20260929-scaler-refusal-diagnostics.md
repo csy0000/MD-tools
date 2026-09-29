@@ -1,6 +1,8 @@
 # The scaler's refusal withholds the picture that would answer it
 
-Proposed for 0.6.3, not implemented. Found 2026-09-29 while measuring the amidate gap.
+**Implemented 2026-09-29.** Found while measuring the amidate gap. The sections below state the
+defect and the measurement; *What was built* at the end records what shipped and which of the
+options was taken.
 
 ## What happens
 
@@ -54,36 +56,25 @@ The neutral hydantoin row matters most. It is not an exotic protonation state; i
 scaffold (phenytoin, phenobarbital), refused for a reason that has nothing to do with charge, and the
 user is handed a bond index with nothing to look at.
 
-## The fix
+## The tension, and why it dissolved
 
-Draw the depiction before enforcing, and name its path in the refusal.
+A staged directory that is never renamed is the scaler's atomicity guarantee: `build/<method>/`
+never appears half-built. Three placements were weighed — leave the staging directory behind and
+name it; an opt-in `--explain-unclassified` flag; a temporary directory — and each traded either
+usability or the surrounding rules (`--check` creates nothing; a refused continuation is read-only).
 
-1. Call the classifier with `enforce=False` (`openmm/system.py:1388`), draw, then enforce. The
-   classifier already returns the unclassified list without raising, so no new code path is needed to
-   get the data.
-2. Draw unclassified bonds in a second colour. Red currently means "unscaled"; an undecided bond is a
-   third state and must not read as either.
-3. Name the file in the refusal: `… see <path>/FOL-unscaled.png, where bond 6-8 is drawn in orange`.
+None was needed. The context a reader actually wants is textual, and putting it in the message
+costs no file at all. The picture then has no reason to live in the output tree: it belongs beside
+the System, next to the SDF it is drawn from, where it neither pollutes `build/<method>/` nor can
+be reaped. See *What was built*.
 
-## The tension to settle first
+## Still outstanding
 
-A staged directory that is never renamed is the scaler's atomicity guarantee: `build/<method>/` never
-appears half-built. Writing a diagnostic into the staging directory and leaving it does not violate
-that — the output tree still never appears half-built — but it does leave a directory behind on a
-refusal, and the neighbouring runtime rules (`--check` creates nothing; a refused continuation is
-read-only) lean the other way.
-
-Three options:
-
-- **(a) Leave the staging directory on refusal and say where it is.** Cheapest, one message change.
-  Costs a stale directory per refused attempt, which needs a documented name and a cleanup story.
-- **(b) Write the picture only when asked**, e.g. `--explain-unclassified <dir>`. Keeps the
-  write-nothing property exactly. Costs the user a second command.
-- **(c) Draw into a temporary directory and print the path.** Preserves both properties, litters the
-  temporary directory, and the file the user is told to open can be reaped out from under them.
-
-(a) is the smallest change and matches what the scaler already does. (b) concedes nothing to the
-surrounding invariants. This needs a decision before the work starts.
+**The undecided bond is not drawn in its own colour.** Red currently means "already classified",
+and the message says so, so the picture shows what *was* decided while the undecided bond has to
+be found by its index annotation. Giving it a third colour was in the original plan and was not
+done; red must keep meaning exactly one thing, so this needs a palette decision rather than a
+quick addition.
 
 ## Scope
 
@@ -95,8 +86,50 @@ Self-contained. It does not depend on, and should not be bundled with:
 - making `torsion_exclusions` reachable outside `ligand_scaling_dict`, so a user can *answer* an
   unclassified bond rather than only add protection to one already classified.
 
-## Test to write first
+## What was built
 
-Build the acylsulfonamide anion, run the scaler, and assert that it refuses **and** that the named
-picture exists and marks the unclassified bond. That test fails today on the second half only, which
-is the whole of this item.
+Neither (a), (b) nor (c): the tension they were arguing over turned out to be avoidable. The
+refusal now carries the **local environment in the message itself**, which needs no file at all —
+
+```text
+  bond 2-1: URE0 C -> URE0 N: carbon 2 is bonded to 2 nitrogens (urea-like)
+      C [2] bonded to N [1], O [3], N [4]
+      N [1] bonded to C [0], C [2], H [9]
+        already classified here: N1-C3 aromatic_ring; N1-C5 aromatic_ring
+```
+
+Everything there is already computed at the point of refusal: the bond graph, and what the other
+rules decided about the neighbourhood. It cannot be reaped, needs no flag, and works over ssh and
+in a CI log where an image helps nobody. The `already classified here` line is what makes an
+overlap legible — on N-acetylimidazole it says immediately that the nitrogen is an aromatic ring
+atom, which is *why* the amide pattern cannot reach it.
+
+Every atom carries its INDEX as well as its name, because a small molecule's atoms are routinely
+named after their element and `C bonded to N, O, N` identifies nothing. The index is what the rest
+of the message quotes and what the depiction annotates.
+
+**And the picture is drawn after all**, beside the System where the SDF it is drawn from already
+lives — not into the staged output directory, which is what made option (a) awkward:
+
+```text
+Every atom in these is annotated with the topology index this message quotes; red bonds are the
+ones already classified:
+  <build>/URE-unscaled.png
+```
+
+It never overwrites an earlier one: `URE-unscaled.png`, then `URE-unscaled.1.png`, and so on. A
+refusal is something you iterate on, and the previous attempt's diagnostic is what you compare
+against. The suffix goes *before* the extension so every copy is still a `.png` a viewer opens.
+
+Drawing can never replace the refusal it explains — every failure inside it is caught and reported
+as prose, because a molecule with no usable SDF is exactly the case that refuses, and an exception
+raised while explaining an exception hides the real one.
+
+The output tree is untouched: a refusal still creates no `build/<method>/`, which a test asserts.
+
+## Tests
+
+`tests/test_rest2_scaler.py`: the picture is drawn beside the System and named in the message; a
+second refusal writes `.1.png` and leaves the first bytes intact; the no-SDF case reports prose and
+draws nothing; and end to end through `build_scaled_states` the refusal still creates no output
+directory.

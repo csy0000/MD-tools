@@ -282,9 +282,26 @@ def optional_residue_sdfs(topology, solute, *, system_dir, config_dir,
 UNSCALED_RGB = (1.0, 0.0, 0.0)
 
 
+def _free_path(path: Path) -> Path:
+    """`x.png` if free, else `x.1.png`, `x.2.png`, ... A diagnostic never overwrites an earlier one.
+
+    The suffix goes BEFORE the extension rather than after it, so every copy stays a `.png` that an
+    image viewer opens by double-clicking; `x.png.1` would not.
+    """
+    import itertools
+
+    if not path.exists():
+        return path
+    for n in itertools.count(1):
+        candidate = path.with_name(f"{path.stem}.{n}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise AssertionError("unreachable")
+
+
 def depict_unscaled_torsions(topology, solute, residue_sdfs: Mapping[str, Path],
                              unscaled_bonds, out_dir, *, enabled: bool = True,
-                             improper_centres=(),
+                             improper_centres=(), unique: bool = False,
                              size: tuple[int, int] = (600, 450)) -> dict[str, dict[str, Any]]:
     """`<RESNAME>-unscaled.png` per small-molecule residue: its unscaled torsions' bonds in RED.
 
@@ -366,11 +383,58 @@ def depict_unscaled_torsions(topology, solute, residue_sdfs: Mapping[str, Path],
             highlightBondColors={i: UNSCALED_RGB for i in red_bonds})
         drawer.FinishDrawing()
         target = out_dir / f"{residue.name}-unscaled.png"
+        if unique:
+            target = _free_path(target)
         target.write_bytes(drawer.GetDrawingText())
         drawn[name] = {"file": target.name, "unscaled_bonds": [list(b) for b in mine],
                        "improper_centres": sorted(a for a in improper_centres if a in members),
                        "caption": caption}
     return drawn
+
+
+def _refusal_pictures(topology, solute, system_dir: Path, config_path: Path, config) -> str:
+    """Draw the atom-index depiction for a REFUSED classification, and say where it went.
+
+    Returns the text to append to the refusal, always beginning with a newline, or `""` when
+    nothing could be drawn. Drawing must never replace the refusal it is explaining, so every
+    failure here is swallowed and reported as prose: a molecule with no usable SDF is exactly the
+    case that refuses, and an exception raised while explaining an exception hides the real one.
+    """
+    try:
+        from ..openmm.system import unscaled_torsions
+
+        pictures = optional_residue_sdfs(
+            topology, solute, system_dir=system_dir, config_dir=config_path.parent,
+            sdf_filelist=config["sdf_filelist"],
+            proline_like_residues=config["proline_like_residues"])
+        if not pictures:
+            return ("\n\nNo picture could be drawn: no SDF describes these residues, which is "
+                    "itself the reason the classification refused.")
+        # `enforce=False`, which is the documented way for a caller that reports the refusal
+        # itself -- NOT `classify_unscaled_torsions`, whose direct use from a scaling surface is
+        # what `test_no_scaling_surface_calls_the_classifier_directly` forbids. Taking the
+        # unscaled bonds while ignoring the unclassified list is the defect that guard exists for,
+        # and a diagnostic is not an exemption from it: this file is a scaling surface whatever
+        # the call is for.
+        #
+        # Non-enforcing so the bonds other rules DID place are drawn in red beside the ones nobody
+        # could. Seeing what was decided is half of deciding the rest.
+        placed = unscaled_torsions(
+            topology, solute, residue_sdfs=pictures,
+            proline_like_residues=config["proline_like_residues"],
+            max_proline_ring_size=config["max_proline_ring_size"], enforce=False)
+        drawn = depict_unscaled_torsions(
+            topology, solute, pictures,
+            [tuple(b) for b in placed["unscaled_central_bonds"]],
+            system_dir, unique=True)
+        files = [system_dir / facts["file"] for facts in drawn.values() if "file" in facts]
+        if not files:
+            return ""
+        listed = "\n".join(f"  {path}" for path in sorted(files))
+        return ("\n\nEvery atom in these is annotated with the topology index this message "
+                f"quotes; red bonds are the ones already classified:\n{listed}")
+    except Exception as failed:                                   # noqa: BLE001
+        return f"\n\n(no picture could be drawn: {type(failed).__name__}: {failed})"
 
 
 #: A protein-route picture is drawn only up to this many solute heavy atoms. Beyond it a 2D drawing
@@ -599,7 +663,18 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
                                          proline_like_residues=config["proline_like_residues"],
                                          max_proline_ring_size=config["max_proline_ring_size"])
         except UnclassifiedTorsionError as refusal:
-            raise ConfigError(f"{method} states for {topology_path.name}: {refusal}") from None
+            # The refusal used to write NOTHING: it is raised here, and the depiction is drawn far
+            # below into a staging directory that is only renamed into place on success. So the one
+            # artefact that shows WHERE in the molecule the named bond sits -- every atom annotated
+            # with the topology index the message quotes -- did not exist precisely when it was
+            # needed. That, not the refusal, was the dead end a student hit on folate.
+            #
+            # The picture goes beside the System, where the SDF it is drawn from already lives, and
+            # never overwrites an earlier one: a refusal is something you iterate on, and the
+            # diagnostic from the previous attempt is what you compare against.
+            raise ConfigError(f"{method} states for {topology_path.name}: {refusal}"
+                              f"{_refusal_pictures(topology, classified_atoms, parent, config_path, config)}"
+                              ) from None
     else:
         unscaled = {"unscaled_central_bonds": [], "central_bonds": [],
                     "proline_like_scaled_bonds": [], "unscaled_impropers": False,
