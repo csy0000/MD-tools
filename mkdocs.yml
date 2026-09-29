@@ -173,10 +173,14 @@ nav:
           - AIS:
               - openmm_methods/AIS/README.md
               - Implementation: openmm_methods/AIS/AIS_implementation.md
+      - Free energy:
+          - Alchemical topology: openmm_methods/alchemy/README.md
+          - What the runtime computes: openmm_methods/alchemy/validation.md
   - Reference:
       - Scientific defaults: scientific-defaults.md
       - Support matrix: support-matrix.md
       - Releases:
+          - 0.6.4: release-notes/v0.6.4.md
           - 0.6.3: release-notes/v0.6.3.md
           - 0.6.2: release-notes/v0.6.2.md
           - 0.6.1: release-notes/v0.6.1.md
