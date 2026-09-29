@@ -19,18 +19,19 @@ shared contract by asking the coordinator, never with a private variant.
 
 ## The package
 
-One installed executable, `md-openmm`. Exactly four public work commands:
+One installed executable, `md-openmm`. Exactly five public work commands:
 
 ```text
-md-openmm build-top      a structure       -> built.xml + built.pdb + built.log
-                         --rest2-scaler: a built System -> build/<method>/system_state<i>.xml + scaler.yaml
-md-openmm build-md       a protocol config -> run scripts, .in files and run.sh in ./md_script/
-md-openmm md-run         an Amber-like .in -> a stage, a ladder, or AIS switching paths
-md-openmm data-register  a finished tree   -> a verified dataset under $MD_DATA
+md-openmm build-top         a structure       -> built.xml + built.pdb + built.log
+                            --rest2-scaler: a built System -> build/<method>/system_state<i>.xml + scaler.yaml
+md-openmm build-md          a protocol config -> run scripts, .in files and run.sh in ./md_script/
+md-openmm md-run            an Amber-like .in -> a stage, a ladder, or AIS switching paths
+md-openmm data-register     a finished tree   -> a verified dataset under $MD_DATA
+md-openmm export-reference  a finished run    -> a bundle that runs on OpenMM alone
 ```
 
 AIS is `protocol: AIS` in a `build-md` configuration and `protocol = AIS` in an `.in` file. **Do
-not add a fifth command**, and do not add a second executable: `md-run` is a SUBCOMMAND.
+not add a sixth command**, and do not add a second executable: `md-run` is a SUBCOMMAND.
 
 `md-run` is a surface, not an implementation. It parses the Amber-like input, resolves it through
 `md_tools.build.md`, writes the resulting `resolved.config` into `-odir` with the input's sha256,

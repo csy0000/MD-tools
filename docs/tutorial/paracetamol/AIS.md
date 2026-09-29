@@ -122,7 +122,7 @@ From `build/AIS/scaler.log`:
   picture of TYL              TYL-unscaled.png  (TYL: red = unscaled torsions across bond(s) 1-3, 4-5, 4-10, 5-6, 6-7, 7-9, 9-10; 8 improper centre(s))
 ```
 
-![paracetamol: unscaled torsions in red](images/paracetamol-unscaled.png)
+![paracetamol: unscaled torsions in red](images/paracetamol-rest2-unscaled.png)
 
 The amide (1–3) and the whole ring keep their full strength in V0. The hot state heats the other 18
 torsion terms: the methyl rotation, the rotation of the ring about the N–C bond, and the O–H rotation.
