@@ -721,7 +721,21 @@ PROTEIN_UNSCALED_BONDS = {
 
 #: The classes of central bond whose torsions stay unscaled, in the order they are decided and
 #: reported. Impropers are the fourth class and have no central bond.
-UNSCALED_BOND_CLASSES = ("amide_omega", "aromatic_ring", "double_bond")
+#: The TWO categories a protected bond falls in, in record order.
+#:
+#: `non_rotatable` is a bond with no other state to reach: an aromatic ring bond (planarity is
+#: enforced by delocalisation, so any excursion is pure strain) or a double bond (cis/trans is a
+#: chemical isomer, not a conformer). `amide_omega` is its own category because it is protected by
+#: CONVENTION rather than by having nowhere to go -- cis-peptide is a real state, just one the
+#: reference ensemble does not visit, and REST2 convention v3 says a hot rung must not visit it
+#: either.
+#:
+#: WHICH rule fired is kept per bond under `evidence`, so collapsing the categories loses nothing
+#: a reader had before.
+UNSCALED_BOND_CLASSES = ("amide_omega", "non_rotatable")
+
+#: The specific rules that make a bond `non_rotatable`, as they appear in a bond's `evidence`.
+NON_ROTATABLE_RULES = ("aromatic ring bond", "double bond")
 
 
 
@@ -1186,7 +1200,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
     unscaled, proline, urea, unknown = [], [], [], []
     for cand in candidates:
         if cand["ambiguous"]:
-            unknown.append(cand); continue
+            unknown.append(dict(cand, evidence_missing=False)); continue
         # A urea is RECOGNISED and deliberately left scalable -- see `_amide_candidates`. It is
         # not an abstention (nothing is undecided) and not a protected bond (it has real syn/anti
         # conformers behind a barrier the cold run does not cross, which is what REST2 is for).
@@ -1207,7 +1221,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         #    any protein carrying a modified residue.
         if per_name is not None:
             if residue_name not in per_name:
-                unknown.append(dict(cand, ambiguous=(
+                unknown.append(dict(cand, evidence_missing=True, ambiguous=(
                     f"nitrogen residue '{cand['nitrogen_residue']}' is not a known protein "
                     f"residue, so this omega has to be read from bond orders -- and no SDF was "
                     f"given for residue {cand['nitrogen_residue']}. Residues with an SDF: "
@@ -1215,12 +1229,12 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
                 continue
             info, error = _instance(cand["nitrogen_residue_index"], residue_name)
             if info is None:
-                unknown.append(dict(cand, ambiguous=(
+                unknown.append(dict(cand, evidence_missing=True, ambiguous=(
                     f"nitrogen residue '{cand['nitrogen_residue']}' needs bond orders, and "
                     f"{per_name[residue_name].name} could not be mapped onto it: {error}")))
                 continue
         elif ligand_sdf is None:
-            unknown.append(dict(cand, ambiguous=(
+            unknown.append(dict(cand, evidence_missing=True, ambiguous=(
                 f"nitrogen residue '{cand['nitrogen_residue']}' is not a known protein residue, "
                 f"so this omega has to be read from the molecule's bond orders -- and no SDF was "
                 f"supplied. `build-top` retains one beside the System (`<RESNAME>.sdf`, named for "
@@ -1229,13 +1243,15 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         else:
             info = ring_info
             if info is None:
-                unknown.append(dict(cand, ambiguous=(
+                unknown.append(dict(cand, evidence_missing=True, ambiguous=(
                     f"nitrogen residue '{cand['nitrogen_residue']}' needs bond orders, and the "
                     f"SDF could not be mapped onto residues {sorted(non_standard_names)}: "
                     f"{mapping_error}")))
                 continue
         if cand["bond"] not in info["amide_bonds"]:
-            unknown.append(dict(cand, ambiguous=(
+            # evidence_missing=False: the SDF was there and ANSWERED -- it says this C-N is not an
+            # ordinary amide. Nothing is absent, so nothing the user could supply would change it.
+            unknown.append(dict(cand, evidence_missing=False, ambiguous=(
                 "RDKit found no ordinary-amide match for this C-N bond in the SDF")))
             continue
         if cand["nitrogen"] in info["small_ring_nitrogens"]:
@@ -1284,7 +1300,10 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
             for kind, pairs in PROTEIN_UNSCALED_BONDS[name].items():
                 for x, y in pairs:
                     if x in atoms and y in atoms:
-                        _add(atoms[x], atoms[y], kind, residue, "PROTEIN_UNSCALED_BONDS")
+                        # The table's key names the RULE (aromatic_ring, double_bond); the
+                        # record carries the CATEGORY, with the rule kept as evidence.
+                        _add(atoms[x], atoms[y], "non_rotatable", residue,
+                             f"PROTEIN_UNSCALED_BONDS: {kind.replace('_', ' ')}")
             continue
         if name in PROTEIN_RESIDUES or name in pro_names:
             continue
@@ -1305,6 +1324,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
             info, error = ring_info, mapping_error
         if info is None:
             unknown.append({
+                "evidence_missing": True,
                 "bond": None, "carbon": None, "nitrogen": None,
                 "carbon_residue": residue.name, "nitrogen_residue": residue.name,
                 "carbon_residue_index": int(residue.index),
@@ -1320,10 +1340,10 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         evidence = "SDF bond orders"
         for a, b in sorted(info["aromatic_bonds"]):
             if a in members and b in members:
-                _add(a, b, "aromatic_ring", residue, evidence)
+                _add(a, b, "non_rotatable", residue, f"{evidence}: aromatic ring bond")
         for a, b in sorted(info["double_bonds"]):
             if a in members and b in members:
-                _add(a, b, "double_bond", residue, evidence)
+                _add(a, b, "non_rotatable", residue, f"{evidence}: double bond")
 
     central.sort(key=lambda e: (UNSCALED_BOND_CLASSES.index(e["class"]), e["bond"]))
 
@@ -1358,10 +1378,22 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         "unscaled_central_bonds": sorted(tuple(e["bond"]) for e in central),
         "central_bonds": central,
         "proline_like_scaled_bonds": [c["bond"] for c in proline],
+        # THE SPLIT. `unclassified` is only what a user can still fix: a residue whose bond orders
+        # were never supplied. That is a MISSING INPUT, not an unnameable torsion, and it refuses
+        # -- because with no evidence NOTHING is protected, so defaulting it to scaled would put a
+        # whole benzene ring on the lambda path because somebody forgot a file. Measured on
+        # paracetamol: 7 protected with the SDF (1 amide + 6 aromatic), 0 without.
+        #
+        # `unnamed_scaled_bonds` is the other kind: the evidence was complete and no rule named
+        # the bond -- a carbon with two carbonyl oxygens, one carrying a hydroxyl or ester oxygen,
+        # or an SDF that simply says this C-N is not an ordinary amide. Nothing is absent, so
+        # nothing the user could supply would change it. Those scale, and are RECORDED so that
+        # "seen and not named" never reads as "never looked at".
         # Recognised as a urea and left SCALABLE. Recorded because "we saw it and chose not to
         # protect it" and "we never noticed it" must not look the same in a record.
         "urea_scaled_bonds": [c["bond"] for c in urea],
-        "unclassified": unknown,
+        "unclassified": [u for u in unknown if u.get("evidence_missing")],
+        "unnamed_scaled_bonds": [u for u in unknown if not u.get("evidence_missing")],
         # Amide candidates the aromatic or double-bond rule placed instead. Recorded rather than
         # dropped silently: the amide test could not read these, and which rule did is the whole
         # reason the build was allowed to proceed.

@@ -450,3 +450,63 @@ def test_the_any_element_widening_would_still_scale_folates_aromatic_ring_bond()
     assert pyridone.GetSubstructMatches(
         rdkit.MolFromSmarts(REJECTED_WIDENINGS["any-element carbon"])), (
         "if this stops matching, the any-element hazard is gone and this test is obsolete")
+
+
+# --- 8. the split: a missing INPUT refuses; an unnameable bond scales ------------------------------
+
+def _ligand_topology(smiles, name="LIG"):
+    """A one-residue topology and its SDF, for cases that need real bond orders."""
+    pytest.importorskip("openff.toolkit")
+    import tempfile
+    from pathlib import Path as _Path
+
+    from openff.toolkit import Molecule
+
+    mol = Molecule.from_smiles(smiles, allow_undefined_stereo=True)
+    mol.generate_conformers(n_conformers=1)
+    mol.name = name
+    sdf = _Path(tempfile.mkdtemp()) / f"{name}.sdf"
+    mol.to_file(str(sdf), file_format="sdf")
+    topology = mol.to_topology().to_openmm()
+    for residue in topology.residues():
+        residue.name = name
+    return topology, list(range(topology.getNumAtoms())), sdf
+
+
+def test_a_residue_with_no_bond_orders_still_refuses_because_nothing_is_protected():
+    """The case that keeps the refusal alive, and the reason it is not "unclassifiable".
+
+    With no SDF the classifier does not see an unnameable bond -- it sees NOTHING. Paracetamol
+    goes from 7 protected bonds (1 amide + 6 aromatic ring) to 0. Defaulting that to scaled would
+    put a whole benzene ring on the lambda path because somebody forgot a file, with no refusal
+    and nothing red in the picture to notice. It is a missing INPUT, and the user can fix it.
+    """
+    from md_tools.openmm.system import UnclassifiedTorsionError, unscaled_torsions
+
+    topology, solute, sdf = _ligand_topology("CC(=O)Nc1ccc(O)cc1", name="TYL")
+
+    with_orders = unscaled_torsions(topology, solute, ligand_sdf=sdf)
+    assert len(with_orders["unscaled_central_bonds"]) == 7
+    assert {e["class"] for e in with_orders["central_bonds"]} == {"amide_omega", "non_rotatable"}
+
+    with pytest.raises(UnclassifiedTorsionError, match="SDF"):
+        unscaled_torsions(topology, solute)
+
+
+def test_a_bond_the_evidence_could_not_name_is_scaled_and_recorded():
+    """A carbamate: the carbonyl carbon also carries an ester oxygen, so no rule names the C-N.
+
+    Nothing is ABSENT here -- the SDF was read and answered -- so there is nothing the user could
+    supply to change it, and refusing would be refusing forever. It scales, and it is recorded, so
+    that "seen and not named" cannot be mistaken for "never looked at".
+    """
+    from md_tools.openmm.system import unscaled_torsions
+
+    topology, solute, sdf = _ligand_topology("COC(=O)NC", name="CBM")
+    result = unscaled_torsions(topology, solute, ligand_sdf=sdf)
+
+    assert result["unclassified"] == [], "nothing here is fixable by supplying a file"
+    assert len(result["unnamed_scaled_bonds"]) == 1, (
+        f"the C-N must be recorded as seen-but-unnamed, got {result['unnamed_scaled_bonds']}")
+    assert result["unnamed_scaled_bonds"][0]["evidence_missing"] is False
+    assert result["unscaled_central_bonds"] == [], "and it is scaled, not protected"

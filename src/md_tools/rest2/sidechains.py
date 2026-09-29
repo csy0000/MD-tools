@@ -77,7 +77,7 @@ _INDOLE_RING = (("CG", "CD1"), ("CD1", "NE1"), ("NE1", "CE2"), ("CE2", "CD2"), (
 
 
 def _ring(pairs, label):
-    return [_fixed(pair, label, "aromatic_ring") for pair in pairs]
+    return [_fixed(pair, label, "non_rotatable") for pair in pairs]
 
 
 #: name -> {bonds, not_central, note}. Every central bond of the sidechain, and nothing else.
@@ -86,9 +86,9 @@ SIDECHAIN_BONDS: dict[str, dict[str, Any]] = {
             "note": "one methyl; no chi"},
     "ARG": {"bonds": (_chi(1, ("N", "CA", "CB", "CG")), _chi(2, ("CA", "CB", "CG", "CD")),
                       _chi(3, ("CB", "CG", "CD", "NE")), _chi(4, ("CG", "CD", "NE", "CZ")),
-                      _fixed(("NE", "CZ"), "guanidinium", "double_bond"),
-                      _fixed(("CZ", "NH1"), "guanidinium", "double_bond"),
-                      _fixed(("CZ", "NH2"), "guanidinium", "double_bond")),
+                      _fixed(("NE", "CZ"), "guanidinium", "non_rotatable"),
+                      _fixed(("CZ", "NH1"), "guanidinium", "non_rotatable"),
+                      _fixed(("CZ", "NH2"), "guanidinium", "non_rotatable")),
             "note": "the guanidinium's three partial double bonds are unscaled (user, 2026-09-16)"},
     "ASN": {"bonds": (_chi(1, ("N", "CA", "CB", "CG")), _chi(2, ("CA", "CB", "CG", "OD1")),
                       _fixed(("CG", "ND2"), "amide C-N", "amide_omega")),

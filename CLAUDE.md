@@ -163,7 +163,30 @@ Do not change these without a failing test that demonstrates a defect.
   scale. A UREA sits between the two (~11 kcal/mol, ~10 µs, both C–N bonds partially double because
   both nitrogens donate into one carbonyl) and is SCALED, with the bonds recorded as
   recognised-and-scaled so that seeing a case and not protecting it never looks like missing it.
-* **Unscaled torsions are CLASSIFIED, and a torsion nobody can classify is refused.** Proteins by
+* **A MISSING INPUT is refused; an unnameable BOND is scaled, recorded and overridable.** These are
+  two different things and only the first can be fixed by the user. A non-standard residue whose
+  bond orders were never supplied is a missing input: with no SDF the classifier sees NOTHING, so
+  paracetamol goes from 7 protected bonds to 0, and defaulting that to scaled would put a whole
+  benzene ring on the λ path because somebody forgot a file — with no refusal and nothing red in
+  the picture to notice. That refuses, naming the file to supply. A bond the evidence COULD not
+  name — a carbon with two carbonyl oxygens, one also carrying a hydroxyl or ester oxygen, or an
+  SDF that simply says this C–N is not an ordinary amide — is not fixable by supplying anything, so
+  refusing it would refuse forever: it is scaled, recorded under `unnamed_scaled_bonds`, and can be
+  protected by `unscaled_list`. **Two user-facing categories**, `amide_omega` and `non_rotatable`,
+  with the rule that fired kept per bond as `evidence`; `PROTEIN_UNSCALED_BONDS` and
+  `rest2.sidechains` key their tables by the RULE and the classifier maps them onto the category,
+  so those two tables must move together or the agreement test that exists to catch drift will say
+  so. **`unscaled_list` and `scaled_list`** in the scaler config are the person's answer on top of
+  the rules, as `[i, j]` topology index pairs — the indices the refusal quotes and the picture
+  annotates. They are applied BEFORE the selection is built, so a declared bond is part of the
+  identity like any other and two runs differing only in a list are two Hamiltonians with two
+  digests. A listed bond that is the central bond of no proper torsion is refused, which is what
+  makes an index safe to write down: after a rebuild the same number is a different atom. A bond in
+  both lists is refused rather than resolved by precedence, and a four-atom entry is refused —
+  a torsion is named by its central bond, because every torsion across that bond moves together.
+* **Unscaled torsions are CLASSIFIED, and the EVIDENCE for the classification is required.**
+  (Until 0.6.2 this read "a torsion nobody can classify is refused"; the refusal now turns on
+  missing evidence rather than on an unnameable bond — see the entry above.) Proteins by
   the residue table (`PROTEIN_UNSCALED_BONDS`), small molecules by bond orders from an SDF:
   `sdf_filelist` in the scaler config, else `<RESNAME>.sdf` beside the System, else `built.sdf`
   when it is the only non-standard residue; with several and no mapping it refuses rather than

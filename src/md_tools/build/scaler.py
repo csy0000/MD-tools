@@ -134,6 +134,17 @@ SCALER_SCHEMA = Schema(
         Field("max_proline_ring_size", int, default=7, minimum=3, maximum=12,
               doc="From bond orders, an amide nitrogen in a ring of at most this many atoms is "
                   "proline-like. The bound is what keeps a macrocycle's omegas ordinary."),
+        Field("unscaled_list", list, default=None, nullable=True,
+              doc="Central bonds YOU declare unscaled, as [i, j] TOPOLOGY ATOM INDEX pairs -- the "
+                  "indices the refusal message quotes and <RESNAME>-unscaled.png annotates on "
+                  "every atom. Applied ON TOP of the rules, so it adds protection the classifier "
+                  "did not give. Every listed bond must be the central bond of a proper torsion "
+                  "this System actually has, or it is refused by name: a bond that protects "
+                  "nothing would say a rotation keeps its barrier when no such rotation exists."),
+        Field("scaled_list", list, default=None, nullable=True,
+              doc="Central bonds YOU declare scalable, same [i, j] form, applied on top of the "
+                  "rules to REMOVE protection the classifier gave. Same existence check. A bond "
+                  "in both lists is refused rather than resolved by precedence."),
         Field("backbone_scaling_list", str, default=None, nullable=True,
               doc="Selective REST2 (explicit solvent): residues whose BACKBONE is hot, as a "
                   "quoted AMBER residue mask of one-based topology residue indices, e.g. "
@@ -392,6 +403,80 @@ def depict_unscaled_torsions(topology, solute, residue_sdfs: Mapping[str, Path],
     return drawn
 
 
+def _proper_central_bonds(system) -> set[tuple[int, int]]:
+    """Every bond a PROPER torsion of this System actually runs across."""
+    from openmm import PeriodicTorsionForce
+
+    from ..rest2.hamiltonian import system_bond_graph, torsion_kind
+
+    graph = system_bond_graph(system)
+    out: set[tuple[int, int]] = set()
+    for force in system.getForces():
+        if isinstance(force, PeriodicTorsionForce):
+            for term in range(force.getNumTorsions()):
+                i, j, k, l = (int(x) for x in force.getTorsionParameters(term)[:4])
+                if torsion_kind((i, j, k, l), graph) == "proper":
+                    out.add(tuple(sorted((j, k))))
+    return out
+
+
+def _bond_pairs(value, where: str) -> list[tuple[int, int]]:
+    """`[[i, j], ...]` as sorted index pairs, or a ConfigError naming the offender."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ConfigError(f"{where} is a list of [i, j] atom-index pairs; got "
+                          f"{type(value).__name__}")
+    out = []
+    for entry in value:
+        if (not isinstance(entry, (list, tuple)) or len(entry) != 2
+                or not all(isinstance(x, int) and not isinstance(x, bool) for x in entry)):
+            raise ConfigError(
+                f"{where}: every entry is a PAIR of topology atom indices, [i, j]; got {entry!r}. "
+                f"A torsion is named by its CENTRAL BOND, not by four atoms: every torsion across "
+                f"that bond moves together, and naming three of four would leave the bond "
+                f"partly scaled, which is not a Hamiltonian anyone chose.")
+        out.append(tuple(sorted(int(x) for x in entry)))
+    return out
+
+
+def _apply_bond_lists(unscaled: dict, config, system, *, where: str) -> dict:
+    """Apply `unscaled_list` and `scaled_list` on top of the rules. Returns what was applied.
+
+    The user's declaration wins over the classifier, which is the point: the rules decide what
+    they can, the picture shows it, and this is how a person answers what is left. Both lists are
+    checked against the System the states are being built from, so an index left over from an
+    earlier build -- different PDBFixer side chains, a reordered ligand, an added ion -- is refused
+    rather than silently applied to whichever atom now holds that number.
+    """
+    add = _bond_pairs(config["unscaled_list"], f"{where}: unscaled_list")
+    drop = _bond_pairs(config["scaled_list"], f"{where}: scaled_list")
+    both = sorted(set(add) & set(drop))
+    if both:
+        raise ConfigError(
+            f"{where}: bond(s) {[list(b) for b in both]} are in BOTH unscaled_list and "
+            f"scaled_list. A bond is scaled or it is not; resolving that by precedence would make "
+            f"the Hamiltonian depend on which key was read first.")
+    if add or drop:
+        real = _proper_central_bonds(system)
+        missing = sorted(b for b in set(add) | set(drop) if b not in real)
+        if missing:
+            raise ConfigError(
+                f"{where}: bond(s) {[list(b) for b in missing]} are the central bond of no proper "
+                f"torsion in this System, so declaring them would protect or free nothing. Read "
+                f"the indices off <RESNAME>-unscaled.png, which annotates every atom with the "
+                f"index this configuration uses, and rebuild the picture if the System changed.")
+    current = {tuple(sorted(int(a) for a in bond))
+               for bond in unscaled["unscaled_central_bonds"]}
+    final = (current | set(add)) - set(drop)
+    unscaled["unscaled_central_bonds"] = sorted(final)
+    # What the PERSON decided, kept apart from what the rules decided. A record that merged them
+    # could not answer "was this bond protected because of the chemistry or because I said so".
+    return {"unscaled_list": [list(b) for b in add], "scaled_list": [list(b) for b in drop],
+            "newly_unscaled": [list(b) for b in sorted(set(add) - current)],
+            "newly_scaled": [list(b) for b in sorted(set(drop) & current)]}
+
+
 def _refusal_pictures(topology, solute, system_dir: Path, config_path: Path, config) -> str:
     """Draw the atom-index depiction for a REFUSED classification, and say where it went.
 
@@ -588,7 +673,8 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
     from openmm import XmlSerializer
 
     from ..md.stage import solute_atom_indices
-    from ..openmm.system import UnclassifiedTorsionError, unscaled_torsions
+    from ..openmm.system import (UNSCALED_BOND_CLASSES, UnclassifiedTorsionError,
+                                 unscaled_torsions)
     from ..remd.protocol import build_rung_systems
     from ..rest2 import REST2_IMPLEMENTATION, scaling_for_tau, torsion_exclusion_report
     from ..rest2.states import (RECORD_FORMAT, RECORD_NAME, ScaledStateError,
@@ -682,6 +768,11 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
                                         "torsion is scaled, impropers and ordinary amide omegas "
                                         "included",
                     "amide_detail": {"unscaled": [], "proline_like_scaled": []}}
+    # BEFORE the selection is built, so a declared bond is part of the identity like any other:
+    # two runs that differ only in `unscaled_list` are two Hamiltonians and must not share a digest.
+    declared = _apply_bond_lists(unscaled, config, loaded.system,
+                                 where=f"{method} states for {topology_path.name}")
+
     if explicit:
         try:
             selection = explicit_selection(topology, loaded.system, region, unscaled)
@@ -717,7 +808,7 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
     report = torsion_exclusion_report(loaded.system, hot, excluded, impropers,
                                       arguments["torsion_central_bonds"])
     counts = {kind: sum(1 for e in unscaled["central_bonds"] if e["class"] == kind)
-              for kind in ("amide_omega", "aromatic_ring", "double_bond")}
+              for kind in UNSCALED_BOND_CLASSES}
 
     record: dict[str, Any] = {
         "format": RECORD_FORMAT,
@@ -745,10 +836,19 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
                              for key, value in arguments.items()},
         "unscaled_torsions": {
             "enabled": enabled,
-            "classes": ["amide_omega", "aromatic_ring", "double_bond", "improper"] if enabled
+            "classes": [*UNSCALED_BOND_CLASSES, "improper"] if enabled
                        else [],
             "method": unscaled["detection_method"],
             "central_bonds": unscaled["central_bonds"],
+            # What a PERSON declared, kept apart from what the rules decided: a record that merged
+            # them could not answer "was this protected by the chemistry, or because I said so".
+            "declared": declared,
+            # Seen by the rules and deliberately left scalable, which is a third thing distinct
+            # from protected and from never-looked-at.
+            "urea_scaled_bonds": [list(b) for b in unscaled.get("urea_scaled_bonds", ())],
+            "unnamed_scaled_bonds": [
+                {"bond": list(u["bond"]) if u.get("bond") else None, "reason": u.get("ambiguous")}
+                for u in unscaled.get("unnamed_scaled_bonds", ())],
             "counts": dict(counts, improper_terms=report["n_unscaled_impropers"]),
             # What the scaler actually protected: the classifier's bonds (legacy), or those of
             # the region's candidate bonds it protects plus any exclusion file's (explicit).
@@ -845,9 +945,9 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
     section = record["unscaled_torsions"]
     if enabled:
         log.field("unscaled torsions",
-                  f"amide omega {counts['amide_omega']} bond(s), aromatic ring "
-                  f"{counts['aromatic_ring']} bond(s), double bond {counts['double_bond']} "
-                  f"bond(s), impropers {report['n_unscaled_impropers']} term(s)")
+                  ", ".join(f"{kind.replace('_', ' ')} {counts[kind]} bond(s)"
+                            for kind in UNSCALED_BOND_CLASSES)
+                  + f", impropers {report['n_unscaled_impropers']} term(s)")
         log.field("", f"{section['n_unscaled_solute_torsion_terms']} torsion term(s) unscaled, "
                       f"{section['n_scaled_solute_torsion_terms']} scaled")
         log.field("proline-like amides", f"{len(section['proline_like_scaled_bonds'])} bond(s), "

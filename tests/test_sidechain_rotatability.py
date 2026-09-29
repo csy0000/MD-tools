@@ -139,10 +139,11 @@ def test_a_disulfide_makes_chi2_a_central_bond_and_leaves_it_scalable(templates)
 
 @pytest.mark.parametrize("name, bond, kind", [
     ("ASN", ("CG", "ND2"), "amide_omega"), ("GLN", ("CD", "NE2"), "amide_omega"),
-    ("ARG", ("CZ", "NE"), "double_bond"), ("ARG", ("CZ", "NH1"), "double_bond"),
-    ("PHE", ("CD1", "CG"), "aromatic_ring"), ("TYR", ("CE1", "CZ"), "aromatic_ring"),
-    ("TRP", ("CD1", "NE1"), "aromatic_ring"), ("HID", ("CG", "ND1"), "aromatic_ring"),
-    ("HIE", ("CE1", "NE2"), "aromatic_ring"), ("HIP", ("CD2", "NE2"), "aromatic_ring"),
+    # One CATEGORY for both rules now; the finer reason lives in each entry's own label.
+    ("ARG", ("CZ", "NE"), "non_rotatable"), ("ARG", ("CZ", "NH1"), "non_rotatable"),
+    ("PHE", ("CD1", "CG"), "non_rotatable"), ("TYR", ("CE1", "CZ"), "non_rotatable"),
+    ("TRP", ("CD1", "NE1"), "non_rotatable"), ("HID", ("CG", "ND1"), "non_rotatable"),
+    ("HIE", ("CE1", "NE2"), "non_rotatable"), ("HIP", ("CD2", "NE2"), "non_rotatable"),
 ])
 def test_the_bonds_the_user_named_are_fixed_with_the_class_they_have(name, bond, kind):
     assert fixed_bonds(name)[tuple(sorted(bond))] == kind
@@ -170,7 +171,7 @@ def test_describe_residue_marks_each_bond(capsys):
     text = describe_residue("TYR")
     assert SIDECHAIN_TABLE_VERSION in text
     ring = [line for line in text.splitlines() if "benzene ring" in line]
-    assert len(ring) == 6 and all("UNSCALED" in line and "[aromatic_ring]" in line
+    assert len(ring) == 6 and all("UNSCALED" in line and "[non_rotatable]" in line
                                   for line in ring)
     assert [line for line in text.splitlines() if "chi1" in line][0].strip().startswith("scaled")
     assert [line for line in text.splitlines() if "hydroxyl rotation" in line][0].strip(
@@ -246,12 +247,12 @@ def test_an_aromatic_ring_c_n_bond_is_not_an_undecided_amide(tmp_path):
         "an amide candidate another rule already classified must not block the build")
 
     protected = {tuple(e["bond"]): e["class"] for e in report["central_bonds"]}
-    assert protected.get((26, 28)) == "aromatic_ring", protected
+    assert protected.get((26, 28)) == "non_rotatable", protected
 
     # The decision is RECORDED, with the amide test's own reason, rather than dropped silently.
     resolved = report["amide_candidates_resolved_by_another_rule"]
     assert [e["bond"] for e in resolved] == [[26, 28]]
-    assert resolved[0]["resolved_by"] == "aromatic_ring"
+    assert resolved[0]["resolved_by"] == "non_rotatable"
     assert "no ordinary-amide match" in resolved[0]["amide_test"]
 
     # And the REAL amide is still an amide, not quietly swept into the same bucket.

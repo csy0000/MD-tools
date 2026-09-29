@@ -147,9 +147,8 @@ class ScalingSelection:
         labels = []
         reasons = {"amide_omega": "ordinary amide omega: left unscaled so a hot rung cannot "
                                   "isomerise it",
-                   "aromatic_ring": "aromatic ring bond: left unscaled so a hot rung cannot "
-                                    "pucker the ring",
-                   "double_bond": "double bond: left unscaled so a hot rung cannot twist it"}
+                   "non_rotatable": "no other state to reach: left unscaled because scaling it "
+                                    "would buy distortion rather than sampling"}
         for entry in classified.get("central_bonds") or []:
             labels.append({
                 "bond": [int(i) for i in entry["bond"]],

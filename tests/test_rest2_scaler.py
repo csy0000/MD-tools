@@ -604,3 +604,90 @@ def test_the_refusal_message_carries_the_picture_path_end_to_end(tmp_path):
     assert "XAA" in str(refusal.value)
     assert "no SDF" in str(refusal.value).lower() or "no picture" in str(refusal.value).lower()
     assert not (build / "REST2").exists(), "a refusal still creates no output directory"
+
+
+# --- unscaled_list / scaled_list: the person's answer, on top of the rules -------------------------
+
+def test_unscaled_list_protects_a_bond_the_rules_left_scalable(tmp_path):
+    """The rules decide what they can, the picture shows it, and this is how a person answers."""
+    build = _dataset(tmp_path / "ALA")
+    base = _scale(build, _config(build, "method: cMD\nschedule: {n_states: 1, tau_min: 0.3, "
+                                        "tau_max: 0.3}\n"))
+    protected = {tuple(b) for b in base["unscaled_torsions"]["unscaled_central_bonds"]}
+
+    extra = next(b for b in _proper_bonds(build) if b not in protected)
+    record = _scale(build, _config(build, f"method: cMD\nschedule: {{n_states: 1, tau_min: 0.3, "
+                                          f"tau_max: 0.3}}\nunscaled_list: [[{extra[0]}, "
+                                          f"{extra[1]}]]\n", name="declared.config"),
+                    overwrite=True)
+    now = {tuple(b) for b in record["unscaled_torsions"]["unscaled_central_bonds"]}
+    assert extra in now, "the declared bond must be protected"
+    assert now == protected | {extra}, "and nothing else may move"
+    declared = record["unscaled_torsions"]["declared"]
+    assert declared["newly_unscaled"] == [list(extra)]
+    assert declared["newly_scaled"] == []
+
+
+def test_scaled_list_frees_a_bond_the_rules_protected(tmp_path):
+    """The other direction: a carbamate-shaped case where the chemistry says protect and the
+    person, having looked, says otherwise."""
+    build = _dataset(tmp_path / "ALA")
+    base = _scale(build, _config(build, "method: cMD\nschedule: {n_states: 1, tau_min: 0.3, "
+                                        "tau_max: 0.3}\n"))
+    protected = sorted(tuple(b) for b in base["unscaled_torsions"]["unscaled_central_bonds"])
+    assert protected, "this fixture must protect something for the test to mean anything"
+    freed = protected[0]
+
+    record = _scale(build, _config(build, f"method: cMD\nschedule: {{n_states: 1, tau_min: 0.3, "
+                                          f"tau_max: 0.3}}\nscaled_list: [[{freed[0]}, "
+                                          f"{freed[1]}]]\n", name="freed.config"), overwrite=True)
+    now = {tuple(b) for b in record["unscaled_torsions"]["unscaled_central_bonds"]}
+    assert freed not in now
+    assert record["unscaled_torsions"]["declared"]["newly_scaled"] == [list(freed)]
+
+
+def test_an_index_that_names_no_torsion_is_refused_rather_than_applied(tmp_path):
+    """THE GUARD that makes indices safe to write down.
+
+    An index is only meaningful against the System it was read off. After a rebuild -- different
+    PDBFixer side chains, a reordered ligand, an added ion -- the same number is a different atom.
+    Refusing a bond no proper torsion runs across catches that, instead of silently protecting
+    whichever atoms now hold those numbers.
+    """
+    from md_tools.build.strict import ConfigError
+
+    build = _dataset(tmp_path / "ALA")
+    with pytest.raises(ConfigError, match="central bond of no proper torsion"):
+        _scale(build, _config(build, "method: cMD\nschedule: {n_states: 1, tau_min: 0.3, "
+                                     "tau_max: 0.3}\nunscaled_list: [[0, 99999]]\n"))
+
+
+def test_a_bond_in_both_lists_is_refused_rather_than_resolved_by_precedence(tmp_path):
+    from md_tools.build.strict import ConfigError
+
+    build = _dataset(tmp_path / "ALA")
+    with pytest.raises(ConfigError, match="BOTH unscaled_list and scaled_list"):
+        _scale(build, _config(build, "method: cMD\nschedule: {n_states: 1, tau_min: 0.3, "
+                                     "tau_max: 0.3}\nunscaled_list: [[4, 6]]\n"
+                                     "scaled_list: [[4, 6]]\n"))
+
+
+def test_a_torsion_named_by_four_atoms_is_refused_with_the_reason(tmp_path):
+    """A torsion is named by its CENTRAL BOND. Listing four atoms would let someone name three of
+    the four torsions across one bond and leave it partly scaled."""
+    from md_tools.build.strict import ConfigError
+
+    build = _dataset(tmp_path / "ALA")
+    with pytest.raises(ConfigError, match="PAIR of topology atom indices"):
+        _scale(build, _config(build, "method: cMD\nschedule: {n_states: 1, tau_min: 0.3, "
+                                     "tau_max: 0.3}\nunscaled_list: [[1, 2, 3, 4]]\n"))
+
+
+def _proper_bonds(build):
+    """Every central bond of a proper torsion in the built System, sorted."""
+    from openmm import XmlSerializer
+
+    from md_tools.build.scaler import _proper_central_bonds          # noqa: PLC2701
+
+    system = XmlSerializer.deserialize((build / "built.xml").read_text(encoding="utf-8"))
+    return sorted(_proper_central_bonds(system))
