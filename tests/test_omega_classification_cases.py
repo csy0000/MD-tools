@@ -299,3 +299,98 @@ def test_a_urea_is_not_taken_for_a_peptide_bond():
     assert _amide_unscaled(result) == []
     assert _amide_unclassified(result), "a urea must be reported, not silently scaled"
     assert "urea-like" in _amide_unclassified(result)[0]["ambiguous"]
+
+
+# --- 7. the amidate: a deprotonated amide nitrogen has TWO connections ---------------------------
+
+#: The three widenings 0.6.2 measured and rejected, kept here so a future attempt has to confront
+#: them rather than rediscover the consequence in a production run. See the warning box in
+#: docs/release-notes/v0.6.2.md.
+REJECTED_WIDENINGS = {
+    # Matches folate's aromatic pterin lactam, whose nitrogen sits in a 6-ring inside the
+    # proline-like bound -- so a protected aromatic ring bond would start being SCALED.
+    "any-element carbon": "[#6X3](=[OX1])[#7X3]",
+    # `-!@` excludes ring bonds, and in a cyclic peptide EVERY backbone amide is a ring bond.
+    "non-ring bond only": "[CD3](=[OX1])-!@[#7]",
+}
+
+
+def test_the_amide_pattern_widens_the_nitrogen_and_never_the_carbon():
+    """`CX3` is the only thing keeping the aromatic lactam out, so it must stay aliphatic.
+
+    The gap being closed is real: an acylsulfonamide (pKa ~4-5, so deprotonated at pH 7.4) lost
+    the match its own neutral form had, and the scaler refused to build it at all.
+    """
+    rdkit = pytest.importorskip("rdkit.Chem")
+    from md_tools.openmm.peptide_map import ORDINARY_AMIDE_SMARTS
+
+    assert "CX3" in ORDINARY_AMIDE_SMARTS, "widening the CARBON is the folate hazard"
+    assert "#6X3" not in ORDINARY_AMIDE_SMARTS
+    pattern = rdkit.MolFromSmarts(ORDINARY_AMIDE_SMARTS)
+
+    neutral = rdkit.AddHs(rdkit.MolFromSmiles("CC(=O)NS(=O)(=O)c1ccccc1"))
+    anion = rdkit.AddHs(rdkit.MolFromSmiles("CC(=O)[N-]S(=O)(=O)c1ccccc1"))
+    assert len(neutral.GetSubstructMatches(pattern)) == 1
+    assert len(anion.GetSubstructMatches(pattern)) == 1, (
+        "the anion must match exactly as its own neutral form does")
+    # The shipped 0.6.1/0.6.2 pattern is what it fixes; if this stops failing the gap is gone
+    # by another route and this test is obsolete.
+    assert not anion.GetSubstructMatches(rdkit.MolFromSmarts("[CX3](=[OX1])[NX3]"))
+
+
+def test_the_widened_pattern_still_keeps_every_cyclic_peptide_backbone_amide():
+    """The P2 hazard: `-!@` lost all four of cyclo(Gly)4's backbone amides. 4 must stay 4."""
+    rdkit = pytest.importorskip("rdkit.Chem")
+    from md_tools.openmm.peptide_map import ORDINARY_AMIDE_SMARTS
+
+    macrocycle = rdkit.MolFromSmiles("O=C1CNC(=O)CNC(=O)CNC(=O)CN1")
+    found = len(macrocycle.GetSubstructMatches(rdkit.MolFromSmarts(ORDINARY_AMIDE_SMARTS)))
+    assert found == 4, f"cyclo(Gly)4 has four backbone amides; found {found}"
+    assert len(macrocycle.GetSubstructMatches(
+        rdkit.MolFromSmarts(REJECTED_WIDENINGS["non-ring bond only"]))) == 0, (
+        "if this stops being 0 the rejected widening no longer has its defect and this is stale")
+
+
+def test_a_deprotonated_small_ring_lactam_is_proline_like_exactly_as_its_neutral_form_is():
+    """Widening the nitrogen adds matches, and an added match can route to the PROLINE-LIKE branch.
+
+    That is the shape of the rejected any-element widening's hazard, so it has to be stated. It is
+    not the same defect: the neutral lactam is ALREADY proline-like today, so the anion is being
+    made to agree with its own neutral form, and nothing that is protected today becomes scaled.
+    The >7 bound still holds a macrolactam as an ordinary amide.
+    """
+    rdkit = pytest.importorskip("rdkit.Chem")
+    from md_tools.openmm.peptide_map import ORDINARY_AMIDE_SMARTS
+
+    pattern = rdkit.MolFromSmarts(ORDINARY_AMIDE_SMARTS)
+
+    def smallest_n_ring(mol):
+        nitrogen = next(a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == "N")
+        return min(len(r) for r in mol.GetRingInfo().AtomRings() if nitrogen in r)
+
+    neutral = rdkit.MolFromSmiles("O=C1CCCC[NH]1")
+    anion = rdkit.MolFromSmiles("O=C1CCCC[N-]1")
+    assert neutral.GetSubstructMatches(pattern) and smallest_n_ring(neutral) <= 7, (
+        "the NEUTRAL delta-lactam is already proline-like; that is why the anion agreeing is "
+        "consistency rather than a new hazard")
+    assert anion.GetSubstructMatches(pattern) and smallest_n_ring(anion) <= 7
+
+    macrolactam = rdkit.MolFromSmiles("O=C1CCCCCCCCCCCCCC[N-]1")
+    assert macrolactam.GetSubstructMatches(pattern)
+    assert smallest_n_ring(macrolactam) > 7, "a macrolactam anion must stay an ORDINARY amide"
+
+
+def test_the_any_element_widening_would_still_scale_folates_aromatic_ring_bond():
+    """The P1 hazard, pinned against the pattern actually shipped rather than a literal."""
+    rdkit = pytest.importorskip("rdkit.Chem")
+    from md_tools.openmm.peptide_map import ORDINARY_AMIDE_SMARTS
+
+    # 2-pyridone: an AROMATIC carbonyl carbon whose nitrogen is in a 6-ring, the folate lactam's
+    # shape without folate's size. Built from SMILES so the case needs no conformer.
+    pyridone = rdkit.MolFromSmiles("O=c1cccc[nH]1")
+    assert not pyridone.GetSubstructMatches(rdkit.MolFromSmarts(ORDINARY_AMIDE_SMARTS)), (
+        "the shipped pattern must not reach an aromatic lactam: its nitrogen is in a 6-ring, "
+        "inside the proline-like bound, so a match would SCALE an aromatic ring bond")
+    assert pyridone.GetSubstructMatches(
+        rdkit.MolFromSmarts(REJECTED_WIDENINGS["any-element carbon"])), (
+        "if this stops matching, the any-element hazard is gone and this test is obsolete")

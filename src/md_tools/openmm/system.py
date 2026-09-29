@@ -18,6 +18,8 @@ import numpy as np
 
 from openmm import NonbondedForce, XmlSerializer
 
+from .peptide_map import ORDINARY_AMIDE_SMARTS
+
 
 WATER_RESIDUE_NAMES = frozenset({"HOH", "WAT", "SOL", "TIP3", "TIP", "H2O"})
 ION_RESIDUE_NAMES = frozenset({"NA", "CL", "K", "MG", "CA", "ZN", "BR", "I", "LI", "RB", "CS"})
@@ -1066,7 +1068,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
     2. **A known protein residue is read from the residue**, against ``PROTEIN_RESIDUES``.  An
        X-PRO peptide bond is therefore *not* excluded.
     3. **Anything else is read from the SDF's bond orders.**  Ordinary amides are matched with
-       ``[CX3](=[OX1])[NX3]``; proline-like nitrogens with a ring of at most
+       :data:`~md_tools.openmm.peptide_map.ORDINARY_AMIDE_SMARTS`; proline-like nitrogens with a ring of at most
        *max_proline_ring_size* atoms.  **The ring-size bound is what makes this correct for
        macrocycles**: every backbone nitrogen of a cyclic peptide is "in a ring", but a 15-30
        membered macrocycle does not constrain the amide the way a pyrrolidine does, so an unbounded
@@ -1143,8 +1145,12 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         else:
             source = (f"SDF {Path(ligand_sdf).name}" if ligand_sdf is not None
                       else "no SDF supplied (refused)")
+        # The pattern is INTERPOLATED, not spelled again. `detector_version` is deliberately not
+        # bumped for the NX2 widening, so this string is the only thing in the record that
+        # distinguishes a classification made before it from one made after: a hand-copied literal
+        # that drifted would make every record claim a pattern that never ran.
         method += (f"; residues {sorted(non_standard_names)} from RDKit SMARTS "
-                   f"[CX3](=[OX1])[NX3] over {source}, proline-like = amide N in a ring of "
+                   f"{ORDINARY_AMIDE_SMARTS} over {source}, proline-like = amide N in a ring of "
                    f"<= {max_proline_ring_size} atoms")
 
     # Per residue INSTANCE, when the evidence is per name: mapped lazily, once each.
@@ -1305,7 +1311,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
     #
     # `_amide_candidates` finds every C-N bond whose carbon also bears an oxygen, structurally,
     # from the topology. A C-N bond INSIDE an aromatic ring meets that description, and can never
-    # match `[CX3](=[OX1])[NX3]`: SMARTS `C` is an ALIPHATIC carbon and RDKit aromatises the ring,
+    # match `ORDINARY_AMIDE_SMARTS`: its `C` is an ALIPHATIC carbon and RDKit aromatises the ring,
     # so the pattern fails on the carbon before the nitrogen is even considered. Folate's pterin
     # 4-oxo lactam is the standard example, in either tautomer.
     #
@@ -1502,7 +1508,7 @@ def _sdf_bond_evidence(ligand_sdf, topology, atoms_to_map: set[int], max_ring: i
             f"{what} ({len(rd_bonds ^ top_bonds)} differing bonds).  Refusing to guess a mapping."
         )
 
-    amide = Chem.MolFromSmarts("[CX3](=[OX1])[NX3]")
+    amide = Chem.MolFromSmarts(ORDINARY_AMIDE_SMARTS)
     aromatic_bonds, double_bonds = set(), set()
     for bond in mol.GetBonds():
         pair = tuple(sorted((index_of[bond.GetBeginAtomIdx()], index_of[bond.GetEndAtomIdx()])))

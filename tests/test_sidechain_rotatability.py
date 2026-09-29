@@ -331,8 +331,16 @@ def test_the_refusal_names_the_ATOMS_not_just_their_elements(tmp_path):
     from md_tools.ligands.package import default_atom_names
     from md_tools.openmm.system import UnclassifiedTorsionError, unscaled_torsions
 
-    # A deprotonated benzoyl amide: the ordinary amide fails the test, so the message fires.
-    smi = "c1cc(ccc1C(=O)[N-][C@@H](CCC(=O)O)C(=O)O)NCc2cnc3c(n2)C(=O)N=C(N3)N"
+    # The trigger is a UREA -- the carbonyl carbon carries two nitrogens, so `_amide_candidates`
+    # refuses it structurally, from the topology, and no bond-order evidence can settle which C-N
+    # is the omega.
+    #
+    # It used to be a deprotonated benzoyl amide, chosen because the amide SMARTS could not match
+    # a two-connected nitrogen. That was the amidate gap, and widening the pattern to
+    # `[CX3](=[OX1])[NX2,NX3]` closed it -- so that molecule now builds and this test stopped
+    # firing. The vehicle changed; the subject did not. A urea cannot be fixed by widening a
+    # nitrogen class, so this trigger does not rot the same way.
+    smi = "c1cc(ccc1NC(=O)N[C@@H](CCC(=O)O)C(=O)O)NCc2cnc3c(n2)C(=O)N=C(N3)N"
     mol = Molecule.from_smiles(smi, allow_undefined_stereo=True)
     mol.generate_conformers(n_conformers=1)
     mol.name = "FOL"
