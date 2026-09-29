@@ -28,6 +28,17 @@ differently -- a changed softcore default, a different package resolving under t
 is refused by name rather than integrated. That is the same shape as a REST2 ladder checking its
 saved states against `scaler.yaml`, with the digest doing the work the file identity does there.
 
+WHAT A GENERATED DIRECTORY DOES NOT PROMISE. It reproduces the Hamiltonian, the plan and the
+declaration exactly -- that is what the digests are for. It does NOT promise that two runs of the
+same window on a card give the same trajectory, and the reason is narrower than floating point in
+general: `LocalEnergyMinimizer.minimize` is not deterministic on CUDA for this System. Measured by
+S0 on 2026-09-29: at the same positions, ten fresh Contexts agreed on energy and forces to exactly
+zero spread, while five minimisations from that start scattered by 16 kJ/mol in mixed precision and
+24 in double. So a window with `alchemical.minimize_iterations > 0` is a new realisation of the
+same process on every run, seed or no seed, and two `--cpu` runs agreeing is not evidence about a
+card. This is the same class of statement as the AIS resume: exact in COMMITTED STATE, not in
+trajectory on CUDA.
+
 A WINDOW IS NOT A STAGE. It has no `-c` chain, no restart handed forward, no ordering: windows are
 independent and a campaign is complete when every one of them is. `--window` selects a subset the
 way AIS's `--paths` does, and the same window run twice is skipped by its own completion record
