@@ -721,10 +721,7 @@ PROTEIN_UNSCALED_BONDS = {
 
 #: The classes of central bond whose torsions stay unscaled, in the order they are decided and
 #: reported. Impropers are the fourth class and have no central bond.
-#: `urea_like` is a carbonyl carbon's TWO C-N bonds. It is listed beside `amide_omega`
-#: rather than folded into it because a urea is not a peptide bond, and a record that said
-#: so would be claiming evidence it does not have.
-UNSCALED_BOND_CLASSES = ("amide_omega", "urea_like", "aromatic_ring", "double_bond")
+UNSCALED_BOND_CLASSES = ("amide_omega", "aromatic_ring", "double_bond")
 
 
 
@@ -1023,19 +1020,21 @@ def _amide_candidates(topology, solute: set[int]) -> list[dict]:
             "carbon_residue_index": int(c.residue.index),
             "nitrogen_residue_index": int(n.residue.index),
             "inter_residue": c.residue.index != n.residue.index,
-            # A carbonyl carbon bearing TWO nitrogens: a urea. This used to be an abstention --
-            # "which of the two C-N bonds is the omega?" -- and the measurement says that is the
-            # wrong question, because BOTH are. Torsion-term barriers under openff-2.2.1:
+            # A carbonyl carbon bearing TWO nitrogens: a urea. Both nitrogens donate into the
+            # SAME carbonyl pi*, so both C-N bonds carry partial double-bond character and neither
+            # is "the" omega -- which is why asking which one was had no answer and used to be an
+            # abstention that refused the build.
             #
-            #     N-methylacetamide amide C-N    29.0 kT   (the reference unscaled bond)
-            #     1,3-dimethylurea  C(=O)-N      25.3 kT   BOTH of them
-            #     1,3-dimethylurea  N-CH3        11.2 kT   the ordinary bond in the same molecule
-            #     ethane            C-C           7.3 kT   freely rotating
+            # It is recognised here and left SCALABLE. Because the two donors share one acceptor,
+            # each bond gets less of it than a lone amide does: experimentally a urea C-N rotates
+            # with dG# ~ 11 kcal/mol (alkyl/phenylureas 8.6-9.4) against an amide's 20-23. That is
+            # ~10 us, not the amide's ~10 ms -- a real syn/anti conformational change behind a
+            # barrier the cold run does not cross, which is precisely what REST2 exists to
+            # accelerate. It belongs with cyclohexane's chair/twist-boat flip, not with the amide.
             #
-            # Each C-N of a urea carries 87% of a genuine amide's barrier and 2.3x the ordinary
-            # N-C beside it, so scaling either one lets a hot state flatten a bond the physical
-            # state never flattens. Both are unscaled, and the class says urea_like rather than
-            # amide_omega so the record does not claim a peptide bond that is not there.
+            # (An earlier revision protected these on the strength of the force field's torsion
+            # AMPLITUDE, which put a urea at 87% of an amide. That is not the physical barrier --
+            # it omits the nonbonded terms -- and the experimental ratio is nearer 55%.)
             #
             # Three nitrogens cannot arise: the carbon already spends a bond on the carbonyl.
             "urea_like": len(nitrogens) > 1,
@@ -1184,10 +1183,15 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
                 instance_info[residue_index] = (None, str(refusal))
         return instance_info[residue_index]
 
-    unscaled, proline, unknown = [], [], []
+    unscaled, proline, urea, unknown = [], [], [], []
     for cand in candidates:
         if cand["ambiguous"]:
             unknown.append(cand); continue
+        # A urea is RECOGNISED and deliberately left scalable -- see `_amide_candidates`. It is
+        # not an abstention (nothing is undecided) and not a protected bond (it has real syn/anti
+        # conformers behind a barrier the cold run does not cross, which is what REST2 is for).
+        if cand.get("urea_like"):
+            urea.append(cand); continue
         residue_name = cand["nitrogen_residue"].upper()
 
         # 1. The human answer to a previous block wins outright, before any file is opened.
@@ -1251,8 +1255,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         return len(neighbours.get(a, ())) >= 2 and len(neighbours.get(b, ())) >= 2
 
     amide_bonds = {tuple(sorted(c["bond"])) for c in unscaled + proline}
-    central: list[dict] = [{"bond": sorted(c["bond"]),
-                            "class": "urea_like" if c.get("urea_like") else "amide_omega",
+    central: list[dict] = [{"bond": sorted(c["bond"]), "class": "amide_omega",
                             "residue": c["nitrogen_residue"],
                             "residue_index": c["nitrogen_residue_index"],
                             "evidence": ("residue name" if c["nitrogen_residue"].upper()
@@ -1355,6 +1358,9 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         "unscaled_central_bonds": sorted(tuple(e["bond"]) for e in central),
         "central_bonds": central,
         "proline_like_scaled_bonds": [c["bond"] for c in proline],
+        # Recognised as a urea and left SCALABLE. Recorded because "we saw it and chose not to
+        # protect it" and "we never noticed it" must not look the same in a record.
+        "urea_scaled_bonds": [c["bond"] for c in urea],
         "unclassified": unknown,
         # Amide candidates the aromatic or double-bond rule placed instead. Recorded rather than
         # dropped silently: the amide test could not read these, and which rule did is the whole

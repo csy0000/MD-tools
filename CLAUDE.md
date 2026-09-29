@@ -131,11 +131,8 @@ Do not change these without a failing test that demonstrates a defect.
 
 * **REST2**: every replica at the same physical temperature — Hamiltonian scaling, not
   temperature REMD. Convention v3, `rest2-unscaled-torsions`: bonds and angles unscaled; every
-  UNSCALED TORSION unscaled — each proper torsion across an ordinary amide C–N (omega), BOTH C–N
-  bonds of a urea (a carbonyl carbon bearing two nitrogens: each carries 25.3 kT against a real
-  amide's 29.0 and an ordinary N–C's 11.2, so asking which one is "the" omega was the wrong
-  question), an aromatic ring bond or another double bond (the ARG guanidinium included), and
-  every improper; eligible
+  UNSCALED TORSION unscaled — each proper torsion across an ordinary amide C–N (omega), an aromatic
+  ring bond or another double bond (the ARG guanidinium included), and every improper; eligible
   solute torsions and CMAP by `(1-tau)²`; solute–solute nonbonded and 1-4 by `(1-tau)²`;
   solute–environment by `(1-tau)`; generalized-Born by `(1-tau)`. Exchanges never rescale
   velocities. The runtime is NVT. One trajectory per fixed thermodynamic **state**
@@ -151,6 +148,21 @@ Do not change these without a failing test that demonstrates a defect.
   The directory is staged and renamed into place; `--overwrite` moves the old one aside, never
   deletes it. `md_tools.build.scaler` is the one writer and `md_tools.rest2.states.
   scaled_state_identity` the one reader.
+* **A torsion is unscaled when it has no other state to reach.** This is the principle the classes
+  follow, and the one to reason from when a new case appears. Scale a torsion when it has real
+  alternative states behind a barrier the cold run cannot cross — that is what REST2 is for. Leave
+  it unscaled only when there is no alternative conformer and scaling would buy distortion instead
+  of sampling: an AROMATIC ring bond (planarity is enforced by delocalisation, so any excursion is
+  pure strain), a DOUBLE bond (cis/trans is a chemical isomer, not a conformer), an AMIDE OMEGA
+  (~20 kcal/mol, ~10 ms; cis-peptide is effectively a distinct chemical state — convention v3), and
+  every IMPROPER. A SATURATED ring bond is scaled: chair/twist-boat is a real flip (~10.4 kcal/mol,
+  ~µs) that swaps axial and equatorial, and freezing it would hide the conformational change that
+  often decides binding. A macrocycle's φ/ψ are scaled for the same reason — they are why one runs
+  REST2 on a cyclic peptide. Ring MEMBERSHIP is not the criterion, π character is: RDKit's
+  `NumRotatableBonds` calls every ring bond rigid and would leave a cyclic peptide with nothing to
+  scale. A UREA sits between the two (~11 kcal/mol, ~10 µs, both C–N bonds partially double because
+  both nitrogens donate into one carbonyl) and is SCALED, with the bonds recorded as
+  recognised-and-scaled so that seeing a case and not protecting it never looks like missing it.
 * **Unscaled torsions are CLASSIFIED, and a torsion nobody can classify is refused.** Proteins by
   the residue table (`PROTEIN_UNSCALED_BONDS`), small molecules by bond orders from an SDF:
   `sdf_filelist` in the scaler config, else `<RESNAME>.sdf` beside the System, else `built.sdf`

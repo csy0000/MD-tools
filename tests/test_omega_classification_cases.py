@@ -308,21 +308,27 @@ def test_a_urea_is_not_taken_for_a_peptide_bond():
     assert _amide_unscaled(result) == []
     assert not any(e["class"] == "amide_omega" for e in result["central_bonds"]), (
         "a urea is not a peptide bond and must never be recorded as one")
-    assert _amide_unclassified(result), "with no bond orders it is still refused"
-    assert "no SDF" in _amide_unclassified(result)[0]["ambiguous"]
+    # A urea is settled from the TOPOLOGY -- a carbonyl carbon with two nitrogens -- so it needs
+    # no bond orders and raises no per-bond question at all.
+    assert len(result["urea_scaled_bonds"]) == 2
+    assert _amide_unclassified(result) == [], (
+        "the urea itself is decided without an SDF; only the residue's OTHER bonds need one")
 
 
-def test_both_c_n_bonds_of_a_urea_are_unscaled_because_both_carry_the_barrier():
-    """The measurement that replaced the abstention. Torsion-term barriers, openff-2.2.1:
+def test_both_c_n_bonds_of_a_urea_are_RECOGNISED_and_left_scalable():
+    """A urea is not an abstention and not a protected bond. It is seen, and deliberately scaled.
 
-        N-methylacetamide amide C-N    29.0 kT   the reference unscaled bond
-        1,3-dimethylurea  C(=O)-N      25.3 kT   BOTH of them
-        1,3-dimethylurea  N-CH3        11.2 kT   the ordinary bond in the same molecule
-        ethane            C-C           7.3 kT   freely rotating
+    Both nitrogens donate into the SAME carbonyl pi*, so both C-N bonds carry partial double-bond
+    character and neither is "the" omega -- which is why asking which one was had no answer.
 
-    Each C-N of a urea carries 87% of a genuine amide's barrier and 2.3x the ordinary N-C beside
-    it. Asking which one is "the" omega was the wrong question; both are restricted, and scaling
-    either lets a hot state flatten a bond the physical state never flattens.
+    Because the two donors share one acceptor, each gets less of it than a lone amide does.
+    Experimentally a urea C-N rotates with dG# ~ 11 kcal/mol (alkyl/phenylureas 8.6-9.4) against
+    an amide's 20-23: about 10 us, not the amide's 10 ms. That is a real syn/anti conformational
+    change behind a barrier the cold run does not cross -- what REST2 exists to accelerate. It
+    belongs with cyclohexane's chair/twist-boat flip, not with the amide.
+
+    The bonds are RECORDED as recognised-and-scaled, because "we saw it and chose not to protect
+    it" and "we never noticed it" must not look the same in a record.
     """
     pytest.importorskip("openff.toolkit")
     import tempfile
@@ -342,9 +348,13 @@ def test_both_c_n_bonds_of_a_urea_are_unscaled_because_both_carry_the_barrier():
         residue.name = "URE"
 
     result = unscaled_torsions(topology, list(range(topology.getNumAtoms())), ligand_sdf=sdf)
-    classes = [e["class"] for e in result["central_bonds"]]
-    assert classes.count("urea_like") == 2, f"both C-N bonds, got {classes}"
-    assert "amide_omega" not in classes, "a urea is not a peptide bond"
+    assert result["unscaled_central_bonds"] == [], "a urea C-N is scalable, like a ring flip"
+    assert "amide_omega" not in [e["class"] for e in result["central_bonds"]], (
+        "a urea is not a peptide bond")
+    assert len(result["urea_scaled_bonds"]) == 2, (
+        f"both C-N bonds must be RECORDED as seen-and-scaled, got "
+        f"{result['urea_scaled_bonds']}")
+    assert result["unclassified"] == [], "and it is not an abstention either"
 
 
 # --- 7. the amidate: a deprotonated amide nitrogen has TWO connections ---------------------------
