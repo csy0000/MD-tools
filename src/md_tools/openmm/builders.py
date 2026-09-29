@@ -206,12 +206,17 @@ def _solute_document(topology, solute_indices, unscaled, *, route: str,
             "unscaled_impropers": bool(unscaled.get("unscaled_impropers", True)),
             "proline_like_scaled_bonds": [[int(a), int(b)] for a, b in unscaled.get(
                 "proline_like_scaled_bonds", [])],
-            "detector_version": UNSCALED_TORSION_DETECTOR_VERSION,
             "detection_method": unscaled.get("detection_method"),
             # The route and the detector version are persisted, so a record can be checked
             # against the detector that produced it rather than against whichever detector
             # happens to be installed when it is read.
             "detection_route": route,
+            # POSITION IS LOAD-BEARING. `solute.yaml` is content-addressed, so the key
+            # ORDER is part of the bytes a ladder is extended against. Moving this line
+            # refused every pre-existing ladder with "generated from different content"
+            # while changing nothing about the Hamiltonian -- caught by the gate, not by
+            # any fast lane.
+            "detector_version": UNSCALED_TORSION_DETECTOR_VERSION,
             # Items neither rule could name, with their evidence. A NON-EMPTY LIST BLOCKS
             # PRODUCTION: guessing either way silently changes the Hamiltonian.
             "unclassified": [
