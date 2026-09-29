@@ -173,3 +173,23 @@ def test_the_sdist_can_build_a_wheel_from_itself(tmp_path):
     assert any(n.endswith(".tar.gz") for n in made), made
     assert any(n.endswith(".whl") for n in made), (
         "the sdist was written but no wheel was built from it: " + repr(made))
+
+
+def test_every_shipped_protocol_config_is_in_the_wheel(installed):
+    """A config in `configs/md/` that the wheel does not carry is a method a user cannot copy.
+
+    `example_root()` falls back to the source tree, so from a checkout every example resolves and
+    this gap is invisible; it appears only once the package is installed somewhere else. That is
+    exactly how `umbrella.config`, `umbrella.yaml` and `cv.yaml` were documented, tested, released
+    in 0.6.3 and absent from the distribution.
+
+    The listing in `[tool.setuptools.data-files]` and the directory are two places holding one
+    fact, which is why they drifted. This compares them.
+    """
+    site, _work = installed
+    shipped = {p.name for p in pathlib.Path(site).rglob("share/md-tools/configs/md/*")}
+    present = {p.name for p in (REPO_ROOT / "configs" / "md").iterdir() if p.is_file()}
+    missing = sorted(present - shipped)
+    assert not missing, (
+        f"{missing} are in configs/md/ but not shipped: add them to "
+        f"[tool.setuptools.data-files] in pyproject.toml")
