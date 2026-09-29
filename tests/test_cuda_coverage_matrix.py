@@ -261,64 +261,96 @@ CUDA_SITES = {
         "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/hamiltonian.py::AlchemicalHamiltonian.set_state": (
         "sets every public and derived Context parameter of the softcore Hamiltonian on the Context it is given -- the caller's, whose platform came from platform_policy (S4's sampling or evaluation Context); it reads the Context's parameter names first and refuses a Context missing any",
-        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "PASSING on CUDA except three carried rows. Lane: test_alchemy_hamiltonian_cuda.py -- "
         "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
         "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
         "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
         "consistency with injected defects shown to fail) -- and "
         "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
-        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
-        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
-        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
+        "FIFTH run (2026-09-21, 5a9620c, a granted card): 14 tests, 11 passed, 3 FAILED, 0 "
+        "skipped. One-atom, S2's pentane plan, the FD force/energy check with injected step and "
+        "kink caught ON THE DEVICE, live set_state, and NPT on CUDA in mixed AND double all "
+        "PASS. The three failures are the clash-tail rows the user decided to carry "
+        "(2026-09-19): precision on a 2.4e4 kJ/mol overlap term at lambda 1, reproduced "
+        "BIT-IDENTICALLY across runs hours apart, which is what says they are CUDA's "
+        "deterministic arithmetic on a 0.22 nm overlap rather than noise. See handoffs/S3.md. "
+        "The NVE test in the dynamics file is a smoke test and NOT evidence: shown to have no "
+        "power on this fixture, and replaced as evidence by the FD force/energy check"),
     "alchemy/hamiltonian.py::AlchemicalHamiltonian.energy": (
         "sets the state and reads the total potential energy off the caller's Context",
-        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "PASSING on CUDA except three carried rows. Lane: test_alchemy_hamiltonian_cuda.py -- "
         "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
         "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
         "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
         "consistency with injected defects shown to fail) -- and "
         "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
-        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
-        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
-        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
+        "FIFTH run (2026-09-21, 5a9620c, a granted card): 14 tests, 11 passed, 3 FAILED, 0 "
+        "skipped. One-atom, S2's pentane plan, the FD force/energy check with injected step and "
+        "kink caught ON THE DEVICE, live set_state, and NPT on CUDA in mixed AND double all "
+        "PASS. The three failures are the clash-tail rows the user decided to carry "
+        "(2026-09-19): precision on a 2.4e4 kJ/mol overlap term at lambda 1, reproduced "
+        "BIT-IDENTICALLY across runs hours apart, which is what says they are CUDA's "
+        "deterministic arithmetic on a 0.22 nm overlap rather than noise. See handoffs/S3.md. "
+        "The NVE test in the dynamics file is a smoke test and NOT evidence: shown to have no "
+        "power on this fixture, and replaced as evidence by the FD force/energy check"),
     "alchemy/hamiltonian.py::AlchemicalHamiltonian._energy": (
         "reads one force group's potential energy off the caller's Context",
-        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "PASSING on CUDA except three carried rows. Lane: test_alchemy_hamiltonian_cuda.py -- "
         "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
         "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
         "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
         "consistency with injected defects shown to fail) -- and "
         "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
-        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
-        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
-        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
+        "FIFTH run (2026-09-21, 5a9620c, a granted card): 14 tests, 11 passed, 3 FAILED, 0 "
+        "skipped. One-atom, S2's pentane plan, the FD force/energy check with injected step and "
+        "kink caught ON THE DEVICE, live set_state, and NPT on CUDA in mixed AND double all "
+        "PASS. The three failures are the clash-tail rows the user decided to carry "
+        "(2026-09-19): precision on a 2.4e4 kJ/mol overlap term at lambda 1, reproduced "
+        "BIT-IDENTICALLY across runs hours apart, which is what says they are CUDA's "
+        "deterministic arithmetic on a 0.22 nm overlap rather than noise. See handoffs/S3.md. "
+        "The NVE test in the dynamics file is a smoke test and NOT evidence: shown to have no "
+        "power on this fixture, and replaced as evidence by the FD force/energy check"),
     "alchemy/hamiltonian.py::AlchemicalHamiltonian.derivative_components": (
         "reads OpenMM energy-parameter derivatives per custom force group, then evaluates each end-state NonbondedForce group at weights 1 and 0 (six restricted evaluations, each a PME on CUDA) on the caller's Context, and restores the state",
-        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "PASSING on CUDA except three carried rows. Lane: test_alchemy_hamiltonian_cuda.py -- "
         "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
         "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
         "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
         "consistency with injected defects shown to fail) -- and "
         "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
-        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
-        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
-        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
+        "FIFTH run (2026-09-21, 5a9620c, a granted card): 14 tests, 11 passed, 3 FAILED, 0 "
+        "skipped. One-atom, S2's pentane plan, the FD force/energy check with injected step and "
+        "kink caught ON THE DEVICE, live set_state, and NPT on CUDA in mixed AND double all "
+        "PASS. The three failures are the clash-tail rows the user decided to carry "
+        "(2026-09-19): precision on a 2.4e4 kJ/mol overlap term at lambda 1, reproduced "
+        "BIT-IDENTICALLY across runs hours apart, which is what says they are CUDA's "
+        "deterministic arithmetic on a 0.22 nm overlap rather than noise. See handoffs/S3.md. "
+        "The NVE test in the dynamics file is a smoke test and NOT evidence: shown to have no "
+        "power on this fixture, and replaced as evidence by the FD force/energy check"),
     "alchemy/hamiltonian.py::AlchemicalHamiltonian.derivative_components.swing": (
         "moves one derived weight parameter to 1, then 0, then back, on the caller's Context, for the exact NonbondedForce derivative algebra",
-        "NOT YET PASSING on CUDA. Lane: test_alchemy_hamiltonian_cuda.py -- "
+        "PASSING on CUDA except three carried rows. Lane: test_alchemy_hamiltonian_cuda.py -- "
         "test_cuda_matches_reference_per_force_group (per-group energies, forces, derivatives vs "
         "Reference, mixed and double), test_cuda_matches_reference_on_the_plan_with_internal_pairs, "
         "test_cuda_forces_are_the_gradient_of_the_energy (finite-difference force/energy "
         "consistency with injected defects shown to fail) -- and "
         "test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context. "
-        "Second run (2026-09-19, 2737aad): one-atom, pentane plan and live set_state PASS; the "
-        "clash-tail comparisons FAIL, under diagnosis (handoffs/S3.md). The NVE test in the "
-        "dynamics file is a smoke test and NOT evidence: shown to have no power on this fixture"),
+        "FIFTH run (2026-09-21, 5a9620c, a granted card): 14 tests, 11 passed, 3 FAILED, 0 "
+        "skipped. One-atom, S2's pentane plan, the FD force/energy check with injected step and "
+        "kink caught ON THE DEVICE, live set_state, and NPT on CUDA in mixed AND double all "
+        "PASS. The three failures are the clash-tail rows the user decided to carry "
+        "(2026-09-19): precision on a 2.4e4 kJ/mol overlap term at lambda 1, reproduced "
+        "BIT-IDENTICALLY across runs hours apart, which is what says they are CUDA's "
+        "deterministic arithmetic on a 0.22 nm overlap rather than noise. See handoffs/S3.md. "
+        "The NVE test in the dynamics file is a smoke test and NOT evidence: shown to have no "
+        "power on this fixture, and replaced as evidence by the FD force/energy check"),
 }
 
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
 #: named exemption rather than an omission -- and the reason is checkable by reading the callsite.
 NON_CUDA_CONTEXT_SITES = {
+    "alchemy/ladder.py::LambdaLadderProtocol.verify_context":
+        "reads `context.getParameters()` -- the host-side parameter MAP -- and compares it with the rung's recorded `context_parameters`, refusing a Context whose state is not the one the record claims. A dictionary comparison; no kernel runs and no energy is evaluated, so it is not CUDA evidence and does not need a CUDA lane. It is called from `prepare_context`, which is where a rung is put into its state, so the refusal is in the run path on every platform alike.",
     "alchemy/hamiltonian.py::_check_internal_force":
         "walks `System.getForces()` -- the host-side list of Force OBJECTS -- of both end states to find the plan's UniqueGroupInternalNonbonded CustomBondForce and compare its bond parameters with the Hamiltonian's own internal pairs. Host-side accessors; no Context.",
     "alchemy/hamiltonian.py::_connected_groups":
