@@ -16,8 +16,9 @@ from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 
-from openmm import (CMAPTorsionForce, CustomGBForce, NonbondedForce,
-                    PeriodicTorsionForce, XmlSerializer)
+from openmm import NonbondedForce, XmlSerializer
+
+from .peptide_map import ORDINARY_AMIDE_SMARTS
 
 
 WATER_RESIDUE_NAMES = frozenset({"HOH", "WAT", "SOL", "TIP3", "TIP", "H2O"})
@@ -720,7 +721,35 @@ PROTEIN_UNSCALED_BONDS = {
 
 #: The classes of central bond whose torsions stay unscaled, in the order they are decided and
 #: reported. Impropers are the fourth class and have no central bond.
-UNSCALED_BOND_CLASSES = ("amide_omega", "aromatic_ring", "double_bond")
+#: The TWO categories a protected bond falls in, in record order.
+#:
+#: `non_rotatable` is a bond with no other state to reach: an aromatic ring bond (planarity is
+#: enforced by delocalisation, so any excursion is pure strain) or a double bond (cis/trans is a
+#: chemical isomer, not a conformer). `amide_omega` is its own category because it is protected by
+#: CONVENTION rather than by having nowhere to go -- cis-peptide is a real state, just one the
+#: reference ensemble does not visit, and REST2 convention v3 says a hot rung must not visit it
+#: either.
+#:
+#: WHICH rule fired is kept per bond under `evidence`, so collapsing the categories loses nothing
+#: a reader had before.
+#: Which RULES decided a classification, for the RECORD. Bumped when the classification rules
+#: change, not when their inputs do, so a stored exclusion can be re-derived by a reader who knows
+#: which algorithm produced it. 1: ordinary amide omega. 2: plus aromatic ring bonds, other double
+#: bonds and impropers.
+#:
+#: It is PROVENANCE, and it lives here -- in the detector -- so that one definition serves every
+#: consumer. It was previously defined in `rest2.hamiltonian` while this module hardcoded the
+#: literal 2 in two more places: three sources for one number, where a bump moves one and leaves
+#: the others.
+#:
+#: It is deliberately NOT part of `hamiltonian_selection_projection`. A digest of what determines
+#: the Hamiltonian must not depend on which algorithm named a bond; that was the v3 -> v4 change.
+UNSCALED_TORSION_DETECTOR_VERSION = 2
+
+UNSCALED_BOND_CLASSES = ("amide_omega", "non_rotatable")
+
+#: The specific rules that make a bond `non_rotatable`, as they appear in a bond's `evidence`.
+NON_ROTATABLE_RULES = ("aromatic ring bond", "double bond")
 
 
 
@@ -1010,8 +1039,6 @@ def _amide_candidates(topology, solute: set[int]) -> list[dict]:
             reason = f"carbon {c.index} has {len(carbonyl)} carbonyl oxygens (expected 1)"
         elif hydroxyl:
             reason = f"carbon {c.index} also carries a hydroxyl/ester oxygen: not a plain amide"
-        elif len(nitrogens) > 1:
-            reason = f"carbon {c.index} is bonded to {len(nitrogens)} nitrogens (urea-like)"
         out.append({
             "bond": (int(c.index), int(n.index)),
             "carbon": int(c.index), "nitrogen": int(n.index),
@@ -1021,6 +1048,24 @@ def _amide_candidates(topology, solute: set[int]) -> list[dict]:
             "carbon_residue_index": int(c.residue.index),
             "nitrogen_residue_index": int(n.residue.index),
             "inter_residue": c.residue.index != n.residue.index,
+            # A carbonyl carbon bearing TWO nitrogens: a urea. Both nitrogens donate into the
+            # SAME carbonyl pi*, so both C-N bonds carry partial double-bond character and neither
+            # is "the" omega -- which is why asking which one was had no answer and used to be an
+            # abstention that refused the build.
+            #
+            # It is recognised here and left SCALABLE. Because the two donors share one acceptor,
+            # each bond gets less of it than a lone amide does: experimentally a urea C-N rotates
+            # with dG# ~ 11 kcal/mol (alkyl/phenylureas 8.6-9.4) against an amide's 20-23. That is
+            # ~10 us, not the amide's ~10 ms -- a real syn/anti conformational change behind a
+            # barrier the cold run does not cross, which is precisely what REST2 exists to
+            # accelerate. It belongs with cyclohexane's chair/twist-boat flip, not with the amide.
+            #
+            # (An earlier revision protected these on the strength of the force field's torsion
+            # AMPLITUDE, which put a urea at 87% of an amide. That is not the physical barrier --
+            # it omits the nonbonded terms -- and the experimental ratio is nearer 55%.)
+            #
+            # Three nitrogens cannot arise: the carbon already spends a bond on the carbonyl.
+            "urea_like": len(nitrogens) > 1,
             "ambiguous": reason,
         })
     return out
@@ -1067,7 +1112,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
     2. **A known protein residue is read from the residue**, against ``PROTEIN_RESIDUES``.  An
        X-PRO peptide bond is therefore *not* excluded.
     3. **Anything else is read from the SDF's bond orders.**  Ordinary amides are matched with
-       ``[CX3](=[OX1])[NX3]``; proline-like nitrogens with a ring of at most
+       :data:`~md_tools.openmm.peptide_map.ORDINARY_AMIDE_SMARTS`; proline-like nitrogens with a ring of at most
        *max_proline_ring_size* atoms.  **The ring-size bound is what makes this correct for
        macrocycles**: every backbone nitrogen of a cyclic peptide is "in a ring", but a 15-30
        membered macrocycle does not constrain the amide the way a pyrrolidine does, so an unbounded
@@ -1144,8 +1189,11 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         else:
             source = (f"SDF {Path(ligand_sdf).name}" if ligand_sdf is not None
                       else "no SDF supplied (refused)")
+        # The pattern is INTERPOLATED, not spelled again. Nothing else in the record says which
+        # amide pattern classified it -- the detector stamp that used to is gone (v4) -- so a
+        # hand-copied literal that drifted would make every record name a pattern that never ran.
         method += (f"; residues {sorted(non_standard_names)} from RDKit SMARTS "
-                   f"[CX3](=[OX1])[NX3] over {source}, proline-like = amide N in a ring of "
+                   f"{ORDINARY_AMIDE_SMARTS} over {source}, proline-like = amide N in a ring of "
                    f"<= {max_proline_ring_size} atoms")
 
     # Per residue INSTANCE, when the evidence is per name: mapped lazily, once each.
@@ -1163,10 +1211,15 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
                 instance_info[residue_index] = (None, str(refusal))
         return instance_info[residue_index]
 
-    unscaled, proline, unknown = [], [], []
+    unscaled, proline, urea, unknown = [], [], [], []
     for cand in candidates:
         if cand["ambiguous"]:
-            unknown.append(cand); continue
+            unknown.append(dict(cand, evidence_missing=False)); continue
+        # A urea is RECOGNISED and deliberately left scalable -- see `_amide_candidates`. It is
+        # not an abstention (nothing is undecided) and not a protected bond (it has real syn/anti
+        # conformers behind a barrier the cold run does not cross, which is what REST2 is for).
+        if cand.get("urea_like"):
+            urea.append(cand); continue
         residue_name = cand["nitrogen_residue"].upper()
 
         # 1. The human answer to a previous block wins outright, before any file is opened.
@@ -1182,7 +1235,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         #    any protein carrying a modified residue.
         if per_name is not None:
             if residue_name not in per_name:
-                unknown.append(dict(cand, ambiguous=(
+                unknown.append(dict(cand, evidence_missing=True, ambiguous=(
                     f"nitrogen residue '{cand['nitrogen_residue']}' is not a known protein "
                     f"residue, so this omega has to be read from bond orders -- and no SDF was "
                     f"given for residue {cand['nitrogen_residue']}. Residues with an SDF: "
@@ -1190,12 +1243,12 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
                 continue
             info, error = _instance(cand["nitrogen_residue_index"], residue_name)
             if info is None:
-                unknown.append(dict(cand, ambiguous=(
+                unknown.append(dict(cand, evidence_missing=True, ambiguous=(
                     f"nitrogen residue '{cand['nitrogen_residue']}' needs bond orders, and "
                     f"{per_name[residue_name].name} could not be mapped onto it: {error}")))
                 continue
         elif ligand_sdf is None:
-            unknown.append(dict(cand, ambiguous=(
+            unknown.append(dict(cand, evidence_missing=True, ambiguous=(
                 f"nitrogen residue '{cand['nitrogen_residue']}' is not a known protein residue, "
                 f"so this omega has to be read from the molecule's bond orders -- and no SDF was "
                 f"supplied. `build-top` retains one beside the System (`<RESNAME>.sdf`, named for "
@@ -1204,13 +1257,15 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         else:
             info = ring_info
             if info is None:
-                unknown.append(dict(cand, ambiguous=(
+                unknown.append(dict(cand, evidence_missing=True, ambiguous=(
                     f"nitrogen residue '{cand['nitrogen_residue']}' needs bond orders, and the "
                     f"SDF could not be mapped onto residues {sorted(non_standard_names)}: "
                     f"{mapping_error}")))
                 continue
         if cand["bond"] not in info["amide_bonds"]:
-            unknown.append(dict(cand, ambiguous=(
+            # evidence_missing=False: the SDF was there and ANSWERED -- it says this C-N is not an
+            # ordinary amide. Nothing is absent, so nothing the user could supply would change it.
+            unknown.append(dict(cand, evidence_missing=False, ambiguous=(
                 "RDKit found no ordinary-amide match for this C-N bond in the SDF")))
             continue
         if cand["nitrogen"] in info["small_ring_nitrogens"]:
@@ -1259,7 +1314,10 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
             for kind, pairs in PROTEIN_UNSCALED_BONDS[name].items():
                 for x, y in pairs:
                     if x in atoms and y in atoms:
-                        _add(atoms[x], atoms[y], kind, residue, "PROTEIN_UNSCALED_BONDS")
+                        # The table's key names the RULE (aromatic_ring, double_bond); the
+                        # record carries the CATEGORY, with the rule kept as evidence.
+                        _add(atoms[x], atoms[y], "non_rotatable", residue,
+                             f"PROTEIN_UNSCALED_BONDS: {kind.replace('_', ' ')}")
             continue
         if name in PROTEIN_RESIDUES or name in pro_names:
             continue
@@ -1280,6 +1338,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
             info, error = ring_info, mapping_error
         if info is None:
             unknown.append({
+                "evidence_missing": True,
                 "bond": None, "carbon": None, "nitrogen": None,
                 "carbon_residue": residue.name, "nitrogen_residue": residue.name,
                 "carbon_residue_index": int(residue.index),
@@ -1295,12 +1354,37 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         evidence = "SDF bond orders"
         for a, b in sorted(info["aromatic_bonds"]):
             if a in members and b in members:
-                _add(a, b, "aromatic_ring", residue, evidence)
+                _add(a, b, "non_rotatable", residue, f"{evidence}: aromatic ring bond")
         for a, b in sorted(info["double_bonds"]):
             if a in members and b in members:
-                _add(a, b, "double_bond", residue, evidence)
+                _add(a, b, "non_rotatable", residue, f"{evidence}: double bond")
 
     central.sort(key=lambda e: (UNSCALED_BOND_CLASSES.index(e["class"]), e["bond"]))
+
+    # An amide candidate ANOTHER RULE HAS ALREADY CLASSIFIED is not undecided.
+    #
+    # `_amide_candidates` finds every C-N bond whose carbon also bears an oxygen, structurally,
+    # from the topology. A C-N bond INSIDE an aromatic ring meets that description, and can never
+    # match `ORDINARY_AMIDE_SMARTS`: its `C` is an ALIPHATIC carbon and RDKit aromatises the ring,
+    # so the pattern fails on the carbon before the nitrogen is even considered. Folate's pterin
+    # 4-oxo lactam is the standard example, in either tautomer.
+    #
+    # Such a bond is already in `central_bonds` as `aromatic_ring`, and its torsions are already
+    # protected -- a torsion across an aromatic ring bond cannot rotate in the first place. Leaving
+    # it in `unclassified` refuses the build over an ambiguity that does not exist, and the
+    # refusal is unanswerable: the exclusions file only ADDS protection, which the bond has.
+    #
+    # This does not weaken "a torsion nobody can classify is refused". It says a bond classified
+    # by the aromatic or double-bond rule HAS been classified. A candidate no rule placed is still
+    # refused, and `bond: None` entries -- a whole residue with no bond orders at all -- are never
+    # dropped, because nothing about that residue was classified.
+    classified = {tuple(entry["bond"]) for entry in central}
+    resolved = [u for u in unknown
+                if u["bond"] is not None and tuple(sorted(u["bond"])) in classified]
+    unknown = [u for u in unknown if u not in resolved]
+    for entry in resolved:
+        pair = tuple(sorted(entry["bond"]))
+        entry["resolved_by"] = next(e["class"] for e in central if tuple(e["bond"]) == pair)
     method += ("; aromatic ring and double bonds from PROTEIN_UNSCALED_BONDS for protein residues "
                "and from SDF bond orders otherwise; impropers "
                + ("unscaled" if unscaled_impropers else "scaled"))
@@ -1308,10 +1392,31 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         "unscaled_central_bonds": sorted(tuple(e["bond"]) for e in central),
         "central_bonds": central,
         "proline_like_scaled_bonds": [c["bond"] for c in proline],
-        "unclassified": unknown,
+        # THE SPLIT. `unclassified` is only what a user can still fix: a residue whose bond orders
+        # were never supplied. That is a MISSING INPUT, not an unnameable torsion, and it refuses
+        # -- because with no evidence NOTHING is protected, so defaulting it to scaled would put a
+        # whole benzene ring on the lambda path because somebody forgot a file. Measured on
+        # paracetamol: 7 protected with the SDF (1 amide + 6 aromatic), 0 without.
+        #
+        # `unnamed_scaled_bonds` is the other kind: the evidence was complete and no rule named
+        # the bond -- a carbon with two carbonyl oxygens, one carrying a hydroxyl or ester oxygen,
+        # or an SDF that simply says this C-N is not an ordinary amide. Nothing is absent, so
+        # nothing the user could supply would change it. Those scale, and are RECORDED so that
+        # "seen and not named" never reads as "never looked at".
+        # Recognised as a urea and left SCALABLE. Recorded because "we saw it and chose not to
+        # protect it" and "we never noticed it" must not look the same in a record.
+        "urea_scaled_bonds": [c["bond"] for c in urea],
+        "unclassified": [u for u in unknown if u.get("evidence_missing")],
+        "unnamed_scaled_bonds": [u for u in unknown if not u.get("evidence_missing")],
+        # Amide candidates the aromatic or double-bond rule placed instead. Recorded rather than
+        # dropped silently: the amide test could not read these, and which rule did is the whole
+        # reason the build was allowed to proceed.
+        "amide_candidates_resolved_by_another_rule": [
+            {"bond": list(e["bond"]), "resolved_by": e["resolved_by"],
+             "amide_test": e["ambiguous"]} for e in resolved],
         "unscaled_impropers": bool(unscaled_impropers),
+        "detector_version": UNSCALED_TORSION_DETECTOR_VERSION,
         "detection_method": method,
-        "detector_version": 2,
         "amide_detail": {"unscaled": unscaled, "proline_like_scaled": proline},
     }
 
@@ -1373,15 +1478,81 @@ def unscaled_torsions(topology, solute_atoms: Iterable[int], *,
     if not unknown or not enforce:
         return result
     shown = unknown[:5]
+    atoms = list(topology.atoms())
+
+    def _named(index) -> str:
+        """The atom's OWN name, with its element when the name does not already say it.
+
+        This used to print the literal letters "C" and "N" -- the element of each end, not the
+        atoms. Two different bonds of one residue then produced the same text, and reading those
+        letters as atom names sends a reader to the wrong bond entirely: on folate, "FOL0 C ->
+        FOL0 N" reads exactly like the PDB component's benzoylglutamate amide (its atoms really
+        are named `C` and `N`) while the bond in question was the pterin lactam. The index was
+        always there and always right; the label was the part that lied.
+        """
+        if index is None or not 0 <= int(index) < len(atoms):
+            return "?"
+        atom = atoms[int(index)]
+        name = (atom.name or "").strip()
+        symbol = getattr(atom.element, "symbol", "?")
+        if not name:
+            return symbol
+        return name if name.upper().startswith(symbol.upper()) else f"{name} ({symbol})"
+
+    # The LOCAL ENVIRONMENT of each undecided bond, in the message itself.
+    #
+    # Naming the bond says WHICH one; it does not say where in the molecule it sits, and for a
+    # thirty-atom ligand that is the whole difficulty. Everything needed is already computed here:
+    # the bond graph, and what the other rules decided about the neighbourhood. Printing it costs
+    # nothing, needs no file, cannot be reaped from under the reader, and works over ssh and in a
+    # CI log, where an image helps nobody.
+    neighbours: dict[int, list[int]] = {}
+    for bond in topology.bonds():
+        neighbours.setdefault(bond.atom1.index, []).append(bond.atom2.index)
+        neighbours.setdefault(bond.atom2.index, []).append(bond.atom1.index)
+
+    nearby: dict[int, list[str]] = {}
+    for entry in result.get("central_bonds", ()):
+        pair = entry.get("bond")
+        if not pair:
+            continue
+        label = f"{_named(pair[0])}-{_named(pair[1])} {entry.get('class')}"
+        for end in pair:
+            nearby.setdefault(int(end), []).append(label)
+
+    def _indexed(index) -> str:
+        """`C7 [12]`. The INDEX is carried because a name need not be unique within a residue.
+
+        A small molecule's atoms are routinely named after their element, so "C bonded to N, O, N"
+        says nothing about which nitrogen. The index is the identifier the rest of this message
+        quotes and the one the depiction annotates, so it is the one that can be acted on.
+        """
+        return f"{_named(index)} [{int(index)}]"
+
+    def _environment(index) -> list[str]:
+        if index is None or not 0 <= int(index) < len(atoms):
+            return []
+        index = int(index)
+        bonded = ", ".join(_indexed(n) for n in sorted(neighbours.get(index, ()))) or "nothing"
+        out = [f"      {_indexed(index)} bonded to {bonded}"]
+        placed = sorted(set(nearby.get(index, ())))
+        if placed:
+            out.append(f"        already classified here: {'; '.join(placed)}")
+        return out
+
     lines = []
     for c in shown:
         if c.get("bond") is None:
             lines.append(f"  residue {c['residue']}{c['residue_index']}: {c['ambiguous']}")
         else:
             lines.append(f"  bond {c['bond'][0]}-{c['bond'][1]}: "
-                         f"{c.get('carbon_residue')}{c.get('carbon_residue_index')} C -> "
-                         f"{c.get('nitrogen_residue')}{c.get('nitrogen_residue_index')} N: "
+                         f"{c.get('carbon_residue')}{c.get('carbon_residue_index')} "
+                         f"{_named(c.get('carbon'))} -> "
+                         f"{c.get('nitrogen_residue')}{c.get('nitrogen_residue_index')} "
+                         f"{_named(c.get('nitrogen'))}: "
                          f"{c['ambiguous']}")
+            lines.extend(_environment(c.get("carbon")))
+            lines.extend(_environment(c.get("nitrogen")))
     if len(unknown) > len(shown):
         lines.append(f"  ... and {len(unknown) - len(shown)} more")
     raise UnclassifiedTorsionError(
@@ -1449,7 +1620,7 @@ def _sdf_bond_evidence(ligand_sdf, topology, atoms_to_map: set[int], max_ring: i
             f"{what} ({len(rd_bonds ^ top_bonds)} differing bonds).  Refusing to guess a mapping."
         )
 
-    amide = Chem.MolFromSmarts("[CX3](=[OX1])[NX3]")
+    amide = Chem.MolFromSmarts(ORDINARY_AMIDE_SMARTS)
     aromatic_bonds, double_bonds = set(), set()
     for bond in mol.GetBonds():
         pair = tuple(sorted((index_of[bond.GetBeginAtomIdx()], index_of[bond.GetEndAtomIdx()])))
@@ -1748,7 +1919,6 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
             "unclassified": [], "unscaled_impropers": False,
             "detection_method": "disabled (rest2.unscaled_torsions = false): every solute "
                                 "torsion is scaled, impropers and ordinary amide omegas included",
-            "detector_version": 2,
             "amide_detail": {"unscaled": [], "proline_like_scaled": []},
         }
 
@@ -1776,233 +1946,19 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
     return info
 
 
-
-
 # ---------------------------------------------------------------------------------------------
-# REST2 Hamiltonian scaling
+# The REST2 scaling that used to live here is gone.
 #
-# Solute charges scale by sqrt(s) and solute epsilons by s, which gives
-#   U_s = s*U_solute + sqrt(s)*U_solute-solvent + U_solvent
-# for a pairwise nonbonded force. PeriodicTorsion and CMAP (ff19SB) are handled too.
+# It was a second, whole-solute implementation of `md_tools.rest2.hamiltonian`: its own
+# `_scale_nonbonded_force`, `_scale_torsion_force`, `_scale_cmap_force`, `_scale_customgb_force`,
+# `REST2_GB_SCALE_PARAMETER`, `SCALED_FORCE_CLASSES`, `DELIBERATELY_UNSCALED_FORCE_CLASSES`,
+# `ENERGY_FREE_FORCE_CLASSES`, `UnclassifiedForceError`, `audit_force_classes` and
+# `build_rest2_scaled_system`. Nothing outside this file imported any of them -- every caller
+# reaches the live ones through `md_tools.rest2.scaler` -- and the classifier frozensets had
+# drifted into two copies of the same list that no test compared.
+#
+# Two classifiers is the defect, not the duplication: a force class added to one and not the
+# other makes `audit_force_classes` refuse in one code path and scale in the other, and the one
+# that runs is decided by which module the caller happened to import. `md_tools.rest2.hamiltonian`
+# is the one authority. See docs/change_from_md_tools.md, 0.6.2.
 # ---------------------------------------------------------------------------------------------
-def _clone_system(system):
-    """Deep-copy an OpenMM System via XML serialization."""
-    return XmlSerializer.deserialize(XmlSerializer.serialize(system))
-
-
-def _scale_nonbonded_force(force: NonbondedForce, solute_atom_indices: set[int], scale_factor: float) -> None:
-    sqrt_scale = math.sqrt(scale_factor)
-    for atom_index in range(force.getNumParticles()):
-        charge, sigma, epsilon = force.getParticleParameters(atom_index)
-        if atom_index in solute_atom_indices:
-            force.setParticleParameters(atom_index, charge * sqrt_scale, sigma, epsilon * scale_factor)
-    for exception_index in range(force.getNumExceptions()):
-        atom_i, atom_j, charge_prod, sigma, epsilon = force.getExceptionParameters(exception_index)
-        n_solute = int(atom_i in solute_atom_indices) + int(atom_j in solute_atom_indices)
-        if n_solute == 2:
-            force.setExceptionParameters(exception_index, atom_i, atom_j,
-                                         charge_prod * scale_factor, sigma, epsilon * scale_factor)
-        elif n_solute == 1:
-            force.setExceptionParameters(exception_index, atom_i, atom_j,
-                                         charge_prod * sqrt_scale, sigma, epsilon * sqrt_scale)
-
-
-def _scale_torsion_force(force: PeriodicTorsionForce, solute_atom_indices: set[int], scale_factor: float,
-                         exclude_central_bonds: set | None = None) -> None:
-    exclude = exclude_central_bonds or set()
-    for torsion_index in range(force.getNumTorsions()):
-        atom_i, atom_j, atom_k, atom_l, periodicity, phase, k_value = force.getTorsionParameters(torsion_index)
-        if all(atom in solute_atom_indices for atom in [atom_i, atom_j, atom_k, atom_l]) \
-                and frozenset((int(atom_j), int(atom_k))) not in exclude:
-            force.setTorsionParameters(torsion_index, atom_i, atom_j, atom_k, atom_l,
-                                       periodicity, phase, k_value * scale_factor)
-
-
-def _scale_cmap_force(force: CMAPTorsionForce, solute_atom_indices: set[int], scale_factor: float) -> None:
-    solute_map_indices: set[int] = set()
-    non_solute_map_indices: set[int] = set()
-    for torsion_index in range(force.getNumTorsions()):
-        map_index, a1, a2, a3, a4, b1, b2, b3, b4 = force.getTorsionParameters(torsion_index)
-        atoms = [a1, a2, a3, a4, b1, b2, b3, b4]
-        if all(atom in solute_atom_indices for atom in atoms):
-            solute_map_indices.add(map_index)
-        else:
-            non_solute_map_indices.add(map_index)
-    shared = solute_map_indices & non_solute_map_indices
-    if shared:
-        raise RuntimeError("Cannot selectively scale CMAP terms because a CMAP map is shared "
-                           "between solute and non-solute torsions.")
-    for map_index in solute_map_indices:
-        size, energy = force.getMapParameters(map_index)
-        force.setMapParameters(map_index, size, [v * scale_factor for v in energy])
-
-
-#: Name of the global parameter injected into every CustomGBForce energy term. Chosen not to clash
-#: with any parameter already present in the GBn2 or HCT expressions.
-REST2_GB_SCALE_PARAMETER = "rest2_scale_gb"
-
-
-def _scale_customgb_force(force, system, solute_set: set, scale_factor: float) -> None:
-    """Scale the ENTIRE generalised-Born energy by `s`.
-
-    Charge scaling alone is not enough, and this is the part that is easy to get wrong. GBn2 has
-    three energy terms: two are proportional to charge products and would follow `charge * sqrt(s)`
-    correctly, but the third is a non-polar / dispersion correction with no charge dependence. It
-    still has to be scaled by `s` under REST2, and scaling charges leaves it untouched. Multiplying
-    every term by one global parameter scales all three uniformly.
-
-    The whole system must be the enhanced region. A GB energy is not decomposable into per-atom
-    contributions the way a bonded term is: every atom's Born radius depends on every other atom's
-    position, so a partial selection would need a validated treatment of the solute-environment
-    cross terms, and there is none here. Refused rather than approximated.
-
-    The expressions are rewritten in place and the parameter is added to the System, so this MUST
-    happen before a Context is created -- the compiled kernels have to already reference it.
-    """
-    n_particles = system.getNumParticles()
-    missing = [i for i in range(n_particles) if i not in solute_set]
-    if missing:
-        shown = ", ".join(str(i) for i in missing[:8])
-        more = f" and {len(missing) - 8} more" if len(missing) > 8 else ""
-        raise ValueError(
-            f"implicit REST2 requires the entire system to be the enhanced region, but "
-            f"{len(missing)} of {n_particles} particles are outside it ({shown}{more}).\n"
-            "  A generalised-Born energy is not separable per atom: every Born radius depends on "
-            "every other atom's\n"
-            "  position, so a partial selection needs a validated treatment of the "
-            "solute-environment cross terms.\n"
-            "  Refusing rather than approximating it. Set the enhanced region to the whole solute."
-        )
-
-    existing = {force.getGlobalParameterName(i)
-                for i in range(force.getNumGlobalParameters())}
-    if REST2_GB_SCALE_PARAMETER not in existing:
-        force.addGlobalParameter(REST2_GB_SCALE_PARAMETER, 1.0)
-        for term in range(force.getNumEnergyTerms()):
-            expression, computation = force.getEnergyTermParameters(term)
-            # Only the leading expression is scaled; everything after the first ';' defines
-            # intermediate variables, and multiplying those would change what they mean.
-            if ";" in expression:
-                head, tail = expression.split(";", 1)
-                scaled = f"{REST2_GB_SCALE_PARAMETER}*({head});{tail}"
-            else:
-                scaled = f"{REST2_GB_SCALE_PARAMETER}*({expression})"
-            force.setEnergyTermParameters(term, scaled, computation)
-
-    index = [force.getGlobalParameterName(i)
-             for i in range(force.getNumGlobalParameters())].index(REST2_GB_SCALE_PARAMETER)
-    force.setGlobalParameterDefaultValue(index, float(scale_factor))
-
-
-#: Force classes this module knows how to scale. Each has an explicit ``_scale_*`` implementation.
-SCALED_FORCE_CLASSES = frozenset({
-    "NonbondedForce", "PeriodicTorsionForce", "CMAPTorsionForce", "CustomGBForce",
-})
-
-#: Energy-bearing forces left unscaled ON PURPOSE, following the standard REST2 convention: bond
-#: and angle terms are not scaled. Scaling them would change the molecule's covalent geometry with
-#: temperature, which is not what REST2 does -- the solute's *conformational* barriers are what the
-#: scaling is meant to lower, not its bond lengths.
-DELIBERATELY_UNSCALED_FORCE_CLASSES = frozenset({
-    "HarmonicBondForce", "HarmonicAngleForce",
-})
-
-#: Forces that contribute no potential energy, so scaling them is meaningless rather than wrong.
-#: A barostat's Monte Carlo move is not a term in U; the centre-of-mass remover only removes drift.
-ENERGY_FREE_FORCE_CLASSES = frozenset({
-    "CMMotionRemover", "MonteCarloBarostat", "MonteCarloAnisotropicBarostat",
-    "MonteCarloFlexibleBarostat", "MonteCarloMembraneBarostat", "AndersenThermostat",
-    "RMSDForce",
-})
-
-
-class UnclassifiedForceError(ValueError):
-    """A System carries an energy-bearing force this module does not know how to scale.
-
-    Raised instead of scaling what is recognised and leaving the rest alone. A force left at s = 1
-    inside a ladder whose other terms are scaled is not a smaller effect -- it is a different
-    Hamiltonian from the one the ladder claims, and it fails silently: the run completes, the
-    exchange log looks healthy, and the acceptance ratio absorbs the discrepancy.
-    """
-
-
-def audit_force_classes(system, *, where: str = "REST2 scaling") -> dict:
-    """Classify every force in *system*; raise on any energy-bearing force we cannot place.
-
-    Returns ``{"scaled": [...], "unscaled_by_convention": [...], "energy_free": [...]}`` with the
-    force indices in each bucket, so a manifest can record what was scaled rather than assert it.
-    """
-    scaled, by_convention, energy_free, unknown = [], [], [], []
-    for index in range(system.getNumForces()):
-        name = system.getForce(index).__class__.__name__
-        if name in SCALED_FORCE_CLASSES:
-            scaled.append((index, name))
-        elif name in DELIBERATELY_UNSCALED_FORCE_CLASSES:
-            by_convention.append((index, name))
-        elif name in ENERGY_FREE_FORCE_CLASSES:
-            energy_free.append((index, name))
-        else:
-            unknown.append((index, name))
-    if unknown:
-        listed = ", ".join(f"force[{i}] {n}" for i, n in unknown)
-        raise UnclassifiedForceError(
-            f"{where}: the System carries {len(unknown)} force(s) this module cannot classify: "
-            f"{listed}.\n"
-            "  Refusing rather than leaving them at the wrong scale. An unscaled energy term inside "
-            "a scaled ladder\n"
-            "  is a different Hamiltonian from the one the ladder claims, and nothing downstream "
-            "reports it: the run\n"
-            "  completes and the acceptance ratio quietly absorbs the discrepancy.\n"
-            f"  Known scalable: {sorted(SCALED_FORCE_CLASSES)}\n"
-            f"  Unscaled by REST2 convention: {sorted(DELIBERATELY_UNSCALED_FORCE_CLASSES)}\n"
-            f"  Carry no potential energy: {sorted(ENERGY_FREE_FORCE_CLASSES)}\n"
-            "  If one of these SHOULD be scaled, add an explicit handler; if it carries no energy, "
-            "add it to ENERGY_FREE_FORCE_CLASSES with a reason."
-        )
-    return {"scaled": scaled, "unscaled_by_convention": by_convention, "energy_free": energy_free}
-
-
-def build_rest2_scaled_system(base_system, solute_atom_indices: np.ndarray, scale_factor: float,
-                              exclude_central_bonds=None):
-    """Return a deep copy of *base_system* with REST2 Hamiltonian scaling applied.
-
-    Parameters
-    ----------
-    base_system:
-        Unscaled OpenMM System (scale_factor == 1.0 corresponds to no scaling).
-    solute_atom_indices:
-        Integer array of solute atom indices (0-based).  For alanine dipeptide
-        implicit runs this is ``np.arange(22)``.
-    scale_factor:
-        REST2 scale factor ``s = T_bath / T_effective``.  Use 1.0 for the
-        physical (U0) system and the actual replica value for higher replicas.
-    exclude_central_bonds:
-        Optional iterable of {i, j} atom-index pairs whose torsion terms are left
-        unscaled (e.g. the omega bond of non-proline-like amides).  Torsion-only.
-
-    Returns
-    -------
-    openmm.System
-        Scaled copy; the original *base_system* is not modified.
-    """
-    # Before touching anything: refuse a System carrying an energy term we cannot place. Doing this
-    # first means the failure is "this System has a force I do not understand", not a half-scaled
-    # System that looks finished.
-    audit_force_classes(base_system)
-    system = _clone_system(base_system)
-    solute_set = {int(i) for i in solute_atom_indices}
-    exclude = ({frozenset((int(a), int(b))) for a, b in exclude_central_bonds}
-               if exclude_central_bonds is not None else set())
-    for force_index in range(system.getNumForces()):
-        force = system.getForce(force_index)
-        if isinstance(force, NonbondedForce):
-            _scale_nonbonded_force(force, solute_set, scale_factor)
-        elif isinstance(force, PeriodicTorsionForce):
-            _scale_torsion_force(force, solute_set, scale_factor, exclude)
-        elif isinstance(force, CMAPTorsionForce):
-            _scale_cmap_force(force, solute_set, scale_factor)
-        elif isinstance(force, CustomGBForce):
-            _scale_customgb_force(force, system, solute_set, scale_factor)
-    return system
-
-

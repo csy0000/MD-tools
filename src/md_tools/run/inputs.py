@@ -95,6 +95,12 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "state_trajectory": "rest2.state_trajectory",
         "rem_log": "rest2.rem_log",
         "neighbour_acceptance_report": "rest2.neighbour_acceptance_report",
+        # Selective-REST2 CLAIMS (0.6.1). Named here so the language can say every resolved field,
+        # and refused by name when an input sets one (`BUILD_MD_CLAIM_KEYS`): they are checked by
+        # build-md against the saved states and never written into a generated input.
+        "backbone_scaling_list": "rest2.backbone_scaling_list",
+        "sidechain_scaling_list": "rest2.sidechain_scaling_list",
+        "ligand_scaling_dict": "rest2.ligand_scaling_dict",
     },
     "AIS": {
         "number_of_paths": "ais.number_of_paths",
@@ -141,6 +147,35 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         # to resolve against. A path and not an inline list, for the same reason
         # `cv_file` is one: a list of restraints does not fit a namelist.
         "umbrella_file": "umbrella.file",
+    },
+    # An alchemical ladder's own block. Its own section rather than more keys in &cntrl, as
+    # `&remd` and `&AIS` are: the settings here are read by one protocol, and an input that
+    # reads as one block per idea is one a person can check against the method they meant to run.
+    "alchemical": {
+        # The topology plan DIRECTORY `combine-topology` wrote. A path and not the plan's
+        # contents, for the reason `cv_file` and `umbrella_file` are paths: the record holds two
+        # serialised Systems, an atom map and a combined topology, and none of that fits a
+        # namelist -- nor should it be restated where it could disagree with the plan itself.
+        "plan": "alchemical.plan",
+        "lambda_path": "alchemical.lambda_path",
+        "staged_knot": "alchemical.staged_knot",
+        "number_of_windows": "alchemical.number_of_windows",
+        # Numbers written out, comma- or space-separated. A namelist has no list syntax, and
+        # `resolved.config` and the `.in` beside it must resolve to each other.
+        "lambda_values": "alchemical.lambda_values",
+        # The Amber18 softcore settings, spelled as `alchemical:` and an Amber mdin both spell
+        # them (`md_tools.alchemy.softcore.SoftcoreSettings`), so the same name means the same
+        # thing in the configuration, in the input and in the record.
+        "sc": "alchemical.sc",
+        "softcore_function": "alchemical.softcore_function",
+        "scalpha": "alchemical.scalpha",
+        "scbeta": "alchemical.scbeta",
+        "sc_boundary_14": "alchemical.sc_boundary_14",
+        "window_steps": "alchemical.window_steps",
+        "equilibration_steps": "alchemical.equilibration_steps",
+        "report_interval_steps": "alchemical.report_interval_steps",
+        "checkpoint_interval_steps": "alchemical.checkpoint_interval_steps",
+        "minimize_iterations": "alchemical.minimize_iterations",
     },
 }
 
@@ -190,6 +225,13 @@ class RunInput:
 #: an old input is told where the method went instead of offered a near-miss spelling.
 ARCHIVED_REMD_KEYS = frozenset({"reservoir_enabled", "reservoir_path",
                                 "refresh_interval_exchanges", "reservoir_velocities"})
+
+
+#: `&remd` keys that are build-md CLAIMS about the saved states, not run settings. A run reads its
+#: hot region from the saved states' scaler.yaml, which its Hamiltonian identity already binds, so
+#: a claim in an input would do nothing -- and an accepted setting that does nothing is refused.
+BUILD_MD_CLAIM_KEYS = frozenset({"backbone_scaling_list", "sidechain_scaling_list",
+                                 "ligand_scaling_dict"})
 
 
 def _coerce(section: str, key: str, raw: str, *, where: str) -> Any:
@@ -304,6 +346,13 @@ def parse_run_input(path: str | Path, *, source_trajectory: str | None = None,
 
             raise ConfigError(f"{where}: {key} configured rREST2's reservoir refresh. "
                               f"{RREST2_ARCHIVED}")
+        if current == "remd" and key in BUILD_MD_CLAIM_KEYS:
+            raise ConfigError(
+                f"{where}: {key} is a claim `md-openmm build-md` checks against the saved states, "
+                f"not a run setting. A ladder's hot region is the one its saved states were built "
+                f"with -- see build/REST2/scaler.yaml -- and it is chosen by `md-openmm build-top "
+                f"--rest2-scaler`. Remove the line; state the claim in the REST2 configuration "
+                f"given to build-md instead.")
         if key not in SECTION_KEYS[current]:
             raise ConfigError(f"{where}: unknown key {key!r} in &{current}.{_suggest(current, key)}")
         if key in values[current]:

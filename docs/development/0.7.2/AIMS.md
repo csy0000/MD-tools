@@ -64,4 +64,4 @@ integrated — not proof that its choices transfer unchanged. R14 (`essex-lab/gr
 conventional GCMC and nonequilibrium water moves; follow its primary method papers
 (<https://doi.org/10.1021/acs.jcim.0c00648>, <https://doi.org/10.1021/acs.jctc.2c00823>) rather
 than the code alone. The full register is section 10 of the
-[20260918 instruction](../../claudecode-instructions/20260918_parallel-0.6.1-0.7.x-development.md).
+the 20260918 roadmap (in `MD-tools-archive`, branch `development-records-20260923`).

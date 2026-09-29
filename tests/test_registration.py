@@ -972,3 +972,67 @@ def test_project_repo_names_the_project_when_the_data_live_outside_it(tmp_path):
     loose = tmp_path / "scratch" / "run"
     loose.mkdir(parents=True)
     assert _origin(loose, project_repo=str(project))["commit"] == head
+
+
+# --- a run directory's shared-input links, and the line that keeps them safe ----------------------
+
+def test_a_relative_link_back_into_the_dataset_registers_and_is_not_inventoried_twice(tmp_path):
+    """`build -> ../build` in a run directory must register, and must NOT duplicate the bytes.
+
+    The rule refuses symlinks for two stated reasons -- a link dangles once the dataset moves, or
+    it points at content the dataset does not own. A RELATIVE link resolving inside the same root
+    does neither: it travels with the tree, and the bytes it reaches are the dataset's own.
+
+    Descending into it would inventory those bytes a second time under a second path, inflating
+    the dataset and breaking the one-real-copy rule the link exists to preserve. So the link is
+    permitted and not followed.
+    """
+    from md_tools.registry import inventory
+
+    root = tmp_path / "system"
+    (root / "build").mkdir(parents=True)
+    (root / "build" / "built.xml").write_text("the system", encoding="utf-8")
+    run = root / "cMD-run1"
+    run.mkdir()
+    (run / "run.config").write_text("a run", encoding="utf-8")
+    (run / "build").symlink_to(Path("..") / "build", target_is_directory=True)
+
+    listed = sorted(str(p.relative_to(root)) for p in inventory.walk(root))
+    assert "build/built.xml" in listed, "the real copy is inventoried"
+    assert not any(p.startswith("cMD-run1/build/") for p in listed), (
+        f"the link must not be descended into; got {listed}")
+    assert "cMD-run1/build" not in listed, "the link itself carries no bytes"
+
+
+def test_a_link_that_leaves_the_dataset_is_still_refused(tmp_path):
+    """The permission is the PROPERTY, not a list of blessed names: a link called `build` that
+    escapes the root is refused exactly as any other escape is."""
+    from md_tools.registry import inventory
+    from md_tools.registry.errors import RegistrationError
+
+    root = tmp_path / "system"
+    (root / "cMD-run1").mkdir(parents=True)
+    (tmp_path / "elsewhere").mkdir()
+    (root / "cMD-run1" / "build").symlink_to(Path("..") / ".." / "elsewhere",
+                                             target_is_directory=True)
+
+    with pytest.raises(RegistrationError, match="does not own"):
+        inventory.walk(root)
+
+
+def test_an_absolute_link_inside_the_dataset_is_refused_even_pointing_at_its_own_content(tmp_path):
+    """Absolute is the failure that started this: a 0.5.4-era `REST2-run1/build` pointed into an
+    absolute project path and broke the moment the dataset was relocated, which registration does
+    by design. Resolving inside the root TODAY is not enough; it must survive the move."""
+    from md_tools.registry import inventory
+    from md_tools.registry.errors import RegistrationError
+
+    root = tmp_path / "system"
+    (root / "build").mkdir(parents=True)
+    (root / "build" / "built.xml").write_text("the system", encoding="utf-8")
+    run = root / "cMD-run1"
+    run.mkdir()
+    (run / "build").symlink_to(root / "build", target_is_directory=True)   # ABSOLUTE
+
+    with pytest.raises(RegistrationError):
+        inventory.walk(root)

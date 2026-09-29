@@ -34,8 +34,23 @@ from .record import LogWriter
 from .strict import ConfigError, Field, Schema, Section, load_yaml_strictly
 from ..openmm.timestep import ORDINARY_TIMESTEP_FS
 from ..openmm.system_defaults import DEFAULT_BAROSTAT_FREQUENCY_STEPS
+# The softcore defaults are TAKEN from the settings object that enforces them, never retyped:
+# `md_tools.alchemy.softcore` imports nothing but the standard library, and a second copy of
+# `scalpha = 0.5` here would be the one that drifts. `_check_alchemical` hands the resolved
+# values back to `SoftcoreSettings.from_mapping`, so the schema's defaults and the runtime's
+# refusals are one implementation.
+from ..alchemy.softcore import SOFTCORE_FUNCTION, SoftcoreSettings
 
-PROTOCOLS = ("cMD", "REST2", "AIS", "umbrella")
+SOFTCORE_DEFAULTS = SoftcoreSettings()
+
+PROTOCOLS = ("cMD", "REST2", "AIS", "umbrella", "alchemical")
+
+#: The lambda components an alchemical path moves, in the order the softcore expressions
+#: (`md_tools.alchemy.softcore.pair_expressions`) name them. Stated here so resolving a
+#: configuration does not import the Hamiltonian builder; `md_tools.alchemy.paths` owns the
+#: NAMING RULE that refuses anything else, and `_check_alchemical` builds the real path object
+#: through it rather than describing one here.
+ALCHEMICAL_COMPONENTS = ("lambda_electrostatics", "lambda_sterics")
 
 #: rREST2 -- REST2 plus a Boltzmann reservoir refresh of the top rung -- is ARCHIVED for 0.5.4
 #: (user, 2026-09-17). Its protocol name and its `reservoir` section are refused BY NAME, before
@@ -56,7 +71,9 @@ MD_SCHEMA = Schema(
                   "only the solute's Hamiltonian is scaled. AIS runs non-equilibrium switching paths from an "
                   "EXISTING equilibrium source ensemble -- it has no minimisation or "
                   "equilibration chain of its own, because its input is a trajectory you have "
-                  "already produced."),
+                  "already produced. umbrella is cMD with a bias on named collective variables. "
+                  "alchemical samples fixed-lambda windows of an alchemical path between the two "
+                  "end states of a topology plan `md-openmm combine-topology` wrote."),
         Field("solvent", str, default="explicit", enum=("explicit", "implicit"),
               doc="Must match the System `build-top` produced. Under implicit solvent there is no "
                   "box and no barostat, so the pressure-coupled equilibration stages are replaced "
@@ -190,6 +207,29 @@ MD_SCHEMA = Schema(
             Field("tau_max", float, default=0.5, minimum=0.0, maximum=0.95,
                   doc="The hottest rung's tau. The ladder is linear from 0.0 to this value. "
                       "tau = 0 is the unscaled physical Hamiltonian."),
+            Field("backbone_scaling_list", str, default=None, nullable=True,
+                  doc="Selective REST2: a CLAIM about the saved states, not a way to make them. "
+                      "The residues whose BACKBONE is hot, as a quoted AMBER residue mask of "
+                      "one-based topology residue indices (\":45,46,59\", \":45-50\"). The "
+                      "region is chosen when `md-openmm build-top --rest2-scaler` builds the "
+                      "states; build-md resolves this claim and refuses it unless it is the "
+                      "region that build/REST2/scaler.yaml records, as it does for "
+                      "number_of_replicas and tau_max. Masks are compared as resolved regions, "
+                      "not as text. Leave all three selector keys out to accept whatever region "
+                      "the record holds; build-md.log then prints it. A claim is checked at "
+                      "generation and is not carried into resolved.config or the generated "
+                      "input: it is not a run setting, and `md-run` refuses it in an input."),
+            Field("sidechain_scaling_list", str, default=None, nullable=True,
+                  doc="Selective REST2: a claim, as for backbone_scaling_list, naming the "
+                      "residues whose SIDECHAIN is hot. Chi1 belongs to the sidechain."),
+            Field("ligand_scaling_dict", dict, default=None, nullable=True,
+                  doc="Selective REST2: a claim naming hot ligand INSTANCES, as "
+                      "`{label: {mask: \":201\", torsion_exclusions: <file> or auto}}`. The "
+                      "label is a name only; the instance is the residue the mask resolves "
+                      "to, and an exclusion file is compared by its contents, not its path "
+                      "(relative paths are read from this configuration's directory). The "
+                      "compact form `label: <file>` is refused: no instance name is recorded "
+                      "for it to resolve against yet."),
             Field("exchange_interval_steps", int, default=5000, minimum=1, unit="steps",
                   doc="Steps of dynamics between exchange attempts. 5000 steps = 10 ps at 2 fs."),
             Field("number_of_exchanges", int, default=500, minimum=1,
@@ -290,7 +330,8 @@ MD_SCHEMA = Schema(
                       "`source` production stage on V0, then the switching paths from that "
                       "stage's whole-system trajectory. `run.sh` passes build/built.xml for "
                       "minimisation and as V1, and the saved scaled state "
-                      "build/AIS/system_state0.xml (V0) for everything else. "
+                      "build/AIS/system_state1.xml (V0) for everything else, with "
+                      "build/AIS/system_state0.xml as V1. "
                       "`stages.production_steps` is the source run's length and "
                       "`reporting.crd_printout_whole` its frame interval, so both must be set. "
                       "`dynamics.tau` must be V0's tau, which the stages check against the "
@@ -342,6 +383,127 @@ MD_SCHEMA = Schema(
                "restraint resolves its `cv` name against that same file, so the quantity that is "
                "biased and the quantity that is reported are the same object by construction -- "
                "a run cannot restrain one torsion and report another."),
+        Section("alchemical", [
+            Field("plan", str, default=None, nullable=True,
+                  doc="The topology plan DIRECTORY `md-openmm combine-topology` wrote -- the one "
+                      "holding `plan.json`, `system_a.xml`, `system_b.xml`, `combined.pdb` and "
+                      "`positions.npy`. Resolved beside `resolved.config`, the rule "
+                      "`collective_variables.file` and `umbrella.file` already follow. It is this "
+                      "key, and not the presence of the section, that says a run is alchemical: "
+                      "the two end states, the atom map and the environment are all in that "
+                      "record, and nothing here restates any of them. The plan's own contents are "
+                      "validated when it is LOADED (`md_tools.alchemy.topology.load_plan`, which "
+                      "re-verifies every digest in it), not here, for the reason "
+                      "`umbrella.file` gives: parsing it twice under two sets of rules means the "
+                      "second parse is the one the run actually uses."),
+            Field("lambda_path", str, default="linear", enum=("linear", "staged"),
+                  doc="How the named lambda components move from end state A (s = 0) to end state "
+                      "B (s = 1). `linear` moves electrostatics and sterics together. `staged` "
+                      "moves electrostatics first and sterics afterwards, with the handover at "
+                      "`staged_knot`. The path is piecewise linear in both cases and "
+                      "`md_tools.alchemy.paths` builds it; this key chooses which of its two "
+                      "constructors is used, so the configuration and the runtime cannot hold "
+                      "two different ideas of the same ladder."),
+            Field("staged_knot", float, default=None, nullable=True, minimum=0.0, maximum=1.0,
+                  doc="The progress coordinate `s` at which electrostatics finish and sterics "
+                      "begin, for `lambda_path: staged`. Required for it, and refused without it. "
+                      "A WINDOW MUST SIT EXACTLY ON IT: the slope of every component jumps here, "
+                      "so dU/ds has different left and right values and no amount of sampling "
+                      "lets a trapezoid drawn across the knot recover the integral. A window "
+                      "placement that misses it is refused with the arithmetic that would fix it, "
+                      "never moved to the nearest grid point."),
+            Field("number_of_windows", int, default=0, minimum=0,
+                  doc="Windows placed EVENLY over s in [0, 1], both end points included, so N "
+                      "windows sit at i/(N-1). 0 means the placement is given as "
+                      "`lambda_values` instead; exactly one of the two is set. A count whose grid "
+                      "does not land exactly on `staged_knot` is refused rather than rounded, for "
+                      "the reason that key states."),
+            Field("lambda_values", (str, float, int), default=None, nullable=True,
+                  doc="The windows' progress coordinates, written out: `0.0, 0.1, 0.3, 0.6, 1.0`. "
+                      "Comma- or space-separated, strictly increasing, and it must begin at 0.0 "
+                      "and end at 1.0 -- an alchemical path runs between two end states, and a "
+                      "ladder that stops short of one of them measures a free energy between a "
+                      "physical state and an arbitrary one.\n"
+                      "A packed string, deliberately and for one reason only: a namelist `.in` "
+                      "has no list syntax, and `resolved.config` and the `.in` beside it must "
+                      "resolve to each other. The values are NUMBERS, not a mask or an "
+                      "expression, so nothing about them has to be decoded to be read."),
+            Field("sc", bool, default=True,
+                  doc="Soften the pair potential of an appearing or disappearing region. True is "
+                      "the MD-tools default, chosen by the user; it is not a claim that AMBER's "
+                      "own `ifsc` defaults to 1 (it defaults to 0). `false` selects ordinary "
+                      "linear mixing with no softening, which is only defined when no particle "
+                      "appears or disappears -- the Hamiltonian builder refuses it otherwise "
+                      "rather than softening behind your back."),
+            Field("softcore_function", str, default=SOFTCORE_FUNCTION,
+                  doc="The softcore functional form. `amber18` -- Amber18 manual section 21.1.5, "
+                      "equations 21.5-21.7 -- is the only one implemented. OpenFE's Gapsys "
+                      "default, its Beutler option and AMBER's later smoothstep variant are "
+                      "different functions and are refused BY NAME with what each one actually "
+                      "is, rather than mapped onto this one: a false label on a "
+                      "validated-looking number is the failure this refusal exists to prevent."),
+            Field("scalpha", float, default=SOFTCORE_DEFAULTS.scalpha, minimum=0.0,
+                  doc="The Lennard-Jones softening constant `alpha` of equations 21.5 and 21.6. "
+                      "Dimensionless, and strictly positive: zero is not a soft potential, it is "
+                      "the singular one."),
+            Field("scbeta", float, default=SOFTCORE_DEFAULTS.scbeta, minimum=0.0,
+                  unit="angstrom^2",
+                  doc="The electrostatic softening constant `beta` of equation 21.7, in SQUARE "
+                      "ANGSTROMS as an Amber mdin writes it (12.0 A^2 = 0.12 nm^2 internally). "
+                      "Strictly positive, for the reason `scalpha` gives."),
+            Field("sc_boundary_14", str, default=SOFTCORE_DEFAULTS.sc_boundary_14,
+                  enum=("scaled", "unscaled"),
+                  doc="1-4 exceptions BETWEEN a softcore particle and a common one. `scaled` "
+                      "mixes them between the end states like every other exception, so they "
+                      "vanish where the region is a dummy -- pmemd 20+ `gti_add_sc = 1`, the "
+                      "AMBER default since Amber20, and what keeps a dummy's partition function "
+                      "separable. `unscaled` keeps them at full strength at every lambda -- the "
+                      "Amber18 manual rule (`gti_add_sc = 0`), which the Amber20+ manual calls "
+                      "theoretically incorrect; it is kept so an Amber18 run can be reproduced. "
+                      "Exceptions INSIDE a region are unscaled under both. Every record says "
+                      "which rule ran, because the two are not the same experiment."),
+            Field("window_steps", int, default=0, minimum=0, unit="steps",
+                  doc="Production steps SAMPLED IN EACH WINDOW, after `equilibration_steps`. Every "
+                      "window runs the same length: a ladder whose windows differ in length is a "
+                      "set of estimates with different variances, and the estimators downstream "
+                      "have no column that says so."),
+            Field("equilibration_steps", int, default=0, minimum=0, unit="steps",
+                  doc="Steps run at the window's own Hamiltonian BEFORE the first sample, "
+                      "discarded. A window starts from a configuration equilibrated at some other "
+                      "lambda, so its first frames are not from its own ensemble. A multiple of "
+                      "`report_interval_steps`, so the sample grid starts on it."),
+            Field("report_interval_steps", int, default=0, minimum=0, unit="steps",
+                  doc="How often a window writes one sample: the configuration's energy at EVERY "
+                      "state of the path and the complete derivative at its own, which is what "
+                      "FEP, BAR, MBAR and TI all consume. It must divide `window_steps` exactly; "
+                      "a schedule that would have to be rounded is refused, because a final "
+                      "partial gap breaks the uniform spacing every downstream time-series "
+                      "analysis assumes and none of them can detect."),
+            Field("checkpoint_interval_steps", int, default=0, minimum=0, unit="steps",
+                  doc="How often the window commits a generation transaction -- the Context "
+                      "state, the step, and the committed prefix of the sample stream, together. "
+                      "A multiple of `report_interval_steps` so a committed generation never "
+                      "splits a report, and it must divide `window_steps` exactly."),
+            Field("minimize_iterations", int, default=0, minimum=0,
+                  doc="Minimiser ITERATIONS at the window's own state on a FRESH start, before "
+                      "velocities are drawn (0 = none). Iterations, not steps: minimisation does "
+                      "not integrate and has no timestep. It is part of the window's identity, so "
+                      "changing it is a different experiment rather than a different warm-up."),
+        ], doc="Alchemical free energy: fixed-lambda windows of one path between the two end "
+               "states of a topology plan.\n"
+               "WHAT IS HERE AND WHAT IS NOT. The two end states, the atom map, the environment "
+               "and the combined numbering are in the PLAN, which `md-openmm combine-topology` "
+               "wrote and which carries its own digests; this section says which path is walked "
+               "across it, where the windows sit on that path, how the pair potential is "
+               "softened, and how long each window samples. Nothing here restates a fact the plan "
+               "already holds -- a second copy of it would be the one that drifts.\n"
+               "The integrator, the temperature, the pressure and the timestep are in "
+               "`dynamics`, and the preparation chain is in `stages`, because a window is "
+               "ordinary dynamics at a fixed Hamiltonian and has no business owning a second set "
+               "of them.\n"
+               "Turning the windows' samples into a free energy is ANALYSIS and is deliberately "
+               "not configured here, exactly as WHAM and MBAR are not configured under "
+               "`umbrella`: the samples are what this engine produces."),
     ],
 )
 
@@ -394,6 +556,15 @@ def _check_protocol(resolved: dict[str, Any]) -> None:
             "dynamics.phase_space_printout is set but dynamics.tau is 0.0. A phase-space stream "
             "records complete samples of a SCALED rung's ensemble; from the unscaled Hamiltonian "
             "it would sample a rung nothing runs at.")
+    claimed = [key for key in ("backbone_scaling_list", "sidechain_scaling_list",
+                               "ligand_scaling_dict")
+               if (resolved.get("rest2") or {}).get(key) is not None]
+    if claimed and protocol != "REST2":
+        raise ConfigError(
+            f"rest2.{claimed[0]} is set but protocol is {protocol}. The selector keys are claims "
+            f"about the saved states of a REST2 ladder; {protocol} integrates no ladder, so the "
+            f"claim would check nothing. Remove it. (A fixed-tau stage on a selective state reads "
+            f"its region from that state's scaler.yaml.)")
     if (resolved.get("rest2") or {}).get("equilibration_per_tau"):
         if protocol != "REST2":
             raise ConfigError(
@@ -522,7 +693,7 @@ def _check_ais(resolved: dict[str, Any]) -> None:
         if not float(resolved["dynamics"]["tau"]) > 0.0:
             raise ConfigError(
                 "ais_source.generate is true but dynamics.tau is 0. The source stages run on V0, "
-                "the saved scaled state build/AIS/system_state0.xml, and dynamics.tau is the claim "
+                "the saved scaled state build/AIS/system_state1.xml, and dynamics.tau is the claim "
                 "about it they check -- at 0 they would run the built System, which is V1, and the "
                 "switch would go from V1 to itself. Set dynamics.tau to V0's tau.")
         steps = int(resolved["stages"]["production_steps"])
@@ -670,6 +841,184 @@ def _check_umbrella(resolved: dict[str, Any]) -> None:
             "a trajectory nobody can reweight; the restraint and the series are the point.")
 
 
+#: The resolved `alchemical` keys renamed from the names `WindowSettings` validates them under.
+#: The runtime owns the arithmetic -- divisibility, positivity, the equilibration grid -- and this
+#: layer owns the spelling, so a refusal quotes the key the reader actually wrote. Longest
+#: alternative first: `equilibration_steps` must match as a whole before `steps` can.
+_WINDOW_SETTING_NAMES = {
+    "equilibration_steps": "alchemical.equilibration_steps",
+    "checkpoint_interval": "alchemical.checkpoint_interval_steps",
+    "minimize_iterations": "alchemical.minimize_iterations",
+    "report_interval": "alchemical.report_interval_steps",
+    "steps": "alchemical.window_steps",
+}
+
+
+def _in_configuration_names(message: str) -> str:
+    import re
+
+    pattern = "|".join(sorted(_WINDOW_SETTING_NAMES, key=len, reverse=True))
+    return re.sub(rf"(?<![\w.]){pattern}(?![\w])",
+                  lambda hit: _WINDOW_SETTING_NAMES[hit.group(0)], message)
+
+
+def _lambda_values(stated: Any) -> tuple[float, ...]:
+    """The window progress coordinates a `lambda_values` string names, refusing what it cannot."""
+    if isinstance(stated, (int, float)):
+        raise ConfigError(
+            f"alchemical.lambda_values = {stated!r} names ONE window. A ladder runs between two "
+            f"end states, so it needs at least the two of them: write `0.0, 1.0` or more.")
+    text = str(stated).replace(",", " ").split()
+    values: list[float] = []
+    for word in text:
+        try:
+            values.append(float(word))
+        except ValueError:
+            raise ConfigError(
+                f"alchemical.lambda_values: {word!r} is not a number. The windows' progress "
+                f"coordinates are written out, comma- or space-separated: `0.0, 0.5, 1.0`."
+            ) from None
+    if len(values) < 2:
+        raise ConfigError(
+            f"alchemical.lambda_values = {stated!r} names {len(values)} window(s). A ladder runs "
+            f"between two end states, so it needs at least the two of them.")
+    for lower, upper in zip(values, values[1:]):
+        if not upper > lower:
+            raise ConfigError(
+                f"alchemical.lambda_values = {stated!r} does not strictly increase ({lower} is "
+                f"followed by {upper}). Two windows at the same s are one state sampled twice "
+                f"under two names, and every estimator downstream would treat them as a pair.")
+    if values[0] != 0.0 or values[-1] != 1.0:
+        raise ConfigError(
+            f"alchemical.lambda_values = {stated!r} runs {values[0]} -> {values[-1]}. A path runs "
+            f"from s = 0 (end state A) to s = 1 (end state B), and a ladder that stops short of "
+            f"an end state measures a free energy between a physical state and an arbitrary one. "
+            f"Begin at 0.0 and end at 1.0.")
+    return tuple(values)
+
+
+def _check_alchemical(resolved: dict[str, Any]) -> None:
+    """`alchemical.plan` and `protocol: alchemical` are given together or not at all, and the
+    window placement is one the path can be integrated on EXACTLY.
+
+    The refusals that belong to a value on its own -- a softcore function that is not Amber18, a
+    report interval that does not divide the window -- are delegated to the objects that enforce
+    them at run time (`SoftcoreSettings`, `WindowSettings`, `md_tools.alchemy.paths`), so the
+    configuration cannot accept a setting the runtime will refuse on the node, three stages of
+    equilibration later, and cannot refuse one the runtime would have accepted. What is checked
+    HERE is only what needs two keys at once.
+
+    The PLAN's contents are not read: that is `load_plan`'s job, under the rule `umbrella.file`
+    states -- reading it here would mean parsing it twice, and the second parse is the one the
+    run uses.
+    """
+    from ..alchemy.paths import PathError, linear_path, staged_path
+    from ..alchemy.softcore import SoftcoreError
+    from ..alchemy.windows import WindowError, WindowSettings
+
+    protocol = resolved["protocol"]
+    block = dict(resolved.get("alchemical") or {})
+    plan = block.get("plan")
+
+    if protocol != "alchemical":
+        defaults = _schema_defaults("alchemical")
+        stated = sorted(key for key, value in block.items()
+                        if value is not None and value != defaults.get(key))
+        if not stated:
+            return
+        raise ConfigError(
+            f"alchemical.{stated[0]} is set but protocol is {protocol}"
+            + (f" (with {', '.join('alchemical.' + k for k in stated[1:])})" if len(stated) > 1
+               else "")
+            + ". An alchemical ladder is a protocol, not a modifier: it samples fixed-lambda "
+              "windows of a path between two end states, and no other protocol has a second end "
+              "state to reach. Either run `protocol: alchemical` or remove the section.")
+
+    if not plan:
+        raise ConfigError(
+            "protocol is alchemical but alchemical.plan is not set. The plan IS the pair of end "
+            "states -- `md-openmm combine-topology` writes it, and without one there is nothing "
+            "to transform into anything.")
+
+    count = int(block.get("number_of_windows") or 0)
+    stated_values = block.get("lambda_values")
+    if count and stated_values is not None:
+        raise ConfigError(
+            f"alchemical.number_of_windows = {count} and alchemical.lambda_values = "
+            f"{stated_values!r} both place the windows. Give one: an evenly spaced count, or the "
+            f"coordinates written out.")
+    if not count and stated_values is None:
+        raise ConfigError(
+            "protocol is alchemical but neither alchemical.number_of_windows nor "
+            "alchemical.lambda_values is set, so the ladder has no windows. Give one of them.")
+    if count:
+        if count < 2:
+            raise ConfigError(
+                f"alchemical.number_of_windows = {count}. A ladder runs between two end states, "
+                f"so it needs at least the two of them (s = 0 and s = 1).")
+        s_values = tuple(index / (count - 1) for index in range(count))
+    else:
+        s_values = _lambda_values(stated_values)
+
+    # THE REAL PATH OBJECT, built through the module that owns the rule, so "a window on every
+    # knot" is the runtime's own check rather than a second description of it. The endpoint labels
+    # are placeholders: a path's endpoints are named from the plan, which is not read here.
+    knot = block.get("staged_knot")
+    if block.get("lambda_path") == "staged":
+        if knot is None:
+            raise ConfigError(
+                "alchemical.lambda_path is `staged` but alchemical.staged_knot is not set. A "
+                "staged path moves electrostatics and then sterics, and the knot is where the "
+                "first hands over to the second; there is no default for it, because a wrong "
+                "guess is a path nobody chose.")
+        if not 0.0 < float(knot) < 1.0:
+            raise ConfigError(
+                f"alchemical.staged_knot = {knot} is not strictly between 0 and 1. At 0 or 1 one "
+                f"of the two stages has zero width, which is a linear path with a component that "
+                f"never moves -- say that with `lambda_path: linear` instead.")
+        path = staged_path([(ALCHEMICAL_COMPONENTS[0], float(knot)),
+                            (ALCHEMICAL_COMPONENTS[1], 1.0)],
+                           endpoint_a="A", endpoint_b="B")
+    else:
+        if knot is not None:
+            raise ConfigError(
+                f"alchemical.staged_knot = {knot} is set but alchemical.lambda_path is "
+                f"`linear`, which has no knot: every component moves over the whole path. Set "
+                f"`lambda_path: staged` or remove the knot.")
+        path = linear_path(ALCHEMICAL_COMPONENTS, endpoint_a="A", endpoint_b="B")
+
+    try:
+        path.require_knots_sampled(s_values)
+    except PathError as refusal:
+        arithmetic = ""
+        if count and knot is not None:
+            # The count that WOULD land on the knot, spelled out. A refusal that only says "no"
+            # leaves the reader to rediscover 1/(N-1) for themselves.
+            position = float(knot) * (count - 1)
+            arithmetic = (
+                f" alchemical.number_of_windows = {count} spaces the windows 1/{count - 1} apart, "
+                f"so the knot at s = {knot} falls at window {position:g}, which is not one. "
+                f"Choose a count N for which {knot} * (N - 1) is a whole number, or place the "
+                f"windows with alchemical.lambda_values.")
+        raise ConfigError(f"alchemical: {refusal}{arithmetic}") from None
+
+    try:
+        SoftcoreSettings.from_mapping(
+            {key: block[key] for key in ("sc", "softcore_function", "scalpha", "scbeta",
+                                         "sc_boundary_14") if key in block})
+    except SoftcoreError as refusal:
+        raise ConfigError(str(refusal)) from None
+
+    try:
+        WindowSettings(steps=int(block.get("window_steps") or 0),
+                       report_interval=int(block.get("report_interval_steps") or 0),
+                       checkpoint_interval=int(block.get("checkpoint_interval_steps") or 0),
+                       equilibration_steps=int(block.get("equilibration_steps") or 0),
+                       minimize_iterations=int(block.get("minimize_iterations") or 0))
+    except WindowError as refusal:
+        raise ConfigError(f"alchemical: {_in_configuration_names(str(refusal))}") from None
+
+
 def _check_collective_variables(resolved: dict[str, Any]) -> None:
     """`file` and `interval_steps` are given together or not at all.
 
@@ -706,7 +1055,7 @@ def _check_collective_variables(resolved: dict[str, Any]) -> None:
 
 
 MD_SCHEMA.checks = (_check_protocol, _check_timestep, _check_collective_variables,
-                    _check_umbrella)
+                    _check_umbrella, _check_alchemical)
 
 
 def _refuse_archived_rrest2(document: dict[str, Any]) -> None:
@@ -1189,6 +1538,12 @@ _IN_SECTIONS = {
     # Umbrella is cMD with biases, so it writes cMD's block and adds the restraint file.
     "umbrella": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables",
                             "umbrella")),),
+    # A window is ordinary dynamics at a fixed Hamiltonian, so it reads &cntrl exactly as a cMD
+    # run does -- the integrator, the temperature, the preparation chain -- and states what makes
+    # it alchemical in its own block. `&alchemical` and not more keys in &cntrl: the section is
+    # read by one protocol, as `&remd` and `&AIS` are, and an input reads as one block per idea.
+    "alchemical": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables")),
+                   ("alchemical", ("alchemical",))),
 }
 
 
@@ -1463,7 +1818,7 @@ def _method_neutral(resolved: dict[str, Any]) -> dict[str, Any]:
     """
     neutral = dict(resolved)
     neutral["protocol"] = MD_SCHEMA.fields["protocol"].default
-    for block in ("rest2", "ais", "ais_source", "umbrella"):
+    for block in ("rest2", "ais", "ais_source", "umbrella", "alchemical"):
         if block in neutral:
             neutral[block] = _schema_defaults(block)
     return neutral
@@ -1814,7 +2169,11 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
         previous = None
         hot = any(float(stage.get("tau") or 0.0) > 0.0 for stage in plan)
         if hot:
-            state = f"build/{resolved['protocol']}/system_state0.xml"
+            # AIS writes BOTH end states: state 0 is tau 0 (V1, physical) and state 1 is the
+            # scaled end state (V0). Every other method's hot state is its state 0. The index
+            # ascends with tau in all of them, which is the whole point of the arrangement.
+            hot_index = 1 if resolved["protocol"] == "AIS" else 0
+            state = f"build/{resolved['protocol']}/system_state{hot_index}.xml"
             lines += [
                 "# The hot stages integrate the SAVED scaled state; a stage scales nothing and",
                 "# checks its tau against the scaler.yaml beside that file. Minimisation uses the",
@@ -1826,6 +2185,19 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
                 '  echo "run.sh: no scaled state at ${SCALED_SYSTEM}" >&2; exit 2',
                 'fi',
                 '']
+            if resolved["protocol"] == "AIS":
+                v1 = f"build/{resolved['protocol']}/system_state0.xml"
+                lines += [
+                    "# V1, the physical end state, is a SAVED state too -- written by the same",
+                    "# scaler run as V0, so both end states have one writer and scaler.yaml",
+                    "# records a digest for each. It is tau 0, so it is the built System's",
+                    "# Hamiltonian; it is named here rather than as build/built.xml because an",
+                    "# AIS pair must agree in force layout, and one writer makes that structural.",
+                    f'V1_STATE="${{HERE}}/../{v1}"',
+                    'if [[ ! -f "${V1_STATE}" ]]; then',
+                    '  echo "run.sh: no physical end state at ${V1_STATE}" >&2; exit 2',
+                    'fi',
+                    '']
         for stage in plan:
             target = targets[stage["name"]]
             system_var = ('"${SCALED_SYSTEM}"' if float(stage.get("tau") or 0.0) > 0.0
@@ -1858,7 +2230,8 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
                 '',
                 'echo "== AIS =="',
                 '"${LAUNCH[@]}" md-openmm md-run -i ../input/AIS.in \\',
-                '  -p "${TOPOLOGY}" -s "${SCALED_SYSTEM}" -p2 "${TOPOLOGY}" -s2 "${SYSTEM}" \\',
+                '  -p "${TOPOLOGY}" -s "${SCALED_SYSTEM}" -p2 "${TOPOLOGY}" '
+                '-s2 "${V1_STATE}" \\',
                 '  -o AIS.out -log AIS.log "$@"',
                 '']
         if protocol == "REST2":
@@ -1944,7 +2317,8 @@ raise SystemExit(run_generated_remd(__file__, protocol="{protocol}"))
 '''
 
 
-def _saved_ladder_states(resolved: dict[str, Any], dataset) -> dict[str, Any]:
+def _saved_ladder_states(resolved: dict[str, Any], dataset, *,
+                         config_dir: Path | None = None) -> dict[str, Any]:
     """The saved scaled states a REST2 ladder integrates, checked before anything is written.
 
     A ladder scales nothing (docs/amber-like-fix/REST2-scaler.md, step 4): its states are
@@ -1992,8 +2366,54 @@ def _saved_ladder_states(resolved: dict[str, Any], dataset) -> dict[str, Any]:
             f"{len(taus)} at tau {taus}. A ladder scales nothing, so its configuration must "
             f"describe the states it will integrate: change the configuration, or rebuild the "
             f"states:\n{command}")
+    selection = _check_claimed_region(resolved, dataset, record, record_path, command,
+                                      config_dir=config_dir or Path.cwd())
     return {"directory": directory, "record": record_path, "taus": taus,
-            "files": [directory / state_system_name(index) for index in range(len(taus))]}
+            "files": [directory / state_system_name(index) for index in range(len(taus))],
+            "selection": selection}
+
+
+def _check_claimed_region(resolved: dict[str, Any], dataset, record: dict[str, Any],
+                          record_path: Path, command: str, *, config_dir: Path):
+    """The selector keys of a REST2 configuration are CLAIMS, checked as the tau ladder is.
+
+    The region is chosen by `build-top --rest2-scaler`, the one place a scaled Hamiltonian is
+    made, and recorded in scaler.yaml. A claim here is resolved through the one resolver and
+    compared with that record by `rest2.regions.claimed_region_differences`, the one comparison;
+    build-md scales and re-derives nothing. Returns the recorded selection document.
+    """
+    import json
+
+    from ..rest2.regions import SELECTOR_KEYS, claimed_region_differences, has_selectors
+    from ..rest2.selection import SelectionError
+
+    rest2 = resolved.get("rest2") or {}
+    claim = {key: rest2[key] for key in SELECTOR_KEYS if rest2.get(key) is not None}
+    document = record.get("selection")
+    if not has_selectors(claim):
+        return document
+    from openmm.app import PDBFile
+
+    topology = PDBFile(str(dataset.built("pdb"))).topology
+    mapping_path = dataset.build / "ligand_mapping.json"
+    ligand_mapping = (json.loads(mapping_path.read_text(encoding="utf-8"))
+                      if mapping_path.is_file() else None)
+    try:
+        differences = claimed_region_differences(
+            topology, claim, config_dir=config_dir, ligand_mapping=ligand_mapping,
+            implicit=resolved["solvent"] == "implicit", selection_document=document)
+    except SelectionError as refusal:
+        raise ConfigError(f"rest2 selector claim: {refusal}") from None
+    if differences:
+        raise ConfigError(
+            f"this configuration claims a selective REST2 region that is not the one "
+            f"{record_path} was built with:\n"
+            + "".join(f"  - {line}\n" for line in differences)
+            + "A ladder scales nothing, so its configuration must describe the states it will "
+              "integrate: change the rest2 selector keys (or remove them to accept the "
+              f"recorded region), or rebuild the states with a scaler.config that names this "
+              f"region:\n{command}")
+    return document
 
 
 def _sha256_file(path) -> str:
@@ -2025,6 +2445,39 @@ def _refuse_vacuum_system(system_path: Path) -> None:
         f"implicit solvent.")
 
 
+
+#: The dataset-level inputs every run reads, linked into each run directory.
+SHARED_INPUTS = ("build", "input", "min")
+
+
+def _link_shared_inputs(run_root: Path) -> None:
+    """`build -> ../build`, `input -> ../input`, `min -> ../min`, relative, inside a run directory.
+
+    The generated scripts already reach these by relative path (`-p ../build/built.pdb`), so the
+    links add nothing a run NEEDS. They make the run directory self-describing to anything that
+    walks the tree without reading run.sh -- which is what a dataset manifest declaring components
+    BY PATH does, and the convention hpREST2 settled on 2026-09-29.
+
+    RELATIVE, always. An absolute link is the one failure this cannot be allowed to reproduce: a
+    0.5.4-era `REST2-run1/build` pointed into an absolute project path and broke the moment the
+    dataset was relocated, which `data-register` does by design.
+
+    Never overwrites. A real directory of that name is left exactly as it is -- replacing data
+    with a link is a deliberate act, not something a build step does on the way past -- and an
+    existing link is left alone rather than re-pointed. A missing target is not an error either:
+    `min/` does not exist until a minimisation has run, and a link that dangles today resolves
+    once it does.
+    """
+    for name in SHARED_INPUTS:
+        here = run_root / name
+        if here.exists() or here.is_symlink():
+            continue
+        try:
+            here.symlink_to(Path("..") / name, target_is_directory=True)
+        except OSError:
+            # A filesystem without symlinks is not a reason to fail a build: nothing reads these.
+            return
+
 def build_scripts(*, config_path: Path | None, out_dir: Path,
                   overwrite: bool = False, echo: bool = True) -> dict[str, Any]:
     """Generate one run. `out_dir` is the RUN directory; returns the record written in it.
@@ -2039,6 +2492,20 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
     from ..layout import DatasetLayout, RunLayout
 
     resolved = resolve_md_config(config_path)
+    # THE CONFIGURATION IS WIRED AND THE SCRIPT GENERATION IS NOT, and this says so rather than
+    # writing a directory that looks like an alchemical run. `stage_plan` would hand back the
+    # preparation chain alone -- minimisation and equilibration, correct in themselves -- and a
+    # `run.sh` built from it would run to completion having sampled no window at all. A generated
+    # directory is a claim about what it runs.
+    if resolved["protocol"] == "alchemical":
+        raise ConfigError(
+            "protocol: alchemical resolves, but `build-md` does not yet write the per-window run "
+            "scripts for it.\n"
+            "  The configuration, its refusals and the `.in` language are in place, and "
+            "`md_tools.alchemy.windows.run_window` runs a window; what is missing is the step "
+            "between them, which is the next piece of work (0.7.0, X1).\n"
+            "  Generating the chain anyway would give you a run directory whose scripts "
+            "minimise, equilibrate and stop -- a complete-looking run that sampled no window.")
     run_root = Path(out_dir)
     # REFUSED IF IT EXISTS AT ALL, not merely if it is non-empty. A run directory is an identity:
     # `REST2-run1` names one experiment, and generating a second one into it would leave two sets
@@ -2081,7 +2548,19 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
 
     ladder_states = None
     if resolved["protocol"] == "REST2":
-        ladder_states = _saved_ladder_states(resolved, dataset)
+        ladder_states = _saved_ladder_states(
+            resolved, dataset,
+            config_dir=Path(config_path).parent if config_path is not None else Path.cwd())
+        # The claim has done its job: it was checked against the states, and the region the run
+        # integrates is recorded in their scaler.yaml. It is not a run setting, so it is not
+        # carried into resolved.config or any generated input -- which could not express it, and
+        # whose `md-run` would refuse it by name. build-md.log records what was claimed.
+        claimed_region = {key: resolved["rest2"][key] for key in
+                          ("backbone_scaling_list", "sidechain_scaling_list", "ligand_scaling_dict")
+                          if resolved["rest2"].get(key) is not None}
+        for key in claimed_region:
+            resolved["rest2"][key] = None
+        ladder_states["claimed_region"] = claimed_region
 
     # THE WHOLE CHAIN, VALIDATED BEFORE THE FIRST SCRIPT IS WRITTEN.
     #
@@ -2114,13 +2593,21 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
     from ..run.preflight import PreflightError, validate_generated_chain
 
     # THE SAVED STATE a hot stage integrates, required before anything is written. A stage
-    # scales nothing (user, 2026-09-16): with tau > 0 it runs on build/<protocol>/system_state0.xml,
-    # which `build-top --rest2-scaler` writes, and checks its tau against the record beside it.
+    # scales nothing (user, 2026-09-16): with tau > 0 it runs on the saved scaled state that
+    # `build-top --rest2-scaler` writes, and checks its tau against the record beside it.
+    #
+    # WHICH state that is differs by method, because the index ascends with tau. AIS writes both
+    # end states -- state 0 at tau 0 (V1) and state 1 at tau_max (V0) -- so its hot stages run on
+    # state 1. Every other method's hot state is its state 0.
     hot_state = None
     if any(float(stage.get("tau") or 0.0) > 0.0 for stage in chain_plan):
         from ..rest2.states import state_system_name
 
-        hot_state = dataset.build / resolved["protocol"] / state_system_name(0)
+        hot_index = 1 if resolved["protocol"] == "AIS" else 0
+        schedule = ("n_states: 2, tau_min: 0.0, tau_max = "
+                    f"{resolved['dynamics']['tau']}" if resolved["protocol"] == "AIS"
+                    else f"n_states: 1, tau_min = tau_max = {resolved['dynamics']['tau']}")
+        hot_state = dataset.build / resolved["protocol"] / state_system_name(hot_index)
         if not hot_state.is_file():
             raise ConfigError(
                 f"this {resolved['protocol']} run declares dynamics.tau = "
@@ -2128,9 +2615,8 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
                 f"and there is none at {hot_state}. A stage no longer scales in memory. Build it "
                 f"first:\n  md-openmm build-top --rest2-scaler -s {dataset.built('xml')} "
                 f"-p {dataset.built('pdb')} --config <scaler.config with method: "
-                f"{resolved['protocol']}, n_states: 1, tau_min = tau_max = "
-                f"{resolved['dynamics']['tau']}>\n(expected build/{resolved['protocol']}/"
-                f"{state_system_name(0)})")
+                f"{resolved['protocol']}, {schedule}>\n(expected build/{resolved['protocol']}/"
+                f"{state_system_name(hot_index)})")
 
     chain = []
     for stage in chain_plan:
@@ -2152,6 +2638,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         raise ConfigError(str(refusal)) from None
 
     run_root.mkdir(parents=True, exist_ok=True)
+    _link_shared_inputs(run_root)
     # Kept as `out_dir` below: the cv/umbrella copies, the build log and the generated helpers all
     # belong to this run and stay at its root.
     out_dir = run.root
@@ -2573,6 +3060,17 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         log.field("record", str(ladder_states["record"]))
         for index, (tau, path) in enumerate(zip(ladder_states["taus"], ladder_states["files"])):
             log.field(f"state {index}", f"tau {tau:g}  {path}")
+        selection = ladder_states.get("selection") or {}
+        mode = selection.get("mode") or selection.get("selection_mode")
+        log.field("hot region", "the whole solute (legacy)" if mode in (None, "legacy-full-solute")
+                  else f"{mode}, as recorded in the saved states")
+        if ladder_states.get("claimed_region"):
+            log.field("claimed region", f"{ladder_states['claimed_region']} -- agrees with the "
+                                        f"saved states")
+        if mode not in (None, "legacy-full-solute"):
+            from ..rest2.regions import print_residue_map
+
+            print_residue_map(selection, echo=log)
 
     log.heading("Outputs")
     for name in written:

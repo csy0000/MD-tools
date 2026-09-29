@@ -718,7 +718,7 @@ def test_no_stale_netcdf_ais_source_example_survives():
 
 def test_no_document_claims_cpu_can_only_come_from_the_command_line():
     """A machine-wide CPU default exists now, so `--cpu` is not the only way to reach the CPU."""
-    for page in (REPO / "README.md", REPO / "CLAUDE.md", REPO / "docs" / "md-run.md"):
+    for page in (REPO / "README.md", REPO / "CLAUDE.md", REPO / "docs" / "basics" / "md-run.md"):
         text = page.read_text(encoding="utf-8")
         for claim in ("the only way to ask for a CPU run",
                       "is the only public CPU opt-in",

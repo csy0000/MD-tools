@@ -121,7 +121,7 @@ by reading prose.
 | the same | `unknown` was reported as `requested-not-detected`: being-asked outranked not-being-able-to-tell |
 | the forced arm | a forced verdict recorded a bare `verified` beside a daemon that was not running; `forced` is now its own field and the seam warns on stderr |
 
-Two properties of MPS itself were learned the same way and are now in `docs/md-run.md`: a daemon on
+Two properties of MPS itself were learned the same way and are now in `docs/basics/md-run.md`: a daemon on
 the DEFAULT pipe directory captures every new CUDA process on the host, and a client addresses the
 daemon's devices as `0..n-1` of the set the daemon was started with — asking for the physical
 numbers gives `CUDA_ERROR_NO_DEVICE (100)` on a card `nvidia-smi` shows idle and healthy.

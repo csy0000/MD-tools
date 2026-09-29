@@ -378,6 +378,30 @@ NEW_IN_THIS_LAYOUT = {
 PROTOCOL_HELPER_BEFORE = "e764ac0f085c49108b6fef9c6daa8580b662078bacc6d93e0255a742cbe86041"
 
 
+def _without_the_alchemical_block(text: str, name: str) -> str:
+    """`resolved.config` without its `alchemical:` section, which must be entirely defaults.
+
+    0.7.0 added the section, and every schema Section resolves whether or not a document mentions
+    it -- so a ladder's `resolved.config` gained sixteen lines about a protocol it does not run.
+    The block is ASSERTED to be the schema's own defaults and then removed, rather than the
+    digests below being regenerated: a re-baselined digest would also absorb a real change to the
+    ladder's own bytes, which is the one thing this test exists to catch. The same reasoning the
+    `equilibration_per_tau` and selective-REST2 lines above are handled under.
+    """
+    from md_tools.build.md import MD_SCHEMA
+
+    lines = text.splitlines(keepends=True)
+    start = next((i for i, line in enumerate(lines) if line.rstrip("\n") == "alchemical:"), None)
+    assert start is not None, f"{name} carries no alchemical: block"
+    end = start + 1
+    while end < len(lines) and lines[end].startswith((" ", "\t")):
+        end += 1
+    block = yaml.safe_load("".join(lines[start:end]))["alchemical"]
+    assert block == {n: f.default for n, f in MD_SCHEMA.sections["alchemical"].fields.items()}, (
+        f"{name}: a REST2 ladder resolved a non-default alchemical setting: {block}")
+    return "".join(lines[:start] + lines[end:])
+
+
 @pytest.mark.parametrize("solvent", ["explicit", "implicit"])
 def test_off_leaves_every_generated_file_as_it_was(tmp_path, solvent):
     out = _build_md(tmp_path, {"protocol": "REST2", "solvent": solvent})
@@ -396,6 +420,17 @@ def test_off_leaves_every_generated_file_as_it_was(tmp_path, solvent):
         # The `.in` files and `resolved.config` gain exactly one line when the setting exists but
         # is off. The preparation inputs are the exception: they carry no `&remd` at all now, so
         # there is no `equilibration_per_tau` line in them to take out.
+        if name.endswith("resolved.config"):
+            text = _without_the_alchemical_block(text, name)
+            # 0.6.1 added the three selective-REST2 claim keys to `rest2:`. Off, they are null,
+            # and they are the ONLY other new lines: stripping them must give 0.6.0's bytes.
+            selectors = ("backbone_scaling_list:", "sidechain_scaling_list:",
+                         "ligand_scaling_dict:")
+            claimed = [line for line in text.splitlines() if line.strip().startswith(selectors)]
+            assert len(claimed) == 3 and all(line.rstrip().endswith("null")
+                                             for line in claimed), (name, claimed)
+            text = "".join(line for line in text.splitlines(keepends=True)
+                           if not line.strip().startswith(selectors))
         if name.endswith("resolved.config") or name in ("input/REST2.in",):
             added = [line for line in text.splitlines() if "equilibration_per_tau" in line]
             assert len(added) == 1 and "false" in added[0], (name, added)

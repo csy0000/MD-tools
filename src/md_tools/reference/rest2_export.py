@@ -337,6 +337,14 @@ def main():
     solute = [int(i) for i in derivation["solute_atom_indices"]]
     excluded = [tuple(int(a) for a in pair) for pair in derivation["excluded_bonds"]]
     impropers = bool(derivation["unscaled_impropers"])
+    # A SELECTIVE ladder (0.6.1) records its hot atoms, torsion central bonds and CMAP terms;
+    # without them the rungs are the whole-solute ones.
+    selective = {}
+    if derivation.get("torsion_central_bonds") is not None:
+        solute = [int(i) for i in derivation["scaled_atom_indices"]]
+        selective = {"torsion_central_bonds": [tuple(int(a) for a in pair) for pair in
+                                               derivation["torsion_central_bonds"]],
+                     "cmap_terms": [int(i) for i in derivation["cmap_terms"]]}
     base = XmlSerializer.deserialize((HERE / "system_unscaled.xml").read_text(encoding="utf-8"))
 
     differing = []
@@ -345,7 +353,7 @@ def main():
             (HERE / f"system_rung{index}.xml").read_text(encoding="utf-8")))
         rebuilt = XmlSerializer.serialize(
             build_scaled_system(base, solute, float(tau), excluded_bonds=excluded,
-                                unscaled_impropers=impropers))
+                                unscaled_impropers=impropers, **selective))
         same = rebuilt == bundled
         print(f"rung {index}  tau {float(tau):<10g} {'identical' if same else 'DIFFERS'}")
         if not same:
@@ -542,6 +550,22 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
     torsions = scaler["unscaled_torsions"]
     excluded = [tuple(int(a) for a in bond) for bond in torsions["unscaled_central_bonds"]]
     impropers = bool(torsions["unscaled_impropers"])
+    # A SELECTIVE record (0.6.1): the rungs were built from `scaler_arguments`, whose hot atoms
+    # are not the solute and whose torsions and CMAP terms are named. Carried into the
+    # derivation so verify_rungs.py rebuilds what ran; absent for the whole-solute ladder, whose
+    # bundle is unchanged.
+    arguments = scaler.get("scaler_arguments") or {}
+    selective_derivation = {}
+    if arguments.get("torsion_central_bonds") is not None:
+        excluded = [tuple(int(a) for a in bond) for bond in arguments["excluded_bonds"]]
+        selective_derivation = {
+            "selection_mode": "explicit",
+            "selection_sha256": scaler.get("selection_sha256"),
+            "scaled_atom_indices": [int(i) for i in arguments["solute_indices"]],
+            "torsion_central_bonds": [[int(a), int(b)] for a, b in
+                                      arguments["torsion_central_bonds"]],
+            "cmap_terms": [int(i) for i in arguments["cmap_terms"]],
+        }
     from ..rest2.scaler import UnclassifiedForceError, audit_force_classes
 
     try:
@@ -655,6 +679,7 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
             "solute_atom_indices": [int(i) for i in solute],
             "excluded_bonds": [[int(a), int(b)] for a, b in excluded],
             "unscaled_impropers": impropers,
+            **selective_derivation,
         },
         "note": "The modules in ladder/ are byte-for-byte copies of md_tools/remd/* and "
                 "md_tools/rest2/hamiltonian.py at `ladder_modules_from` -- the exporter's commit, "

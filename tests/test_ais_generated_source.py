@@ -143,9 +143,17 @@ def test_one_run_sh_minimises_the_built_system_and_runs_everything_else_on_v0(ge
     assert '-s "${SYSTEM}"' in calls[0] and "SCALED_SYSTEM" not in calls[0]
     for block in calls[1:5]:
         assert '-s "${SCALED_SYSTEM}"' in block
-    assert '-s "${SCALED_SYSTEM}" -p2 "${TOPOLOGY}" -s2 "${SYSTEM}"' in calls[5]
+    assert '-s "${SCALED_SYSTEM}" -p2 "${TOPOLOGY}" -s2 "${V1_STATE}"' in calls[5]
     assert "-source-traj" not in calls[5]
-    assert 'SCALED_SYSTEM="${HERE}/../build/AIS/system_state0.xml"' in text
+
+    # BOTH end states are saved files from one scaler run, and the index ascends with tau in
+    # every method: state 0 is tau 0 and state 1 is tau_max. So AIS's HOT state -- V0, what the
+    # source ensemble samples -- is state 1, and V1 is state 0. AIS wrote only the scaled state
+    # before 0.6.1, as system_state0.xml, which made state 0 unphysical for AIS and physical for
+    # REST2. Pinned here because the two numbers invert: V0 is state1, V1 is state0.
+    assert 'SCALED_SYSTEM="${HERE}/../build/AIS/system_state1.xml"' in text
+    assert 'V1_STATE="${HERE}/../build/AIS/system_state0.xml"' in text
+    assert '-s2 "${SYSTEM}"' not in text, "V1 must be the saved state, not build/built.xml"
 
 
 def test_the_resolved_configuration_names_the_source_stage_stream(generated):

@@ -136,9 +136,16 @@ def build_forcefield_record(*, resolved: dict[str, Any], route: str, record: dic
             # Whether the ACE surface-area nonpolar term is in the Hamiltonian. Recorded because
             # the two choices differ by ~16 kJ/mol and because ParmEd and OpenMM default
             # differently: a bundle that does not say is a bundle nobody can reproduce.
+            # The legacy fallback stays False, and deliberately does not follow the configuration
+            # default. An absent key means a record written before the nonpolar term worked at
+            # all, and those builds have no ACE term in them; defaulting it to today's True would
+            # relabel every one of them as something they are not.
             "nonpolar_sasa": implicit_report.get(
                 "nonpolar_sasa", implicit_solvent.get("nonpolar_sasa", False)),
             "nonpolar_model": implicit_report.get("nonpolar_model"),
+            # The method BY NAME and the surface tension WITH ITS UNITS. A bool stopped
+            # identifying this Hamiltonian the moment the tension became adjustable.
+            "nonpolar": implicit_report.get("nonpolar"),
             "polar_reference": "GB-Neck2 (Nguyen, Roe & Simmerling, JCTC 2013); Amber igb=8",
             # Measured on the built CustomGBForce: which atoms carry parameters from the GB-Neck2
             # fit and which carry ParmEd's generic fallback. See implicit.gb_parameter_coverage.
@@ -328,7 +335,22 @@ def _hmr_inconsistent(constraints, build, hmr):
 
 
 def _implicit_support_status(*, is_ligand: bool, coverage: dict[str, Any]) -> dict[str, Any]:
-    """`supported` or `experimental`, decided by what was measured, not by the route label."""
+    """`supported` or `experimental`, decided by what was measured, not by the route label.
+
+    `amber_igb8_parity_claimed` and `amber_igb8_parity_basis` are GONE (0.6.2). They asserted
+    bit-for-bit equivalence with another program, and this package has never run that program:
+    no test, no evidence page and no release note ever compared an md-tools implicit energy with
+    a `pmemd` one. The value was computed from `status == "supported"`, which comes from a route
+    label plus an element-coverage check -- premises about the INGREDIENTS Amber would use, which
+    say nothing about whether the two produce the same energy. That is the only thing "parity"
+    means to whoever cites it, and `forcefield.json` is exactly the file someone quotes when
+    comparing an md-tools number against a published Amber one.
+
+    Nothing branched on it and no schema carried it, so removing it loses no capability. What the
+    record can actually stand behind is already beside it and is all verifiable: `implicit_model`,
+    `radii`, `radius_assignment_method`, `nonpolar` and `parameter_coverage`. A reader who needs
+    the comparison can make it; the record no longer makes it for them without having looked.
+    """
     measured = bool(coverage.get("measured"))
     fully_covered = bool(coverage.get("all_atoms_covered_by_gbn2_fit"))
     if measured and not fully_covered:
@@ -337,16 +359,7 @@ def _implicit_support_status(*, is_ligand: bool, coverage: dict[str, Any]) -> di
         status, note = "experimental", _IMPLICIT_EXPERIMENTAL_LIGAND
     else:
         status, note = "supported", _IMPLICIT_SUPPORTED
-    return {
-        "support_status": status,
-        "support_note": note,
-        # The exact-parity claim, stated only where the evidence supports it.
-        "amber_igb8_parity_claimed": bool(status == "supported"),
-        "amber_igb8_parity_basis": (
-            "ff14SB topology from tleap with PBRadii mbondi3, GBn2 with useSASA=False, matching "
-            "igb=8 with gbsa=0" if status == "supported" else
-            "not claimed: see support_note and parameter_coverage"),
-    }
+    return {"support_status": status, "support_note": note}
 
 
 def _box_geometry_record(geometry: dict[str, Any]) -> dict[str, Any]:

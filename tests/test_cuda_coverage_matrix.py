@@ -221,43 +221,43 @@ CUDA_SITES = {
         "test_cv_mpi_cuda_lanes.py::test_cv_continuation_under_mpi_on_cuda"),
     "alchemy/windows.py::run_window": (
         "builds the sampling Simulation on the platform `preflight_stage` resolved (`checked.acceleration`, never a platform string), loads a checkpoint or sets coordinates, sets the window's state, and integrates it in checkpoint-sized chunks",
-        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed at "
         "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::run_window.commit": (
         "saves the sampling Context's checkpoint through `commit_generation`, binding the sample stream's committed prefix; on CUDA a device-to-host copy of the whole Context state",
-        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed at "
         "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::CrossStateEvaluator.__init__": (
         "creates the SECOND Context, the evaluation Context, over a copy of the Hamiltonian's System, on the Platform object and properties the caller passes -- `run_window` passes the preflight's resolution",
-        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed at "
         "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::CrossStateEvaluator.evaluate": (
         "pushes the sampled positions and box into the evaluation Context and, per state, sets the Hamiltonian's parameters and evaluates the energy; then the complete derivative at the origin state -- K+1 or more energy evaluations per report",
-        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed at "
         "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::SampleStreamReporter.report": (
         "reads positions, box and energy out of the State the sampling Context produced for this report, and drives the evaluation Context through `CrossStateEvaluator.evaluate`",
-        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed at "
         "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::_set_initial_coordinates": (
         "writes the starting State (or PDB positions and box) into the sampling Context",
-        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed at "
         "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::ParametricHamiltonian.set_state": (
         "sets Context global parameters on whatever Context it is given -- the sampling or the evaluation one",
-        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed at "
         "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::ParametricHamiltonian.derivatives": (
         "sets the state and reads OpenMM energy-parameter derivatives off the Context it is given",
-        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed at "
         "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::ComposedHamiltonian.set_state": (
         "delegates to the inner Hamiltonian's set_state and sets `lambda_restraints` on the Context it is given",
-        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed at "
         "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/windows.py::ComposedHamiltonian.derivatives": (
         "the inner Hamiltonian's derivatives plus a restricted parameter-derivative evaluation of force group 16 (the Boresch restraint) on the Context it is given",
-        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed, card 4, at "
+        "test_alchemy_windows_cuda.py (S4 acceptance row G1; PASS on CUDA mixed at "
         "d65d4f0 -- run with --error-on-skip)"),
     "alchemy/hamiltonian.py::AlchemicalHamiltonian.set_state": (
         "sets every public and derived Context parameter of the softcore Hamiltonian on the Context it is given -- the caller's, whose platform came from platform_policy (S4's sampling or evaluation Context); it reads the Context's parameter names first and refuses a Context missing any",
@@ -386,6 +386,51 @@ NON_CUDA_CONTEXT_SITES = {
         "OBJECTS, not `State.getForces` -- only to see whether the System is periodic and carries "
         "a GB force, so build-md can refuse a vacuum build before writing anything. No Context "
         "exists and nothing is evaluated.",
+    "build/scaler.py::_proper_central_bonds":
+        "matched as `derive` by `system.getForces()`, which is the System's own list of Force "
+        "objects, not `State.getForces()`. It walks every PeriodicTorsionForce term and keeps the "
+        "central bond of each PROPER torsion, so that `unscaled_list` and `scaled_list` can refuse "
+        "a bond no torsion runs across -- which is what makes a topology INDEX safe to write into "
+        "a configuration, since after a rebuild the same number is a different atom. Pure graph "
+        "arithmetic on the host during `md-openmm build-top --rest2-scaler`, before any Context "
+        "exists, and it asks no device for anything.",
+    "openmm/implicit.py::set_ace_surften":
+        "matched as `derive` by `system.getForces()`, which is the System's own list of Force "
+        "objects, not `State.getForces()`. It rewrites the surface-tension prefactor inside the "
+        "ACE energy term of the built `CustomGBForce` -- a string substitution in an energy "
+        "EXPRESSION, done on the host during `md-openmm build-top`, before any Context exists. It "
+        "asks no device for anything, and the System it edits is then serialised to XML.",
+    "reference/standalone_build.py::set_ace_surften":
+        "the same substitution, duplicated on purpose: a reference bundle's `build_system.py` "
+        "imports nothing from md-tools, and the byte-identity test is what keeps the two copies "
+        "from drifting. Host-side, no Context, for the same reason as the entry above.",
+    "rest2/pocket.py::interface_residues":
+        "matched as `derive` by `topology.getPeriodicBoxVectors()` -- the Topology's own box, not "
+        "`State.getPeriodicBoxVectors()`. The generalisation of `pocket_residues` to two named "
+        "sides (`--int1`/`--int2`), measuring heavy-atom distances on the host from coordinates a "
+        "PDB reader handed it, so the helper can PRINT the residues lining an interface. It "
+        "creates no Context, runs before any simulation exists, and resolves nothing at run time. "
+        "See the `pocket_residues` entry below, which it now wraps.",
+    "run/preflight.py::_measurement_state":
+        "matched as `derive` by reading positions and box vectors -- from the `-c` INPUT "
+        "COORDINATE FILE on disk, through a file reader, not off a device. It supplies the "
+        "throughput measurement with a real starting configuration so device placement is not "
+        "ranked on a System at its serialised coordinates. The measurement it feeds does touch "
+        "CUDA and is classified separately; this function only opens a file.",
+    "rest2/pocket.py::pocket_residues":
+        "matched as `derive` by `topology.getPeriodicBoxVectors()`, which is the Topology's own "
+        "box, not `State.getPeriodicBoxVectors()`. It measures heavy-atom distances between a "
+        "ligand residue and the rest of a structure, on the host, from coordinates a PDB reader "
+        "handed it, so that `python -m md_tools.rest2.pocket` can PRINT the residues lining a "
+        "site. It creates no Context, runs before any simulation exists, and resolves nothing at "
+        "run time.",
+    "rest2/regions.py::explicit_selection":
+        "matched as `derive` by `system.getForces()`, which is the System's own list of Force "
+        "objects, not `State.getForces()`. It reads PeriodicTorsionForce and CMAPTorsionForce "
+        "terms off the SERIALISED built System on the host, to check that an exclusion file's bond "
+        "is the central bond of a real proper torsion and to decide which CMAP terms a selective "
+        "REST2 region scales. It runs inside `md-openmm build-top --rest2-scaler`, before any state "
+        "exists, and creates no Context and asks no device for anything.",
     "build/md.py::_generated_cv_text":
         "reads the bond graph for `collective_variables.generate` off the SERIALISED built System "
         "-- `HarmonicBondForce.getBondParameters` and `System.getConstraintParameters` are System "

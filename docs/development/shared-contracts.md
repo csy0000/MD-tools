@@ -402,6 +402,109 @@ Agree, before S2/S3/S4 diverge, the callable interfaces for: construction, state
 energy and cross-state evaluation, and complete derivatives. Provide real miniature fixtures, not
 only mocks — a mock cannot notice a missing PME reciprocal-space term.
 
+### Exchange ladders: what a rung IS (decided 2026-09-21, S3 and S4, for 0.7.0 A3b and 0.7.1)
+
+A REST2 rung and a lambda window are both "rungs" and they are not the same object. The table is
+in `docs/development/0.7.0/lambda-exchange-design.md`; the part that binds both branches:
+
+- **A rung is addressed by its INDEX `j`, with `(lambda_j, tau_j)` as its CONTENT.** Never by its
+  lambda. Addressing by lambda is the obvious shortcut while tau is absent and it forces 0.7.1
+  either to re-index every rung or to carry two addressing schemes — and two addressing schemes is
+  how a walker is filed under the wrong state. One field now, a migration later.
+- **tau is BAKED into a serialised System; lambda is a Context parameter of ONE System.** So a
+  REST2 ladder reads a saved state per group-file line, and **a lambda ladder has NO group file**:
+  a per-rung `-s` would be the same path repeated K times, and a column that can only ever hold one
+  value will eventually hold a wrong one. The rung's lambda belongs in the resolved configuration.
+  0.7.1's tent path needs BOTH mechanisms at once, since its neighbours differ by a Context
+  parameter AND by a serialised System.
+- **The invariant is satisfied genuinely, not by analogy.** "A scaled Hamiltonian is built once and
+  never re-derived at run time" holds for a lambda window because there is nothing to derive:
+  `set_state` sets parameters, with no reinitialise, no second System, no second Context and no
+  coordinate copy.
+- **Identity splits in two.** The LADDER's recorded identity answers "are these rungs the same
+  experiment?" — end-state digests, plan digest, softcore settings including `sc_boundary_14`,
+  kappa, PME grid, force groups — and every rung shares it by construction. The RUNG's identity is
+  `context_parameters(state)` plus its index, which is already the one definition of a state and
+  the dict the forces actually read. No lambda-aware second authority on what a state is.
+- **Configurations are exchanged, not states**, as 0.6.1's ladder does, so STATE ↔ CONTEXT stays
+  fixed and every per-state output is correct by construction. Swapping lambda between Contexts
+  would make each Context follow the WALKER, and every per-state file would need re-routing at each
+  accepted swap — bookkeeping that is invisible when it is wrong.
+- **Ownership of A3b** (assigned 2026-09-21, after S3 asked): the lambda-ladder RUNTIME is S3's —
+  it designed the shape and owns the per-rung Hamiltonian, and S4's hands are full with the TYK2
+  campaigns. S4 owns the acceptance test's consumption, the per-state outputs and the tutorial
+  evidence, and reviews the runtime. S0 owns the `md-run` / `build-md` surface and wires it once
+  the runtime shape is settled. One module, one writer.
+- **Two refusals, and both are about the SHAPE rather than the contents** (S3):
+  a per-rung `-s` on a lambda ladder is refused EVEN WHEN the K paths are identical — the column
+  cannot express a true statement about a lambda ladder, so its presence is the error, not its
+  contents, exactly as `-s` on the command line is refused for a REST2 ladder even when it names
+  the right file. And a rung whose recorded state disagrees with its Context parameters is refused:
+  the lambda analogue of "tau 0 on a hot state", compared against `context_parameters(state)`, the
+  one definition.
+- **The ladder coordinate is ONE accessor, and the record carries BOTH coordinates** (S0 ruling,
+  2026-09-21, on S3's A3b report). `driver.py` reads `protocol.tau` in seventeen places; for a
+  lambda ladder every one of them wants "the ladder coordinate of rung i", which tau is not. The
+  ruling is a generic `protocol.ladder_coordinates()` with a record that names its coordinate and
+  can hold more than one -- NOT a second writer (a second storage path is the second-policy shape),
+  and NOT a `tau` property returning zeros. **A lambda ladder recording `tau = 0` at every rung is
+  indistinguishable from a REST2 ladder that never heated**, which is the flattening this contract
+  exists to prevent; it is refused even though it would run today and produce structurally valid
+  files. S3 raised it rather than doing it, which is what the freeze is for.
+  **Design once, with 0.7.1 in view**: a FEP-REST2 rung has BOTH a tau and a lambda, so a field
+  designed now to hold one number would be designed again in 0.7.1. The record change is **v3 -> v4**
+  -- `md_tools.remd.storage.SCHEMA_VERSION` is already `md-tools-replica-exchange/v3`, and S3
+  caught S0 and itself both writing v2 -> v3. Harmless in a message, not in a migration note:
+  `SUPERSEDED_SCHEMAS` keys on the exact string, so an entry written for the wrong version would
+  never match a real file and the refusal it was meant to produce would never fire. It lands
+  AFTER the TYK2 campaign. Until it does, a lambda ladder is not launchable end to end,
+  and it fails LOUDLY at that line rather than being made to run.
+- **A lambda ladder's `-s` is a hybrid System that something must WRITE** (open, assigned to S0's
+  surface with S2's plan). The invariant is that every Hamiltonian a run integrates is written as
+  a file before the run and never re-derived at run time -- as `build-top --rest2-scaler` writes
+  `system_state<i>.xml`. Today nothing writes the hybrid: `combine-topology` writes a PLAN and
+  `from_plan` builds the System in memory, so a runtime that built it from the plan would be
+  exactly the re-derivation the invariant forbids. Ruled: `combine-topology` grows a System output
+  and records its sha256 beside the plan's, `from_plan` becomes that writer's implementation rather
+  than a run-time path, and ONE hybrid System serves every rung -- the rungs differ in Context
+  parameters, not in file. It is a plan-schema change, so it lands with the coordinate record,
+  after the campaign.
+- **$MD_DATA is open for TUTORIAL datasets only** (the user, 2026-09-21, lifting part of the
+  2026-09-19 sandbox). A simulation that SUCCEEDED and is CITED BY A TUTORIAL may be registered.
+  Everything else about the sandbox stands: no other dataset is read, retrieved, altered or
+  deleted, and no session reaches outside its own new dataset.
+  The path is the CONTRACT's, not a new namespace: `$MD_DATA/{year}/tutorials/{data_name}/`, filed
+  under the year the run completed, through `md-openmm data-register`. `$MD_DATA/dev/tutorials/...`
+  as first written cannot be registered -- v2 has no `dev` segment and no month segment -- so
+  registering there would have failed, or worse, written files that no `dataset.yaml` describes.
+  **Registration is WRITE-ONCE, and the `data_name` goes to the user for approval before it
+  happens** -- one approval per dataset, with the notes it will carry, since neither can be
+  corrected afterwards.
+  **A DATASET HAS NO ALIAS FIELD** (S1's correction to S0, 2026-09-21): v2 `Dataset` is
+  dataset_id, path, year, project_name, data_name, role, system, created_at, created_by, status,
+  origin, software, components, derived_from, completed_at, archived_at, notes. `solute.aliases`
+  is a LIGAND PACKAGE field, set when `build-top --parameterize` creates the package, and that is
+  where the write-once findability hazard lives -- a package registered without aliases is
+  permanently unfindable by name, and no tutorial sets the field. So a dataset's findability rests
+  on its `data_name` and `notes`; a ligand package's rests on aliases decided before the build.
+  Two different write-once traps, and conflating them hides the real one.
+- **A RELAYED approval is not an approval, for anything write-once or outside the worktree** (S2,
+  2026-09-21, and adopted). The coordinator relays what the user decided in good faith, and that is
+  enough for ordinary work; it is NOT enough to register a dataset, which is irreversible and
+  leaves the repository. The owning session drafts the `data_name` and the full alias list, sends
+  it up for the user, and registers only after the USER tells it directly. A rule that is set aside
+  the first time the relay is probably right was never a rule.
+- **Reproduce, do not register, what git already carries.** S2's TYK2 fixture commits the inputs,
+  the prepared structures, the parameter packages and the nine build records (~2.8 MB) and
+  deliberately does NOT commit the built Systems (56 MB), which `build_tyk2_fixture.py` rebuilds in
+  about two minutes each, refusing if any input has moved. Registering those Systems would put a
+  second, unverifiable copy of committed evidence in `$MD_DATA`, leaving a reader two sources for
+  one artefact and no rule saying which is authoritative. A tutorial cites the committed fixture
+  and its rebuild script. **An opened sandbox is not a reason to find something to register.**
+- **An exchange attempt uses `energy` only.** `derivative_components` is TI's consumer and is not
+  part of an attempt: pairing a derivative at one state with energies at two is the class of error
+  the AIS two-probe separation exists to prevent.
+
 ## 6. Data and execution
 
 Reuse the existing authorities: preflight, platform policy, MPI, checkpoints, registration and

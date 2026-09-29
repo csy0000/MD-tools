@@ -33,3 +33,24 @@ def test_scaler_re_exports_the_same_objects_rather_than_copies():
                  "_scale_nonbonded", "_scale_torsions", "_scale_cmap", "_scale_customgb",
                  "torsion_exclusion_report", "REST2_IMPLEMENTATION", "UnclassifiedForceError"):
         assert getattr(scaler, name) is getattr(hamiltonian, name), name
+
+
+def test_the_detector_version_has_not_drifted_from_the_classifier():
+    """The one copy this module is ALLOWED to hold, and the control that keeps it honest.
+
+    `UNSCALED_TORSION_DETECTOR_VERSION` is defined twice: here, and in `openmm.system` where the
+    detector actually lives. That is not an oversight and it cannot be fixed by importing, because
+    the test above forbids this module from importing anything but OpenMM -- it is copied byte for
+    byte into every REST2 bundle and must run there without md_tools.
+
+    A duplicated constant needs a guard or it drifts, and a record stamped with the wrong detector
+    says a stored exclusion was derived by rules that did not derive it. Before 0.6.3 there were
+    THREE copies -- this one and two hardcoded literals in `openmm/system.py` -- so a bump moved
+    one and left two. Two is the minimum the bundle contract permits; this keeps them equal.
+    """
+    from md_tools.openmm.system import UNSCALED_TORSION_DETECTOR_VERSION as classifier
+
+    assert hamiltonian.UNSCALED_TORSION_DETECTOR_VERSION == classifier, (
+        "the bundle's copy and the classifier's disagree about which rules produced a record")
+    assert scaler.UNSCALED_TORSION_DETECTOR_VERSION == classifier, (
+        "scaler must re-export the bundle's copy, not keep a third")

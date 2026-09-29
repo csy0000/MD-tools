@@ -45,6 +45,23 @@ from typing import Any
 #: Backbone atoms every residue contributes, in the order they are recorded.
 BACKBONE = ("N", "CA", "C", "O")
 
+#: What an ORDINARY AMIDE is, for every module that has to recognise one. Defined here, once,
+#: because two copies of this string are two policies: `openmm.system` asks "which torsions stay
+#: unscaled" and this module asks "where are the backbone links", but both first ask "is this C-N
+#: an ordinary amide", and that question must have one answer.
+#:
+#: `NX2` as well as `NX3` because a DEPROTONATED amide nitrogen has two connections, not three.
+#: Under `[NX3]` alone an acylsulfonamide (pKa ~4-5, so deprotonated at pH 7.4) lost the match its
+#: own neutral form had, and the scaler refused to build it at all.
+#:
+#: `CX3` and NOT `[#6X3]`, deliberately. Uppercase `C` is an ALIPHATIC carbon, and that is the only
+#: thing keeping folate's aromatic pterin lactam out of this pattern: RDKit aromatises that ring,
+#: the nitrogen sits in a 6-ring inside `max_proline_ring_size`, and a match would make the bond
+#: proline-like and therefore SCALED -- an aromatic ring bond that is protected today would
+#: silently start having its torsions scaled. `test_relaxing_the_amide_carbon_to_any_element_
+#: would_scale_an_aromatic_ring_bond` pins that hazard. Widen the nitrogen, never the carbon.
+ORDINARY_AMIDE_SMARTS = "[CX3](=[OX1])[NX2,NX3]"
+
 #: Canonical side chains, as the SMILES of the side-chain fragment with a `*` marking where it
 #: attaches to the alpha carbon. Compared as CANONICAL SMILES of an assembled fragment, so the
 #: comparison is on the chemical graph and cannot be fooled by atom order, atom names or the
@@ -300,7 +317,7 @@ def map_cyclic_peptide(mol) -> PeptideMap:
             f"is one connected molecule")
 
     # -- the backbone amide links -------------------------------------------------------------
-    amide = Chem.MolFromSmarts("[CX3](=[OX1])[NX3]")
+    amide = Chem.MolFromSmarts(ORDINARY_AMIDE_SMARTS)
     candidates = []
     for carbon, oxygen, nitrogen in mol.GetSubstructMatches(amide):
         candidates.append((carbon, oxygen, nitrogen))

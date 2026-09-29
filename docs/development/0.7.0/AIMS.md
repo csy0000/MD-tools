@@ -192,7 +192,7 @@ R4 Lee et al., Amber18 (<https://doi.org/10.1021/acs.jcim.8b00462>) · R5 Amber1
 21.1.5 (<https://ambermd.org/doc12/Amber18.pdf>) · R6 OpenFE relative hybrid protocol ·
 R7 OpenFE absolute protocols · R8 PyMBAR (<https://pymbar.readthedocs.io/>) · R9 OpenMM
 `NonbondedForce`. Full register: section 10 of the
-[20260918 instruction](../../claudecode-instructions/20260918_parallel-0.6.1-0.7.x-development.md).
+the 20260918 roadmap (in `MD-tools-archive`, branch `development-records-20260923`).
 Pin exact versions and commits when implementation of each part begins.
 
 ## Acceptance criteria

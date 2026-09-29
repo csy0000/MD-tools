@@ -1,0 +1,33 @@
+commit: 5a9620cc760e435a93c6251f23e141708fd0f09b
+date:   2026-09-21T12:22:16+02:00
+card:   0 (RTX A5000), CUDA_VISIBLE_DEVICES=0, one process, MPS not used
+cpu:    taskset -c 35-38
+
+..FF..F.......                                                           [100%]
+=================================== FAILURES ===================================
+E   AssertionError: ('mixed', (1.0, 1.0, 1.0), 'softcore_b_lj', 1008.6565603474155, 1008.6599874686376, 0.0010086599874686375)
+    assert 0.003427121222102869 <= 0.0010086599874686375
+     +  where 0.003427121222102869 = abs((1008.6565603474155 - 1008.6599874686376))
+/data3/data/chen/scheme/MD-tools-S3-hamiltonian/tests/test_alchemy_hamiltonian_cuda.py:77: AssertionError: ('mixed', (1.0, 1.0, 1.0), 'softcore_b_lj', 1008.6565603474155, 1008.6599874686376, 0.0010086599874686375)
+E   AssertionError: ('double', (1.0, 1.0, 1.0), 'lambda_sterics', 23744.199826235646, 23744.193519343295, 0.002129512130295552)
+    assert 0.006306892351858551 <= 0.002129512130295552
+     +  where 0.006306892351858551 = abs((23744.199826235646 - 23744.193519343295))
+/data3/data/chen/scheme/MD-tools-S3-hamiltonian/tests/test_alchemy_hamiltonian_cuda.py:85: AssertionError: ('double', (1.0, 1.0, 1.0), 'lambda_sterics', 23744.199826235646, 23744.193519343295, 0.002129512130295552)
+E   AssertionError: ('mixed', 1.0, 1.8116272177803694, {'atom': 12, 'component': 'y', 'force': -33209.51682901406, 'errors': [38.70310746416362, 10.508434352610493, 0.517371723355609], ...})
+    assert 4.192640415341884 <= 1.8116272177803694
+/data3/data/chen/scheme/MD-tools-S3-hamiltonian/tests/test_alchemy_hamiltonian_cuda.py:152: AssertionError: ('mixed', 1.0, 1.8116272177803694, {'atom': 12, 'component': 'y', 'force': -33209.51682901406, 'errors': [38.70310746416362, 10.508434352610493, 0.517371723355609], ...})
+3 failed, 11 passed in 97.27s (0:01:37)
+
+=== the NPT row and set_state, by name ===
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0 -- /data3/data/chen/software/md-stack/envs/openmm-env/bin/python
+rootdir: /data3/data/chen/scheme/MD-tools-S3-hamiltonian
+configfile: pyproject.toml
+plugins: xdist-3.8.0
+collecting ... collected 3 items
+
+tests/test_alchemy_hamiltonian_cuda_dynamics.py::test_npt_on_cuda_leaves_nothing_stale[mixed] PASSED [ 33%]
+tests/test_alchemy_hamiltonian_cuda_dynamics.py::test_npt_on_cuda_leaves_nothing_stale[double] PASSED [ 66%]
+tests/test_alchemy_hamiltonian_cuda_dynamics.py::test_set_state_reaches_a_live_cuda_context PASSED [100%]
+
+============================== 3 passed in 16.17s ==============================

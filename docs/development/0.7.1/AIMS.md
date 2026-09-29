@@ -73,7 +73,7 @@ or transfer free energy rather than a number.
 
 R1 (REST2), R4–R9 (Amber18, OpenFE, PyMBAR, OpenMM forces), R10 (EDS / RE-EDS), R11 (ATM plugin),
 R12 (native `ATMForce`) — the register is section 10 of the
-[20260918 instruction](../../claudecode-instructions/20260918_parallel-0.6.1-0.7.x-development.md).
+the 20260918 roadmap (in `MD-tools-archive`, branch `development-records-20260923`).
 Pin versions and commits when implementation begins, not now.
 
 ## Acceptance criteria (to be refined when the branch becomes active)

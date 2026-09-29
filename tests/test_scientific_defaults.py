@@ -374,7 +374,7 @@ def test_the_opc_alternative_still_builds_and_records_ff19sb_opc(tmp_path):
 
 
 @pytest.mark.slow
-def test_the_implicit_peptide_route_is_ff14sb_gbn2_mbondi3_without_sasa_and_has_no_barostat(
+def test_the_implicit_peptide_route_is_ff14sb_gbn2_mbondi3_with_ace_and_has_no_barostat(
         tmp_path):
     from openmm import XmlSerializer
 
@@ -386,10 +386,23 @@ def test_the_implicit_peptide_route_is_ff14sb_gbn2_mbondi3_without_sasa_and_has_
     record = built_record["forcefield_record"]
     assert record["implicit_solvent"]["model"] == "GBn2"
     assert record["implicit_solvent"]["radii"] == "mbondi3"
-    assert record["implicit_solvent"]["nonpolar_sasa"] is False
+    # ON since 0.6.2, following OpenMM's implicit/gbn2.xml. It was False before, and INERT before
+    # that -- the flag never reached the builder, so no release ever put this term in a System.
+    assert record["implicit_solvent"]["nonpolar_sasa"] is True
+    nonpolar = record["implicit_solvent"]["nonpolar"]
+    assert nonpolar["method"] == "ACE" and nonpolar["applied"] is True
+    assert nonpolar["surften"] == 0.0054 and nonpolar["surften_units"] == "kcal/mol/A^2"
     assert record["water"]["openmm_resource"] is None, "no water participates in an implicit build"
 
     system = XmlSerializer.deserialize((tmp_path / "build" / "built.xml").read_text())
+    # The record is a claim; the SYSTEM is the Hamiltonian. Assert the ACE term is really there,
+    # because the defect this release fixed was precisely a record that disagreed with the build.
+    import openmm as mm
+    gb = [f for f in system.getForces() if isinstance(f, mm.CustomGBForce)]
+    assert len(gb) == 1
+    ace = [i for i in range(gb[0].getNumEnergyTerms())
+           if "(radius+0.14)^2" in gb[0].getEnergyTermParameters(i)[0]]
+    assert len(ace) == 1, "the built System carries no ACE term though the record claims one"
     assert not system.usesPeriodicBoundaryConditions()
     assert not any("Barostat" in type(system.getForce(i)).__name__
                    for i in range(system.getNumForces()))

@@ -212,6 +212,11 @@ def _solute_document(topology, solute_indices, unscaled, *, route: str,
             # against the detector that produced it rather than against whichever detector
             # happens to be installed when it is read.
             "detection_route": route,
+            # POSITION IS LOAD-BEARING. `solute.yaml` is content-addressed, so the key
+            # ORDER is part of the bytes a ladder is extended against. Moving this line
+            # refused every pre-existing ladder with "generated from different content"
+            # while changing nothing about the Hamiltonian -- caught by the gate, not by
+            # any fast lane.
             "detector_version": UNSCALED_TORSION_DETECTOR_VERSION,
             # Items neither rule could name, with their evidence. A NON-EMPTY LIST BLOCKS
             # PRODUCTION: guessing either way silently changes the Hamiltonian.
@@ -461,8 +466,10 @@ def _build_implicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
         cfg=cfg, staging=staging, pdb=pdb_input, smiles=smiles, sdf=sdf_input,
         implicit_model="GBn2", radii="mbondi3",
         # An explicit, recorded choice rather than a library default: including the ACE
-        # surface-area term changes the energy by ~16 kJ/mol (~6 kT) on ACE-ALA-NME.
-        nonpolar_sasa=bool((cfg.get("implicit_solvent") or {}).get("nonpolar_sasa", False)),
+        # surface-area term changes the energy by ~16 kJ/mol (~6 kT) on ACE-ALA-NME, and the
+        # surface tension inside it moves the result again.
+        nonpolar_sasa=bool((cfg.get("implicit_solvent") or {}).get("nonpolar_sasa", True)),
+        nonpolar_surften=(cfg.get("implicit_solvent") or {}).get("nonpolar_surften"),
         hydrogen_mass_amu=cfg["system_build"].get("hydrogen_mass_amu"),
         hmr_scope=str(cfg["system_build"].get("hmr_scope") or "none"))
     log("system       : GBn2 / mbondi3 via ParmEd.Structure.createSystem (NOT AmberPrmtopFile: "

@@ -61,11 +61,18 @@ provenance for OpenMM. There is no Amber execution engine here.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Optional
 
 __all__ = [
+    "ACE_DEFAULT_SURFTEN",
+    "ACE_TERM_SIGNATURE",
     "AMBER_TOPOLOGY_NAME",
+    "OPENMM_ACE_PREFACTOR",
+    "OPENMM_ACE_PREFACTOR_LITERAL",
+    "SURFTEN_UNITS",
+    "ace_prefactor",
     "build_amber_topology_via_tleap",
     "build_structure_from_sequence",
     "build_implicit_bundle_inputs",
@@ -73,6 +80,7 @@ __all__ = [
     "build_implicit_system",
     "implicit_provenance",
     "radii_of",
+    "set_ace_surften",
     "write_amber_files_from_openmm",
 ]
 
@@ -97,6 +105,109 @@ def _gb_object(model: str):
     if model not in _GB_MODELS:
         raise ValueError(f"unsupported implicit model {model!r}; known: {sorted(_GB_MODELS)}")
     return getattr(app, _GB_MODELS[model])
+
+
+#: The surface tension in the ACE nonpolar term, in kcal/mol/A^2. Amber's `surften` default, and
+#: the value both ParmEd and OpenMM bake into the energy expression as a literal.
+ACE_DEFAULT_SURFTEN = 0.0054
+
+#: The units `ACE_DEFAULT_SURFTEN` and every recorded `surften` are in. Written into the manifest
+#: beside the number, because the same quantity is quoted in kJ/mol/nm^2 elsewhere and a bare
+#: float is not a surface tension.
+SURFTEN_UNITS = "kcal/mol/A^2"
+
+#: The prefactor OpenMM and ParmEd write into the ACE energy term for `ACE_DEFAULT_SURFTEN`.
+#: `customgbforces.py` has it as a decimal literal, which is why the tension cannot be set through
+#: any argument and has to be rewritten into the built force. Kept as the STRING that appears in
+#: the expression: the substitution is textual, and a float formatted back could differ in a digit.
+OPENMM_ACE_PREFACTOR_LITERAL = "28.3919551"
+OPENMM_ACE_PREFACTOR = float(OPENMM_ACE_PREFACTOR_LITERAL)
+
+#: What identifies the ACE term among a `CustomGBForce`'s energy terms. They have no names and
+#: their order depends on the GB model and the options used, so the term is located by CONTENT.
+#: `(radius+0.14)^2` is the solvent-accessible surface of one atom: the 0.14 nm probe.
+ACE_TERM_SIGNATURE = "(radius+0.14)^2"
+
+
+def ace_prefactor(surften: float) -> float:
+    """`4*pi*surften` in OpenMM's kJ/mol/nm^2, from a tension in kcal/mol/A^2.
+
+    The ACE term is `4*pi*surften*(R+probe)^2*(R/B)^6`; the 4*pi and the unit conversion are
+    folded into the one literal OpenMM writes, so reproducing that literal exactly for
+    `ACE_DEFAULT_SURFTEN` is what proves this arithmetic is theirs.
+    """
+    return 4.0 * math.pi * float(surften) * 4.184 * 100.0
+
+
+def _ace_terms(force) -> list:
+    """The indices of a CustomGBForce's ACE energy terms. Zero or several is a caller's problem."""
+    return [i for i in range(force.getNumEnergyTerms())
+            if ACE_TERM_SIGNATURE in force.getEnergyTermParameters(i)[0]]
+
+
+def set_ace_surften(system, surften: float) -> dict:
+    """Rewrite the ACE nonpolar term's hard-coded surface tension, in place.
+
+    OpenMM exposes the ACE term as a boolean -- `sasaMethod="ACE"`, or ParmEd's `useSASA=True` --
+    and bakes the tension into the energy expression as `28.3919551`. There is no argument that
+    changes it. This finds that term by its expression and substitutes a prefactor computed from
+    the requested tension, so `surften` becomes a real parameter instead of a library constant.
+
+    Returns the record of what was changed. Refuses rather than guessing: a System with no ACE
+    term, or with more than one, is not one this substitution understands -- silently editing the
+    wrong term would change the polar solvation energy and look like a nonpolar setting.
+
+    `surften` must be positive. Zero would leave an energy term that always evaluates to zero:
+    it costs time every step, and it changes the System's serialisation and therefore the
+    checkpoint fingerprint, so a "surften: 0" run would not be the same experiment as a run with
+    the nonpolar term off. Turning the term off is `nonpolar_sasa: false`.
+    """
+    import openmm as mm
+
+    value = float(surften)
+    if not value > 0.0:
+        raise ValueError(
+            f"implicit_solvent.nonpolar_surften must be positive; got {surften!r}. Zero does not "
+            "remove the ACE term, it leaves one that always evaluates to zero -- which still costs "
+            "time every step and still changes the System's serialisation and the checkpoint "
+            "fingerprint. To build without a nonpolar term set implicit_solvent.nonpolar_sasa: "
+            "false.")
+
+    gb_forces = [f for f in system.getForces() if isinstance(f, mm.CustomGBForce)]
+    if len(gb_forces) != 1:
+        raise RuntimeError(
+            f"expected exactly one CustomGBForce to carry the ACE term; found {len(gb_forces)}. "
+            "Refusing to guess which one the surface tension belongs to.")
+    force = gb_forces[0]
+    matches = _ace_terms(force)
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"expected exactly one ACE energy term matching {ACE_TERM_SIGNATURE!r} in the "
+            f"CustomGBForce; found {len(matches)}. Either the nonpolar term was not built (ask "
+            "for it with nonpolar_sasa: true) or OpenMM's ACE expression has changed and this "
+            "substitution no longer knows which term carries the surface tension.")
+
+    index = matches[0]
+    expression, computation = force.getEnergyTermParameters(index)
+    literal = OPENMM_ACE_PREFACTOR_LITERAL
+    if literal not in expression:
+        raise RuntimeError(
+            f"the ACE energy term does not contain the expected prefactor {literal!r}:\n"
+            f"    {expression}\n"
+            "OpenMM's hard-coded surface tension has changed, so rewriting it here would produce "
+            "a Hamiltonian that is neither the requested one nor OpenMM's.")
+    prefactor = ace_prefactor(value)
+    rewritten = expression.replace(literal, f"{prefactor:.7f}")
+    force.setEnergyTermParameters(index, rewritten, computation)
+    return {
+        "applied": True,
+        "surften": value,
+        "surften_units": SURFTEN_UNITS,
+        "prefactor_kj_mol_nm2": prefactor,
+        "openmm_prefactor_kj_mol_nm2": OPENMM_ACE_PREFACTOR,
+        "energy_term_index": index,
+        "is_openmm_default": expression == rewritten,
+    }
 
 
 def radii_of(structure) -> list:
@@ -153,6 +264,20 @@ def _implicit_hmr_record(system, structure, scope: str, target: Optional[float],
 #: Read `parmed.structure.Structure._get_gb_parameters`: fitted values exist for H, C, N, O and S
 #: only. Everything else -- F, Cl, Br, I, P, Se, B, Si -- gets these.
 GBN2_UNFITTED_PARAMETERS = (1.0, 0.8, 4.85)
+
+#: ParmEd and OpenMM DISAGREE about this fallback, in gamma only: ParmEd writes 4.85 and OpenMM's
+#: `implicit/gbn2.xml` writes 4.851, a difference of 0.001. Measured on ejm_31 (32 atoms, one Cl),
+#: 2026-09-28, alongside the check that the two routes otherwise agree bit for bit -- charges,
+#: sigma and epsilon to max |delta| = 0.0, and bonds, angles and torsions term for term.
+#:
+#: It reaches only atoms OUTSIDE the fit, so no protein and no C/H/N/O/S ligand can see it: the
+#: halogens, P, Se, B and Si. It is recorded rather than reconciled because neither value is
+#: derived from anything -- both are a library's choice of placeholder for an element GB-Neck2
+#: never covered -- and picking one would make a System that is neither library's. An implicit
+#: run containing such an atom is already flagged as outside igb=8 parity by
+#: `gb_parameter_coverage`, and that warning, not this constant, is the thing to act on.
+GBN2_UNFITTED_GAMMA_OPENMM = 4.851
+
 #: The elements GB-Neck2 was actually parameterised for, as built by ParmEd.
 GBN2_FITTED_ELEMENTS = (1, 6, 7, 8, 16)
 
@@ -303,7 +428,8 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
                           remove_cm_motion: bool = True,
                           hydrogen_mass_amu: Optional[float] = None,
                           hmr_scope: str = "none",
-                          nonpolar_sasa: bool = False,
+                          nonpolar_sasa: bool = True,
+                          nonpolar_surften: Optional[float] = None,
                           peptide_map=None,
                           constraints: str = "HBonds"):
     """Build the implicit-solvent System, and report what the radius change actually did.
@@ -320,6 +446,17 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
     "solute" and "all" name the same set of atoms. Both are accepted and recorded, rather than
     letting "solute" look like a setting that was ignored.
     """
+    # Before anything is loaded or built: a setting that cannot be honoured is refused, not
+    # dropped. `nonpolar_surften` with the term off has no term to set, and accepting it would
+    # write a surface tension into the manifest that is in no Hamiltonian.
+    if not nonpolar_sasa and nonpolar_surften is not None:
+        raise ValueError(
+            f"implicit_solvent.nonpolar_surften={nonpolar_surften!r} was given with "
+            "nonpolar_sasa: false, so there is no nonpolar term for it to set and the value would "
+            "be silently ignored while the manifest recorded a surface tension.")
+    surften = (ACE_DEFAULT_SURFTEN if nonpolar_surften is None else float(nonpolar_surften)) \
+        if nonpolar_sasa else None
+
     import parmed as pmd
     from openmm import app
     from openmm import unit as u
@@ -358,9 +495,10 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
         # built the same System as `HBonds` while the build log recorded `AllBonds (set)`.
         constraints=constraint_option(constraints),
         implicitSolvent=gb_object,
-        # The ACE surface-area nonpolar term. False matches Amber's igb=8/gbsa=0 and the context
-        # GBn2 was parameterised in; True matches OpenMM's implicit/gbn2.xml default. Stated here
-        # rather than inherited, because the two differ by ~16 kJ/mol (~6 kT).
+        # The ACE surface-area nonpolar term. True matches OpenMM's implicit/gbn2.xml default;
+        # False matches Amber's igb=8/gbsa=0, the context GBn2's polar parameters were fit in.
+        # Stated here rather than inherited, because the two differ by ~16 kJ/mol (~6 kT). The
+        # surface tension inside the term is ParmEd's literal until `set_ace_surften` rewrites it.
         useSASA=bool(nonpolar_sasa),
         removeCMMotion=remove_cm_motion,
         # ParmEd applies the repartitioning itself. Delegating avoids a THIRD implementation of
@@ -368,6 +506,11 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
         # System that gets serialized.
         **({"hydrogenMass": float(hydrogen_mass_amu) * u.dalton} if scope != "none" else {}),
     )
+
+    # The surface tension, substituted into the built force. ParmEd and OpenMM both hard-code it,
+    # so this is the only point at which it can be chosen at all.
+    nonpolar = ({"method": "ACE", **set_ace_surften(system, surften)}
+                if nonpolar_sasa else {"method": None, "applied": False})
 
     hmr_record = _implicit_hmr_record(system, structure, scope, hydrogen_mass_amu, mass_before)
 
@@ -391,6 +534,11 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
         "peptide_like_mbondi3": peptide_like,
         "nonpolar_sasa": bool(nonpolar_sasa),
         "nonpolar_model": ("ACE surface-area term" if nonpolar_sasa else None),
+        # The nonpolar term as a PARAMETER SET, not a flag. `nonpolar_sasa: true` no longer
+        # identifies the Hamiltonian once the surface tension is adjustable: 0.0054 and 0.005
+        # differ by more than a kJ/mol on a 32-atom ligand, which is the size of difference that
+        # silently invalidates a comparison between two runs somebody assumed were the same.
+        "nonpolar": nonpolar,
         "nonbonded_method": "NoCutoff",
         "constraints": str(constraints),
         "remove_cm_motion": bool(remove_cm_motion),
@@ -399,8 +547,8 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
         "n_particles": system.getNumParticles(),
         "n_constraints": system.getNumConstraints(),
         "uses_periodic_boundary_conditions": system.usesPeriodicBoundaryConditions(),
-        # Which atoms the GB-Neck2 fit actually covers, read off the built CustomGBForce. This is
-        # what decides whether an "igb=8 / mbondi3" claim is true for this particular solute.
+        # Which atoms the GB-Neck2 fit actually covers, read off the built CustomGBForce --
+        # a measurement of THIS solute, not a property of the route it came in by.
         "parameter_coverage": coverage,
         "hmr": hmr_record,
     }
@@ -599,7 +747,8 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
                                  implicit_model: str = "GBn2", radii: str = "mbondi3",
                                  hydrogen_mass_amu: Optional[float] = None,
                                  hmr_scope: str = "none",
-                                 nonpolar_sasa: bool = False) -> dict:
+                                 nonpolar_sasa: bool = True,
+                                 nonpolar_surften: Optional[float] = None) -> dict:
     """Produce every Amber and OpenMM artefact an implicit bundle needs.
 
     Two routes reach the same ParmEd construction from different directions:
@@ -647,6 +796,11 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
         amber["prmtop"], amber["coordinates"],
         implicit_model=implicit_model, radii=radii,
         hydrogen_mass_amu=hydrogen_mass_amu, hmr_scope=hmr_scope,
+        # FORWARDED. This argument was accepted here and never passed on, so every implicit
+        # bundle built without a nonpolar term no matter what the configuration asked for, and
+        # the manifest recorded the REQUEST rather than what was built. A test now asserts the
+        # built System's ACE term against this value rather than against the record.
+        nonpolar_sasa=nonpolar_sasa, nonpolar_surften=nonpolar_surften,
         peptide_map=peptide_map,
         constraints=(cfg.get("system_build") or {}).get("constraints", "HBonds"))
 

@@ -170,12 +170,17 @@ def make_scaled_state(root: Path, *, tau: float, method: str = "cMD") -> Path:
     from md_tools.rest2.states import state_system_name
 
     build = Path(root) / "build"
-    state = build / method / state_system_name(0)
+    # AIS writes BOTH end states -- state 0 at tau 0 (V1) and state 1 at tau_max (V0) -- so the
+    # HOT state, which is what a caller wants back, is state 1 there and state 0 everywhere else.
+    # The index ascends with tau in every method; see md_tools.build.scaler.
+    hot_index = 1 if method == "AIS" else 0
+    state = build / method / state_system_name(hot_index)
     if state.is_file():
         return state
     config = build / f"scaler-{method}.config"
-    config.write_text(f"method: {method}\nschedule:\n  n_states: 1\n"
-                      f"  tau_min: {float(tau)}\n  tau_max: {float(tau)}\n", encoding="utf-8")
+    schedule = (f"  n_states: 2\n  tau_min: 0.0\n  tau_max: {float(tau)}\n" if method == "AIS"
+                else f"  n_states: 1\n  tau_min: {float(tau)}\n  tau_max: {float(tau)}\n")
+    config.write_text(f"method: {method}\nschedule:\n{schedule}", encoding="utf-8")
     build_scaled_states(system_path=build / "built.xml", topology_path=build / "built.pdb",
                         config_path=config, echo=False)
     return state

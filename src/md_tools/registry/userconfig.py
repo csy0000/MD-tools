@@ -82,7 +82,7 @@ machine:
     precision: mixed
     # How workers are placed under MPI. local_rank: MD-tools binds each worker to an equal block
     # of CPUs and places it on a device by measured throughput; a GPU shared by several workers
-    # needs NVIDIA MPS (docs/md-run.md, "CPUs, devices and MPS"). openmm: OpenMM chooses, for a
+    # needs NVIDIA MPS (docs/basics/md-run.md, "CPUs, devices and MPS"). openmm: OpenMM chooses, for a
     # scheduler that already gave every rank its own device.
     device_policy: local_rank
 """

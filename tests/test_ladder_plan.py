@@ -191,7 +191,9 @@ def test_the_preflight_prepares_one_system_per_rung_before_anything_is_written(p
 def test_the_driver_refuses_a_plan_whose_rung_count_disagrees_with_the_ladder():
     """A plan and a protocol describing different ladders must refuse, not silently pick one.
 
-    Calls the driver's own `_rung_systems`, so this exercises the guard rather than restating it.
+    MIGRATED (0.6.1): the guard moved from `_rung_systems` into `_establish_rung_provenance`, which
+    runs at construction, before any output. Calls the driver's own method, so this exercises the
+    guard rather than restating it.
     """
     pytest.importorskip("openmm")
     from types import SimpleNamespace
@@ -203,7 +205,7 @@ def test_the_driver_refuses_a_plan_whose_rung_count_disagrees_with_the_ladder():
     run.protocol = SimpleNamespace(n_states=3)
 
     with pytest.raises(DriverError, match="must be the same ladder"):
-        run._rung_systems()
+        run._establish_rung_provenance()
 
 
 def test_the_driver_returns_the_prepared_systems_unchanged_when_the_counts_agree():
@@ -223,22 +225,28 @@ def test_the_driver_returns_the_prepared_systems_unchanged_when_the_counts_agree
     assert audit == {"scaled": []}
 
 
-def test_without_a_prepared_plan_the_driver_still_builds_the_ladder_itself():
-    """A direct caller that built no plan is not broken by the plan becoming the default path."""
+def test_without_a_prepared_plan_the_driver_refuses_rather_than_building_the_ladder_itself():
+    """MIGRATED (0.6.1, the user's decision of 2026-09-19, shared contract §3): a direct caller
+    with no plan used to have its rungs re-derived at run time through `protocol.build_systems`.
+    A scaled Hamiltonian is built once, as a file, and never re-derived, so that path is gone and
+    the ladder is refused -- and `build_systems` is never called."""
     pytest.importorskip("openmm")
     from types import SimpleNamespace
 
-    from md_tools.remd.driver import ReplicaRun
+    from md_tools.remd.driver import DriverError, ReplicaRun
 
-    built = ([object()], {"scaled": []})
+    called = []
     run = object.__new__(ReplicaRun)
     run.prepared = None
     run.base_system = object()
     run.solute_indices = [0]
     run.excluded_bonds = []
-    run.protocol = SimpleNamespace(n_states=1, build_systems=lambda *a, **k: built)
+    run.protocol = SimpleNamespace(n_states=1,
+                                   build_systems=lambda *a, **k: called.append(1))
 
-    assert run._rung_systems() == built
+    with pytest.raises(DriverError, match="not re-derived at run time"):
+        run._establish_rung_provenance()
+    assert not called
 
 
 @pytest.mark.slow

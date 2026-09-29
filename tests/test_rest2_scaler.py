@@ -16,6 +16,7 @@ PLATFORM_POLICY_EXEMPTION: System construction and serialisation only. No Contex
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -162,14 +163,47 @@ def test_a_hot_cmd_state_is_one_file_at_its_tau(tmp_path):
     assert record["state0_is_physical"] is False
 
 
-def test_an_ais_end_state_is_one_file_in_its_own_directory(tmp_path):
+def test_ais_writes_both_end_states_with_the_physical_one_first(tmp_path):
+    """AIS mixes two end states and writes BOTH, state 0 at tau 0 and state 1 at tau_max.
+
+    It wrote only the scaled one until 0.6.1, as `system_state0.xml`, with V1 referenced as
+    `build/built.xml`. That made state 0 the UNPHYSICAL state for AIS and the physical one for
+    REST2, so a state index meant two different things depending on the method, and the scaler
+    had to warn about it in prose on every AIS build.
+
+    The rule is now one rule in every method: the index ascends with tau, and `state0_is_physical`
+    records whether state 0 sits at tau 0 rather than leaving it to be read off a filename. Note
+    the numbers invert against the LAMBDA endpoints -- V0, the state the source ensemble samples,
+    is state 1 -- because tau describes the files and lambda describes the run.
+    """
     from md_tools.rest2.states import scaled_state_identity
 
     build = _dataset(tmp_path / "ALA")
-    _scale(build, _config(build, "method: AIS\nschedule:\n  n_states: 1\n"
-                                 "  tau_min: 0.5\n  tau_max: 0.5\n"))
-    identity = scaled_state_identity(build / "AIS" / "system_state0.xml")
-    assert identity["method"] == "AIS" and identity["tau"] == 0.5
+    record = _scale(build, _config(build, "method: AIS\nschedule:\n  n_states: 2\n"
+                                          "  tau_min: 0.0\n  tau_max: 0.5\n"))
+
+    physical = scaled_state_identity(build / "AIS" / "system_state0.xml")
+    scaled = scaled_state_identity(build / "AIS" / "system_state1.xml")
+    assert physical["method"] == "AIS" and physical["tau"] == 0.0
+    assert scaled["method"] == "AIS" and scaled["tau"] == 0.5
+
+    # One writer for both end states, so scaler.yaml carries a digest for each instead of
+    # leaving V1 as an unrecorded reference to another file.
+    assert record["state0_is_physical"] is True
+    assert [state["tau"] for state in record["states"]] == [0.0, 0.5]
+    assert len({state["sha256"] for state in record["states"]}) == 2
+    assert "NOT the physical Hamiltonian" not in (build / "AIS" / "scaler.log").read_text("utf-8")
+
+
+def test_the_old_single_state_ais_schedule_is_refused_by_name(tmp_path):
+    """A pre-0.6.1 scaler.config must not quietly build something that means something else."""
+    from md_tools.build.strict import ConfigError
+
+    build = _dataset(tmp_path / "ALA")
+    with pytest.raises(ConfigError, match="mixes TWO end states"):
+        _scale(build, _config(build, "method: AIS\nschedule:\n  n_states: 1\n"
+                                     "  tau_min: 0.5\n  tau_max: 0.5\n"))
+    assert not (build / "AIS").exists()
 
 
 def test_a_ladder_that_starts_scaled_says_so_in_words(tmp_path):
@@ -488,3 +522,230 @@ def test_a_built_small_molecule_gets_its_picture_listed_in_the_record(tmp_path):
     from md_tools.build.record import sha256_file
     assert sha256_file(png) == facts["sha256"]
     assert _red_pixels(png) > 50
+
+
+# --- the refusal draws the picture that answers it ------------------------------------------------
+
+#: A urea: the carbonyl carbon carries two nitrogens, so `_amide_candidates` refuses it
+#: structurally, from the topology, and no bond-order evidence can settle which C-N is the omega.
+UREA_LIGAND = "CNC(=O)NC"
+
+
+def _refusal_config(**over):
+    """The three keys `_refusal_pictures` reads out of a resolved scaler configuration."""
+    return dict({"sdf_filelist": None, "proline_like_residues": ["PRO"],
+                 "max_proline_ring_size": 7}, **over)
+
+
+def test_a_refused_classification_draws_the_atom_index_picture_beside_the_system(tmp_path):
+    """The refusal names a bond by topology index; the picture is what says WHERE that bond is.
+
+    It used to be drawn only on success, into a staging directory renamed into place at the end,
+    so a refused build produced nothing at all -- and the one artefact that answers the refusal
+    did not exist precisely when it was needed.
+    """
+    from md_tools.build.scaler import _refusal_pictures            # noqa: PLC2701
+
+    topology, solute = _ligands(tmp_path, [("URE", UREA_LIGAND)])
+    note = _refusal_pictures(topology, solute, tmp_path, tmp_path / "scaler.config",
+                             _refusal_config())
+
+    picture = tmp_path / "URE-unscaled.png"
+    assert picture.is_file(), f"no picture was drawn; the note said: {note}"
+    assert picture.stat().st_size > 0
+    assert str(picture) in note, f"the refusal must say where the picture went; got: {note}"
+    assert "topology index" in note
+
+
+def test_a_second_refusal_never_overwrites_the_first_picture(tmp_path):
+    """A refusal is something you iterate on, so the previous diagnostic is what you compare to.
+
+    Losing it to the next attempt is losing the comparison, which is the whole reason to look.
+    """
+    from md_tools.build.scaler import _refusal_pictures            # noqa: PLC2701
+
+    topology, solute = _ligands(tmp_path, [("URE", UREA_LIGAND)])
+    first = _refusal_pictures(topology, solute, tmp_path, tmp_path / "scaler.config",
+                              _refusal_config())
+    original = (tmp_path / "URE-unscaled.png").read_bytes()
+
+    second = _refusal_pictures(topology, solute, tmp_path, tmp_path / "scaler.config",
+                               _refusal_config())
+
+    assert (tmp_path / "URE-unscaled.png").read_bytes() == original, "the first was overwritten"
+    assert (tmp_path / "URE-unscaled.1.png").is_file(), "the second needs a name of its own"
+    assert str(tmp_path / "URE-unscaled.1.png") in second
+    assert str(tmp_path / "URE-unscaled.png") in first
+    # The suffix goes before the extension, so every copy is still a .png a viewer opens.
+    assert not (tmp_path / "URE-unscaled.png.1").exists()
+
+
+def test_drawing_the_diagnostic_never_replaces_the_refusal_it_explains(tmp_path):
+    """An exception raised while explaining an exception hides the real one.
+
+    The no-SDF case is exactly the one that refuses, so it must report prose, not raise.
+    """
+    from md_tools.build.scaler import _refusal_pictures            # noqa: PLC2701
+
+    topology, solute = _ligands(tmp_path, [("URE", UREA_LIGAND)], write=False)
+    note = _refusal_pictures(topology, solute, tmp_path, tmp_path / "scaler.config",
+                             _refusal_config())
+
+    assert "no SDF" in note.lower() or "no picture" in note.lower(), note
+    assert not list(tmp_path.glob("*.png"))
+
+
+def test_the_refusal_message_carries_the_picture_path_end_to_end(tmp_path):
+    """Through `build_scaled_states`, where a user meets it. XAA has no SDF, so it says so."""
+    from md_tools.build.strict import ConfigError
+
+    build = _dataset(tmp_path / "XAA", rename_alanine="XAA")
+    with pytest.raises(ConfigError) as refusal:
+        _scale(build, _config(build, "method: REST2\n"))
+    assert "XAA" in str(refusal.value)
+    assert "no SDF" in str(refusal.value).lower() or "no picture" in str(refusal.value).lower()
+    assert not (build / "REST2").exists(), "a refusal still creates no output directory"
+
+
+# --- unscaled_list / scaled_list: the person's answer, on top of the rules -------------------------
+
+def test_unscaled_list_protects_a_bond_the_rules_left_scalable(tmp_path):
+    """The rules decide what they can, the picture shows it, and this is how a person answers."""
+    build = _dataset(tmp_path / "ALA")
+    base = _scale(build, _config(build, "method: cMD\nschedule: {n_states: 1, tau_min: 0.3, "
+                                        "tau_max: 0.3}\n"))
+    protected = {tuple(b) for b in base["unscaled_torsions"]["unscaled_central_bonds"]}
+
+    extra = next(b for b in _proper_bonds(build) if b not in protected)
+    record = _scale(build, _config(build, f"method: cMD\nschedule: {{n_states: 1, tau_min: 0.3, "
+                                          f"tau_max: 0.3}}\nunscaled_list: [[{extra[0]}, "
+                                          f"{extra[1]}]]\n", name="declared.config"),
+                    overwrite=True)
+    now = {tuple(b) for b in record["unscaled_torsions"]["unscaled_central_bonds"]}
+    assert extra in now, "the declared bond must be protected"
+    assert now == protected | {extra}, "and nothing else may move"
+    declared = record["unscaled_torsions"]["declared"]
+    assert declared["newly_unscaled"] == [list(extra)]
+    assert declared["newly_scaled"] == []
+
+
+def test_scaled_list_frees_a_bond_the_rules_protected(tmp_path):
+    """The other direction: a carbamate-shaped case where the chemistry says protect and the
+    person, having looked, says otherwise."""
+    build = _dataset(tmp_path / "ALA")
+    base = _scale(build, _config(build, "method: cMD\nschedule: {n_states: 1, tau_min: 0.3, "
+                                        "tau_max: 0.3}\n"))
+    protected = sorted(tuple(b) for b in base["unscaled_torsions"]["unscaled_central_bonds"])
+    assert protected, "this fixture must protect something for the test to mean anything"
+    freed = protected[0]
+
+    record = _scale(build, _config(build, f"method: cMD\nschedule: {{n_states: 1, tau_min: 0.3, "
+                                          f"tau_max: 0.3}}\nscaled_list: [[{freed[0]}, "
+                                          f"{freed[1]}]]\n", name="freed.config"), overwrite=True)
+    now = {tuple(b) for b in record["unscaled_torsions"]["unscaled_central_bonds"]}
+    assert freed not in now
+    assert record["unscaled_torsions"]["declared"]["newly_scaled"] == [list(freed)]
+
+
+def test_an_index_that_names_no_torsion_is_refused_rather_than_applied(tmp_path):
+    """THE GUARD that makes indices safe to write down.
+
+    An index is only meaningful against the System it was read off. After a rebuild -- different
+    PDBFixer side chains, a reordered ligand, an added ion -- the same number is a different atom.
+    Refusing a bond no proper torsion runs across catches that, instead of silently protecting
+    whichever atoms now hold those numbers.
+    """
+    from md_tools.build.strict import ConfigError
+
+    build = _dataset(tmp_path / "ALA")
+    with pytest.raises(ConfigError, match="central bond of no proper torsion"):
+        _scale(build, _config(build, "method: cMD\nschedule: {n_states: 1, tau_min: 0.3, "
+                                     "tau_max: 0.3}\nunscaled_list: [[0, 99999]]\n"))
+
+
+def test_a_bond_in_both_lists_is_refused_rather_than_resolved_by_precedence(tmp_path):
+    from md_tools.build.strict import ConfigError
+
+    build = _dataset(tmp_path / "ALA")
+    with pytest.raises(ConfigError, match="BOTH unscaled_list and scaled_list"):
+        _scale(build, _config(build, "method: cMD\nschedule: {n_states: 1, tau_min: 0.3, "
+                                     "tau_max: 0.3}\nunscaled_list: [[4, 6]]\n"
+                                     "scaled_list: [[4, 6]]\n"))
+
+
+def test_a_torsion_named_by_four_atoms_is_refused_with_the_reason(tmp_path):
+    """A torsion is named by its CENTRAL BOND. Listing four atoms would let someone name three of
+    the four torsions across one bond and leave it partly scaled."""
+    from md_tools.build.strict import ConfigError
+
+    build = _dataset(tmp_path / "ALA")
+    with pytest.raises(ConfigError, match="PAIR of topology atom indices"):
+        _scale(build, _config(build, "method: cMD\nschedule: {n_states: 1, tau_min: 0.3, "
+                                     "tau_max: 0.3}\nunscaled_list: [[1, 2, 3, 4]]\n"))
+
+
+def _proper_bonds(build):
+    """Every central bond of a proper torsion in the built System, sorted."""
+    from openmm import XmlSerializer
+
+    from md_tools.build.scaler import _proper_central_bonds          # noqa: PLC2701
+
+    system = XmlSerializer.deserialize((build / "built.xml").read_text(encoding="utf-8"))
+    return sorted(_proper_central_bonds(system))
+
+
+# --- the shared inputs are linked into every run directory ----------------------------------------
+
+def test_a_run_directory_links_the_shared_inputs_relatively(tmp_path):
+    """hpREST2's convention (2026-09-29): a run directory is self-describing to anything that
+    walks the tree without reading run.sh, which is what a manifest declaring components BY PATH
+    does. The generated scripts already reach these by relative path, so the links add nothing a
+    run needs -- they are for the reader.
+    """
+    from md_tools.build.md import SHARED_INPUTS, _link_shared_inputs   # noqa: PLC2701
+
+    run_root = tmp_path / "REST2-run1"
+    run_root.mkdir()
+    _link_shared_inputs(run_root)
+
+    for name in SHARED_INPUTS:
+        link = run_root / name
+        assert link.is_symlink(), f"{name} must be a link"
+        target = os.readlink(link)
+        assert target == os.path.join("..", name), f"{name} -> {target}"
+        assert not os.path.isabs(target), (
+            "ABSOLUTE is the one failure this must not reproduce: a 0.5.4-era REST2-run1/build "
+            "pointed into an absolute project path and broke the moment the dataset moved, "
+            "which data-register does by design")
+
+
+def test_linking_never_replaces_real_data_or_an_existing_link(tmp_path):
+    """Replacing a real directory with a link is a deliberate act, not something a build step
+    does on the way past."""
+    from md_tools.build.md import _link_shared_inputs                  # noqa: PLC2701
+
+    run_root = tmp_path / "REST2-run2"
+    (run_root / "min").mkdir(parents=True)
+    (run_root / "min" / "min.xml").write_text("real data", encoding="utf-8")
+    (run_root / "input").symlink_to(Path("..") / "somewhere-else", target_is_directory=True)
+
+    _link_shared_inputs(run_root)
+
+    assert not (run_root / "min").is_symlink(), "a real directory must survive untouched"
+    assert (run_root / "min" / "min.xml").read_text(encoding="utf-8") == "real data"
+    assert os.readlink(run_root / "input") == os.path.join("..", "somewhere-else"), (
+        "an existing link is left alone rather than re-pointed")
+    assert (run_root / "build").is_symlink(), "and the missing one is still made"
+
+
+def test_a_link_to_a_target_that_does_not_exist_yet_is_not_an_error(tmp_path):
+    """`min/` does not exist until a minimisation has run. A link that dangles today resolves
+    once it does, so refusing to make it would mean never making it."""
+    from md_tools.build.md import _link_shared_inputs                  # noqa: PLC2701
+
+    run_root = tmp_path / "cMD-run1"
+    run_root.mkdir()
+    _link_shared_inputs(run_root)
+
+    assert (run_root / "min").is_symlink()
+    assert not (run_root / "min").exists(), "the target is genuinely absent, and that is fine"

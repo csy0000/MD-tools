@@ -10,7 +10,7 @@ under `mpirun` when the protocol is parallel; moves a finished run into managed 
 verified, immutable dataset; and exports one as a bundle that runs on OpenMM alone, with nothing
 of this package in it.
 
-**Status:** `0.5.4`, on `dev` and `main`, tagged `v0.5.4`. Not on PyPI.
+**Status:** `0.6.1`, on `main`, tagged `v0.6.1`. Not on PyPI.
 
 📖 **[Documentation](https://csy0000.github.io/MD-tools/)** — installation, machine configuration,
 the methods, and the reference pages.
@@ -56,7 +56,8 @@ git pull && pip install --no-deps --force-reinstall .
 md-openmm --version        # must match `version` in pyproject.toml
 ```
 
-`--force-reinstall` because two `dev` commits usually share a `version`, and pip otherwise no-ops.
+`--force-reinstall` because two commits on a release branch usually share a `version`, and pip
+otherwise no-ops.
 
 ## The five commands
 
@@ -141,4 +142,4 @@ python -m pytest tests -m "gpu or slow"             # builds systems and integra
 GPU tests run on CUDA and are never satisfied by CPU execution.
 
 Working on the code: [`CLAUDE.md`](CLAUDE.md) holds the invariants that must not be broken; open
-and closed gaps, each with its reasoning, are in [`docs/backlog.md`](docs/backlog.md).
+and closed gaps, each with its reasoning, are kept in the `MD-tools-archive` repository.

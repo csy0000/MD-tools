@@ -409,6 +409,19 @@ def md_run_main(argv: list[str] | None = None) -> int:
 
     resolved = run_input.resolved
     protocol = resolved["protocol"]
+    # AN INPUT THIS SURFACE CANNOT HONOUR IS REFUSED BY NAME, before `-odir` or any record of it
+    # exists. `protocol: alchemical` resolves -- the configuration and the `.in` language are
+    # wired -- but no dispatch reaches a window yet, so an input naming it and no stage would fall
+    # through to the stage chain and run the PREPARATION of an alchemical campaign while
+    # reporting the success of the campaign itself. An input naming a stage is a different thing
+    # and still works: `stage` decides, not `protocol`, and minimisation is minimisation.
+    if protocol == "alchemical" and run_input.stage is None:
+        print("md-run: protocol = alchemical names the lambda-window ladder, which md-run does "
+              "not yet dispatch to (0.7.0, X1). The window runtime exists "
+              "(md_tools.alchemy.windows.run_window) and this input resolves, but nothing here "
+              "would run a window -- the run would prepare the system and report success. An "
+              "input naming a preparation `stage` is unaffected.", file=sys.stderr)
+        return 2
     replicas = (int(resolved["rest2"]["number_of_replicas"])
                 if protocol == "REST2" else None)
     # A LADDER READS -s ONLY FROM ITS GROUP FILE (0.5.4). Refused by name here, before -odir or

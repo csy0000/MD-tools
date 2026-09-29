@@ -116,10 +116,14 @@ def _run(project: Path, destination: Path, *extra, expect=0):
     environment["OPENMM_CPU_THREADS"] = "1"
     done = subprocess.run(
         [sys.executable, str(project / "AIS-run1" / "AIS.py"),
+         # V0 is the SCALED saved state the source ensemble was sampled from, and since the
+         # renumbering that is state 1; V1 is the physical end state, state 0. Both come from
+         # build/AIS/ rather than one of them being built.xml: under implicit solvent the two
+         # must be a parameter-only pair, and only the scaler's own pair is.
          "-p", str(project / "build" / "built.pdb"),
-         "-s", str(project / "build" / "AIS" / "system_state0.xml"),
+         "-s", str(project / "build" / "AIS" / "system_state1.xml"),
          "-p2", str(project / "build" / "built.pdb"),
-         "-s2", str(project / "build" / "built.xml"),
+         "-s2", str(project / "build" / "AIS" / "system_state0.xml"),
          "-source-traj", str(project / "source.dcd"),
          "-odir", str(destination), "--cpu", *extra],
         cwd=project / "AIS-run1", capture_output=True, text=True, timeout=1800, env=environment)

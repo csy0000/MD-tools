@@ -399,30 +399,211 @@ def test_the_configured_protein_force_field_reaches_tleap():
 
 # --- the nonpolar (ACE surface-area) term is a stated choice ------------------
 
-def test_the_nonpolar_term_defaults_to_off_matching_amber_igb8_gbsa0():
+def test_the_nonpolar_term_defaults_to_on_matching_openmms_gbn2_xml():
     """GBn2's parameters were fit to reproduce PB *polar* solvation; the nonpolar term is extra.
 
     OpenMM's implicit/gbn2.xml turns it on by default and ParmEd leaves it off, so whichever this
-    repository picks must be stated rather than inherited.
+    repository picks must be stated rather than inherited. It is ON as of 0.6.2 (it was off
+    before, and inert before that -- see the forwarding test below).
     """
     from md_tools.openmm.system_defaults import sys_defaults
 
     implicit = sys_defaults(solvent="GBn2")["implicit_solvent"]
-    assert implicit["nonpolar_sasa"] is False
+    assert implicit["nonpolar_sasa"] is True
+    # null, not 0.0054: the absent value means "ACE's own tension", which reproduces OpenMM's
+    # hard-coded prefactor exactly. Writing the number here would make a later change to ACE's
+    # definition look like a change somebody made on purpose.
+    assert implicit["nonpolar_surften"] is None
     assert implicit["model"] == "GBn2" and implicit["radii"] == "mbondi3"
 
 
-def test_the_choice_reaches_the_builder_and_is_not_a_library_default():
+def test_the_choice_actually_reaches_the_system_builder():
+    """The configured value must ARRIVE, which is not what the previous version of this checked.
+
+    It asserted `"nonpolar_sasa=bool(" in inspect.getsource(builders)` -- a string in the CALLER.
+    That string was there and correct the whole time, while `build_implicit_bundle_inputs`
+    accepted the argument and never passed it on, so every implicit build had no nonpolar term
+    whatever the configuration said and the manifest recorded the request as though it were the
+    result. A source-text assertion about one side of a call cannot see the other side.
+
+    Reaching the call for real needs tleap and a parameterised solute, so the forwarding itself is
+    checked on the CALL NODE rather than on a substring anywhere in the file: the defect was a
+    call that did not carry the keyword, and that is exactly what an AST can see.
+    `test_the_built_system_carries_the_ace_term_it_was_asked_for` then runs the whole path.
+    """
+    import ast
     import inspect
+    import textwrap
 
     from md_tools.openmm import builders, implicit
 
-    assert inspect.signature(implicit.build_implicit_system).parameters[
-        "nonpolar_sasa"].default is False
+    for name, parent in (("build_implicit_bundle_inputs", implicit),
+                         ("_build_implicit", builders)):
+        source = None
+        for node in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(parent)))):
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                source = node
+        if source is None:      # the builder helper is named differently; the implicit one is not
+            continue
+        calls = [node for node in ast.walk(source)
+                 if isinstance(node, ast.Call)
+                 and getattr(node.func, "id", getattr(node.func, "attr", None))
+                 in ("build_implicit_system", "build_implicit_bundle_inputs")]
+        assert calls, f"{name} no longer calls the implicit builder; this test cannot see it"
+        for call in calls:
+            passed = {kw.arg for kw in call.keywords}
+            assert {"nonpolar_sasa", "nonpolar_surften"} <= passed, (
+                f"{name} calls the implicit builder without forwarding "
+                f"{{'nonpolar_sasa', 'nonpolar_surften'}} - {sorted(passed)}. An argument that is "
+                "accepted and dropped makes the manifest record the request as the result.")
+
     assert "useSASA=bool(nonpolar_sasa)" in inspect.getsource(implicit.build_implicit_system), \
         "createSystem must be told explicitly, not left to ParmEd's default"
-    assert "nonpolar_sasa=bool(" in inspect.getsource(builders), \
-        "the builder must pass the configured value through, not leave it to a library default"
+
+
+def _gbn2_system_and_positions(sasa: bool):
+    """ACE-ALA-NME with GBn2, built through OpenMM's own ForceField. No tleap, no ParmEd, no GPU."""
+    from pathlib import Path
+
+    from openmm.app import ForceField, NoCutoff, PDBFile
+
+    pdb = PDBFile(str(Path(__file__).parent / "data" / "ALA.pdb"))
+    forcefield = ForceField("amber14/protein.ff14SB.xml", "implicit/gbn2.xml")
+    system = forcefield.createSystem(pdb.topology, nonbondedMethod=NoCutoff,
+                                     **({} if sasa else {"sasaMethod": None}))
+    return system, pdb.positions
+
+
+def _gb_energy(system, positions):
+    import openmm as mm
+
+    for force in system.getForces():
+        force.setForceGroup(1 if isinstance(force, mm.CustomGBForce) else 0)
+    context = mm.Context(system, mm.VerletIntegrator(0.001),
+                         mm.Platform.getPlatformByName("Reference"))
+    context.setPositions(positions)
+    energy = context.getState(getEnergy=True, groups={1}).getPotentialEnergy()
+    return energy.value_in_unit(mm.unit.kilojoule_per_mole)
+
+
+def test_the_conversion_reproduces_openmms_own_hard_coded_prefactor():
+    """`4*pi*0.0054 kcal/mol/A^2` in kJ/mol/nm^2 must be OpenMM's literal, to every printed digit.
+
+    This is what makes the substitution a re-derivation of their constant rather than a number of
+    ours that happens to be close. If it ever stops holding, the arithmetic is wrong and every
+    surften below it is wrong with it.
+    """
+    from md_tools.openmm.implicit import (ACE_DEFAULT_SURFTEN, OPENMM_ACE_PREFACTOR,
+                                          OPENMM_ACE_PREFACTOR_LITERAL, ace_prefactor)
+
+    assert f"{ace_prefactor(ACE_DEFAULT_SURFTEN):.7f}" == OPENMM_ACE_PREFACTOR_LITERAL
+    # 5e-8, not 1e-9: OpenMM's literal is the exact value ROUNDED TO SEVEN DECIMALS
+    # (28.391955111258543 -> 28.3919551), so half a unit in the last place is the closest any
+    # correct derivation can come. A tighter bound here would only assert that we had copied
+    # their rounding rather than re-derived the number.
+    assert abs(ace_prefactor(ACE_DEFAULT_SURFTEN) - OPENMM_ACE_PREFACTOR) < 5e-8
+
+
+def test_setting_the_default_surface_tension_leaves_the_system_byte_identical():
+    """The default must cost nothing: same bytes, so the same System digest and fingerprint.
+
+    If rewriting at 0.0054 changed a single character, every implicit run would get a new System
+    digest for no change in physics, and every reference bundle built before it would stop
+    verifying against one built after.
+    """
+    from openmm import XmlSerializer
+
+    from md_tools.openmm.implicit import ACE_DEFAULT_SURFTEN, set_ace_surften
+
+    untouched, _ = _gbn2_system_and_positions(sasa=True)
+    rewritten, _ = _gbn2_system_and_positions(sasa=True)
+    record = set_ace_surften(rewritten, ACE_DEFAULT_SURFTEN)
+
+    assert record["is_openmm_default"] is True
+    assert XmlSerializer.serialize(untouched) == XmlSerializer.serialize(rewritten)
+
+
+def test_the_surface_tension_actually_scales_the_nonpolar_energy():
+    """E_GB(surften) must be AFFINE in surften, with the polar part untouched.
+
+    The nonpolar term is linear in the tension and the polar part does not depend on it at all,
+    so two differences taken from the same reference must be in the ratio of the two tension
+    differences. A rewrite that hit the wrong energy term would change the polar part and break
+    this ratio while still producing a plausible-looking number.
+    """
+    from md_tools.openmm.implicit import ACE_DEFAULT_SURFTEN, set_ace_surften
+
+    def gb_at(surften):
+        system, positions = _gbn2_system_and_positions(sasa=True)
+        set_ace_surften(system, surften)
+        return _gb_energy(system, positions)
+
+    reference = gb_at(ACE_DEFAULT_SURFTEN)
+    low, high = gb_at(0.005), gb_at(0.0108)
+
+    measured = (low - reference) / (high - reference)
+    expected = (0.005 - ACE_DEFAULT_SURFTEN) / (0.0108 - ACE_DEFAULT_SURFTEN)
+    assert abs(measured - expected) < 1e-6, (measured, expected)
+    # and it is not a no-op: 0.0054 -> 0.005 is a real change on a 22-atom solute
+    assert abs(low - reference) > 1.0
+
+
+def test_a_tension_that_cannot_be_applied_is_refused_rather_than_ignored():
+    """Every refusal here must be reachable -- a guard nobody can make fail is not a guard."""
+    from md_tools.openmm.implicit import set_ace_surften
+
+    with_ace, _ = _gbn2_system_and_positions(sasa=True)
+    with pytest.raises(ValueError) as error:
+        set_ace_surften(with_ace, 0.0)
+    assert "nonpolar_sasa" in str(error.value), "zero must point at the way to turn the term off"
+
+    with pytest.raises(ValueError):
+        set_ace_surften(with_ace, -0.005)
+
+    without_ace, _ = _gbn2_system_and_positions(sasa=False)
+    with pytest.raises(RuntimeError) as missing:
+        set_ace_surften(without_ace, 0.005)
+    assert "nonpolar_sasa: true" in str(missing.value)
+
+
+def test_a_surface_tension_given_with_the_term_off_is_refused():
+    """Accepted-and-inert is the defect this whole change exists to remove."""
+    import inspect
+    from pathlib import Path
+
+    from md_tools.openmm import implicit
+
+    source = inspect.getsource(implicit.build_implicit_system)
+    assert "nonpolar_surften" in source and "silently ignored" in source
+    with pytest.raises(ValueError) as error:
+        implicit.build_implicit_system(
+            Path("/nonexistent.prmtop"), nonpolar_sasa=False, nonpolar_surften=0.005)
+    assert "nonpolar_sasa: false" in str(error.value)
+
+
+def test_the_two_libraries_unfitted_gamma_still_differ_by_exactly_what_is_recorded():
+    """A divergence written in a comment is a claim nobody checks. This checks it.
+
+    ParmEd installs gamma 4.85 for an element outside the GB-Neck2 fit and OpenMM's gbn2.xml
+    installs 4.851. If either library changes its placeholder, the recorded difference becomes
+    wrong and this fails -- rather than the note quietly describing a state of affairs that ended.
+    """
+    from openmm.app.internal.customgbforces import GBSAGBn2Force
+
+    from md_tools.openmm.implicit import GBN2_UNFITTED_GAMMA_OPENMM, GBN2_UNFITTED_PARAMETERS
+
+    _default_atom_params = GBSAGBn2Force._default_atom_params
+
+    # Both libraries expose the fallback as a real value, so neither side of this is a string
+    # match: OpenMM as a module-level list, ParmEd as the literal it fills its gamma array with.
+    assert list(_default_atom_params) == [1.0, 0.8, GBN2_UNFITTED_GAMMA_OPENMM]
+    assert GBN2_UNFITTED_PARAMETERS == (1.0, 0.8, 4.85)
+
+    alpha, beta, parmed_gamma = GBN2_UNFITTED_PARAMETERS
+    openmm_alpha, openmm_beta, openmm_gamma = _default_atom_params
+    assert (alpha, beta) == (openmm_alpha, openmm_beta), \
+        "the divergence is recorded as gamma-only; alpha or beta now differs too"
+    assert abs(openmm_gamma - parmed_gamma - 0.001) < 1e-9, (openmm_gamma, parmed_gamma)
 
 
 def test_the_forcefield_record_states_the_nonpolar_choice():
@@ -524,7 +705,7 @@ def test_gbn2_is_implicit_and_carries_no_box_or_water():
     # nothing for a box, a cutoff or salt to be written into.
     assert "solvent" not in document, document.get("solvent")
     assert document["implicit_solvent"] == {"model": "GBn2", "radii": "mbondi3",
-                                            "nonpolar_sasa": False}
+                                            "nonpolar_sasa": True, "nonpolar_surften": None}
     from md_tools.openmm.system_config import resolve_sys_config
     sys_resolved = resolve_sys_config(document)
     assert sys_resolved["solvation"] == "implicit"
