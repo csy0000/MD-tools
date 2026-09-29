@@ -66,10 +66,16 @@ directions computed alongside from the same samples.
 |---|---|---|---|---|---|
 | ethane | r1, r2, r3 | **+2.478** | 0.033 | 0.078 | 0.141 |
 | chloroethane | r1, r2, r3 | **+0.839** | 0.067 | 0.093 | 0.131 |
-| ethanol | r1, r2 | **−3.542** | 0.028 | 0.103 | 0.139 |
+| ethanol | r1, r2, r3 | **−3.523** | 0.025 | 0.102 | 0.139 |
 
 Per repeat: ethane +2.507 / +2.515 / +2.413, chloroethane +0.747 / +0.801 / +0.969, ethanol
-−3.515 / −3.570. Ethanol's third repeat is still running.
+−3.515 / −3.570 / −3.483. Nine legs, 108 windows, 108 ns of sampling.
+
+Against experiment: ethane +2.478 (expt +1.83), chloroethane +0.839 (−0.63), ethanol −3.523
+(−5.00). All three are too POSITIVE by 0.65 to 1.48 kcal/mol — the same direction for a
+hydrocarbon, an alkyl halide and an alcohol, which is what a systematic force-field and
+water-model offset looks like rather than a defect in any one ligand's parameters. It is reported
+and never gated on.
 
 **The error bar is the repeat spread, not MBAR's σ**, and the two are different quantities. MBAR's
 σ is the within-run statistical error at fixed sampling; it cannot see anything that differs
