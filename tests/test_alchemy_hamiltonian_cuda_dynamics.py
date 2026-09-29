@@ -118,10 +118,35 @@ def test_npt_on_cuda_leaves_nothing_stale(precision):
     sa, sb, a, b, x = fx.build(True, dispersion=True)
     for s in (sa, sb):
         s.addForce(openmm.MonteCarloBarostat(1.0, 300.0, 5))
+    # EVERY STOCHASTIC SOURCE IS SEEDED, and the barostat too. Until 2026-09-29 none of them was:
+    # OpenMM reads an unset seed as "choose randomly", so this test compared at a DIFFERENT
+    # configuration and a different box on every run, and S0 found it failing intermittently on
+    # card 8 -- once in five runs, by 3.9e-4 against a 3.2e-4 bound, a 1.2x miss. A test with no
+    # fixed input cannot be evidence in either direction: "it passed" and "it failed" were both
+    # true of it, and at ~20% it is frequent enough to reach a release gate and be dismissed as a
+    # flake, rare enough that four clean runs would have closed the question. The NVE smoke test
+    # in this file seeded its velocities from the day it was written; this one did not.
+    #
+    # THE SEEDS WERE VERIFIED TO FIX THE INPUT, and the verification itself nearly misled me:
+    # on the CPU platform at OPENMM_CPU_THREADS=2 two seeded runs still diverged by 2.29
+    # kJ/mol and 0.41 nm^3, which reads exactly like seeding that did not take. At ONE thread
+    # every stage is bit-identical -- minimisation, 10 steps, 10 steps with the barostat, and
+    # the full 500 steps: dE = dV = 0.000e+00. The residue was the CPU platform summing force
+    # reductions in thread-completion order (`md_tools.remd.driver` records the same), with
+    # 500 steps of Langevin dynamics amplifying it. Whether CUDA is reproducible under these
+    # seeds is a SEPARATE question that needs a card; if it is not, the bound below must be
+    # calibrated against the spread rather than the input frozen.
+    integrator = openmm.LangevinMiddleIntegrator(300.0, 1.0, 0.0005)
+    integrator.setRandomNumberSeed(20260929)
+    for s in (sa, sb):
+        for force in s.getForces():
+            if isinstance(force, openmm.MonteCarloBarostat):
+                force.setRandomNumberSeed(20260929)
     h = build_hamiltonian(sa, sb, a, b)
-    live = _cuda_context(h.system, x, openmm.LangevinMiddleIntegrator(300.0, 1.0, 0.0005), precision)
+    live = _cuda_context(h.system, x, integrator, precision)
     state = dict(zip(NAMES, (0.5, 0.5, 0.5)))
     h.set_state(live, state)
+    live.setVelocitiesToTemperature(300.0, 20260929)
     openmm.LocalEnergyMinimizer.minimize(live, 1.0, 2000)
     start = live.getState(getEnergy=True).getPotentialEnergy()._value
     v0 = live.getState().getPeriodicBoxVolume()._value
@@ -131,6 +156,16 @@ def test_npt_on_cuda_leaves_nothing_stale(precision):
     assert np.isfinite(energy) and abs(energy) < abs(start) + 5000.0, (precision, start, energy)
     assert st.getPeriodicBoxVolume()._value != v0, "the barostat never moved the box"
     box, pos = st.getPeriodicBoxVectors(), st.getPositions(asNumpy=True)._value
+    # UNCALIBRATED, AND KNOWN TO BE SO (2026-09-29). 1e-6 is the package's DOUBLE-precision
+    # two-Context figure: `md_tools.alchemy.windows.SELF_CHECK_REL` measures mixed at 2e-5 and
+    # double at 1e-6, from two Contexts over one System and one set of positions on CUDA. This
+    # test applies the double number to mixed, so it is ~20x tighter than the only measurement
+    # this package has of the quantity it is bounding -- which is why a 1.2x miss was reachable at
+    # all. It is NOT widened here on that basis: those figures were measured on a 1038-atom
+    # solvated system and this fixture is 102 particles, so the right number is a measurement on
+    # THIS fixture (two Contexts, same System, same positions, CUDA mixed, repeated), which needs
+    # a card. Requested from S0; until it exists the bound stays where it was, with its provenance
+    # stated rather than implied.
     rel = {"mixed": 1e-6, "double": 1e-10}[precision]
 
     def fresh_energy(t, vectors):
