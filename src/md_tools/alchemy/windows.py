@@ -57,6 +57,7 @@ import hashlib
 import json
 import math
 import os
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -69,7 +70,12 @@ from md_tools.alchemy.samples import (BAR_NM3_TO_KJ_MOL, SampleSet, Thermodynami
                                       kt_kj_mol)
 
 WINDOW_SCHEMA = "md-tools-alchemical-window/1"
-COMPLETION_SCHEMA = "md-tools-alchemical-window-completion/1"
+#: /2 adds `evaluation_self_check_n` and `..._median_kJ_mol` beside the max. Version 2 and not a
+#: silent addition, because two shapes answering to one schema name is the defect that version
+#: strings exist to prevent: a reader wanting the count could not tell an old record from a
+#: malformed one. `verify_window` accepts both -- it reads the fingerprint and the two digests and
+#: nothing else -- so a /1 window completed before this change still verifies and is not re-run.
+COMPLETION_SCHEMA = "md-tools-alchemical-window-completion/2"
 #: The force group of the Boresch restraint. S3's Hamiltonian uses groups 0-9.
 RESTRAINT_FORCE_GROUP = 16
 #: The evaluation Context's own-state energy must equal the sampling Context's to
@@ -316,6 +322,12 @@ class SampleStreamReporter:
         self.columns = stream_columns(evaluator.states, self.components, self.npt)
         self.rows = int(rows_already)
         self.checked_self_energy: float | None = None
+        #: EVERY per-evaluation deviation, not a running summary of them. The max alone is not a
+        #: comparable quantity -- it grows with how many evaluations a window made, so a longer
+        #: window looks worse for being longer and two windows' values describe different
+        #: statistics. Keeping the series lets the record carry the count and the median beside
+        #: it, which is what makes the max interpretable rather than merely alarming.
+        self.self_check_deviations: list[float] = []
         fresh = not self.path.exists() or self.path.stat().st_size == 0
         self._handle = self.path.open("a", encoding="utf-8", newline="")
         self._writer = csv.writer(self._handle, lineterminator="\n")
@@ -345,8 +357,9 @@ class SampleStreamReporter:
                 f"the evaluation Context gives {energies[own]:.6f} kJ/mol at the sampled state "
                 f"and the sampling Context {sampled:.6f}: they are not the same Hamiltonian, and "
                 f"every cross-state energy would describe another system")
-        self.checked_self_energy = max(abs(float(energies[own] - sampled)),
-                                       self.checked_self_energy or 0.0)
+        deviation = abs(float(energies[own] - sampled))
+        self.self_check_deviations.append(deviation)
+        self.checked_self_energy = max(deviation, self.checked_self_energy or 0.0)
         row = [f"{self.origin.state_id}:{step:012d}", self.origin.state_id, step,
                repr(step * self.timestep_ps)]
         if self.npt:
@@ -699,7 +712,17 @@ def run_window(*, topology, system, hamiltonian, path: AlchemicalPath,
                   "steps": simulation.currentStep,
                   "samples_sha256": hashlib.sha256(paths["samples"].read_bytes()).hexdigest(),
                   "restart_sha256": hashlib.sha256(paths["restart"].read_bytes()).hexdigest(),
+                  # THE MAX, ITS SAMPLE COUNT AND ITS MEDIAN, together. A max without the number
+                  # of evaluations it is over cannot be interpreted at all: it grows with window
+                  # length, so two windows' values are not comparable and a plot of them across a
+                  # ladder measures how long each window ran. The count also makes the RESUME
+                  # scoping visible -- a continued window's reporter starts fresh, so these three
+                  # describe the evaluations since the resume and the count is what says so.
                   "evaluation_self_check_kJ_mol": reporter.checked_self_energy,
+                  "evaluation_self_check_n": len(reporter.self_check_deviations),
+                  "evaluation_self_check_median_kJ_mol":
+                      statistics.median(reporter.self_check_deviations)
+                      if reporter.self_check_deviations else None,
                   "evaluation_self_check_tolerance": {
                       "abs_kJ_mol": SELF_CHECK_ABS_KJ_MOL, "rel": evaluator.self_check_rel,
                       "platform": platform.getName(),

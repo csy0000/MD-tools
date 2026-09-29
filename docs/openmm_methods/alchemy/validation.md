@@ -62,19 +62,25 @@ directions computed alongside from the same samples.
 
 <!-- RESULTS TABLE: regenerate with scratchpad/abs-hydration/summarise.py -->
 
-| ligand | repeat | ΔG_hyd, kcal/mol | σ (MBAR) | min. neighbour overlap |
-|---|---|---|---|---|
-| ethane | r1 | **+2.507** | 0.078 | 0.141 |
-| ethane | r3 | **+2.413** | 0.080 | 0.151 |
-| chloroethane | r1 | **+0.747** | 0.094 | 0.152 |
-| ethanol | r1 | **−3.515** | 0.105 | 0.179 |
+| ligand | repeats | ΔG_hyd, kcal/mol | ± (repeat spread) | per-run σ (MBAR) | min. overlap |
+|---|---|---|---|---|---|
+| ethane | r1, r2, r3 | **+2.478** | 0.033 | 0.078 | 0.141 |
+| chloroethane | r1, r2, r3 | **+0.839** | 0.067 | 0.093 | 0.131 |
+| ethanol | r1, r2 | **−3.542** | 0.028 | 0.103 | 0.139 |
 
-The remaining repeats are running; this page is updated from `summarise.py` when they land, and the
-cross-check below is restated over repeats when the ladder for each ligand has as many of them as
-M2's reference number does.
+Per repeat: ethane +2.507 / +2.515 / +2.413, chloroethane +0.747 / +0.801 / +0.969, ethanol
+−3.515 / −3.570. Ethanol's third repeat is still running.
+
+**The error bar is the repeat spread, not MBAR's σ**, and the two are different quantities. MBAR's
+σ is the within-run statistical error at fixed sampling; it cannot see anything that differs
+between independent realisations — the configuration each window inherits, where the barostat
+takes the box, which basins a nanosecond visits. Those appear only as scatter *between* repeats.
+Here the two are comparable (spread/σ of 0.4 to 1.2), so neither dominates, and quoting either
+alone would understate the uncertainty. M2's reference number is error-barred the same way, which
+is what makes the comparison below like for like.
 
 **The placement gate passed on every leg.** The smallest nearest-neighbour overlap anywhere is
-0.141 against the registered floor of 0.03, and `poor_overlap` is false throughout — twelve even
+0.131 (chloroethane r2) against the registered floor of 0.03, and `poor_overlap` is false throughout — twelve even
 windows are enough for these three ligands, and no re-placement was needed. The gate is read from
 `estimates.MBAR.diagnostics.min_neighbour_overlap`; the first version of the analysis script
 guessed three other key spellings and fell through to `null` on all of them, so it reported nothing
@@ -84,11 +90,20 @@ and passed every time. A check that cannot fail closes the question instead of a
 
 | route | ΔΔG_hyd(ethane → chloroethane), kcal/mol |
 |---|---|
-| decoupling each ligand separately (r1) | **−1.759** |
+| decoupling each ligand separately (three repeats each) | **−1.639 ± 0.074** |
 | mutating one into the other (0.7.0 M2, three repeats) | **−1.743 ± 0.026** |
 
-They agree to **0.016 kcal/mol** — well inside M2's own uncertainty. Two alchemical routes with
-different plans, different end states and different particles appearing arrive at the same number.
+They differ by **0.104 ± 0.079**, which is **1.3 σ** — consistent. Two alchemical routes with
+different plans, different end states and different particles appearing arrive at the same number
+within the scatter of both.
+
+A CAUTION THAT IS PART OF THE RESULT. The first repeat alone gave −1.759 against M2's −1.743, an
+apparent agreement to 0.016 — far better than either method's own reproducibility, and it was
+written down here as the headline before the other repeats finished. It was a coincidence of one
+realisation. Chloroethane's three repeats span 0.747 to 0.969, a spread of 0.22 kcal/mol, so any
+single repeat can land 0.1 from the mean by luck in either direction. An agreement much tighter
+than the reproducibility of the things being compared is not a stronger result; it is a sign that
+not enough of them have been run.
 
 Against experiment (−2.46) both routes are off by about 0.7 kcal/mol in the same direction. That is
 force-field and water-model error — openff-2.2.1/AM1-BCC in TIP3P was not fitted to this — and it
