@@ -291,14 +291,60 @@ def test_a_declared_modified_residue_stops_blocking():
 
 def test_a_urea_is_not_taken_for_a_peptide_bond():
     """"A carbon next to one oxygen and one nitrogen" also describes ureas, carbamates and
-    carbamic acids. Those are not peptide omega bonds and must not be excluded as if they were."""
+    carbamic acids. Those are not peptide omega bonds and must not be excluded as if they were.
+
+    That concern is unchanged. What changed is the CONCLUSION drawn from it: a urea used to be an
+    abstention -- "which of the two C-N bonds is the omega?" -- and it is now classified as
+    `urea_like`, which is neither an omega nor a guess. See
+    `test_both_c_n_bonds_of_a_urea_are_unscaled_because_both_carry_the_barrier`.
+
+    A urea still needs bond-order evidence like any other non-standard residue, so with no SDF
+    this refuses -- for want of evidence, which is the ordinary rule, not for being a urea.
+    """
     b = _Builder()
     b.residue("URE", {"C": "C", "O": "O", "N1": "N", "H1": "H", "N2": "N", "H2": "H"})
     b.bond(("C", "O"), ("C", "N1"), ("C", "N2"), ("N1", "H1"), ("N2", "H2"))
     result = _classify(b)
     assert _amide_unscaled(result) == []
-    assert _amide_unclassified(result), "a urea must be reported, not silently scaled"
-    assert "urea-like" in _amide_unclassified(result)[0]["ambiguous"]
+    assert not any(e["class"] == "amide_omega" for e in result["central_bonds"]), (
+        "a urea is not a peptide bond and must never be recorded as one")
+    assert _amide_unclassified(result), "with no bond orders it is still refused"
+    assert "no SDF" in _amide_unclassified(result)[0]["ambiguous"]
+
+
+def test_both_c_n_bonds_of_a_urea_are_unscaled_because_both_carry_the_barrier():
+    """The measurement that replaced the abstention. Torsion-term barriers, openff-2.2.1:
+
+        N-methylacetamide amide C-N    29.0 kT   the reference unscaled bond
+        1,3-dimethylurea  C(=O)-N      25.3 kT   BOTH of them
+        1,3-dimethylurea  N-CH3        11.2 kT   the ordinary bond in the same molecule
+        ethane            C-C           7.3 kT   freely rotating
+
+    Each C-N of a urea carries 87% of a genuine amide's barrier and 2.3x the ordinary N-C beside
+    it. Asking which one is "the" omega was the wrong question; both are restricted, and scaling
+    either lets a hot state flatten a bond the physical state never flattens.
+    """
+    pytest.importorskip("openff.toolkit")
+    import tempfile
+    from pathlib import Path as _Path
+
+    from openff.toolkit import Molecule
+
+    from md_tools.openmm.system import unscaled_torsions
+
+    mol = Molecule.from_smiles("CNC(=O)NC", allow_undefined_stereo=True)
+    mol.generate_conformers(n_conformers=1)
+    mol.name = "URE"
+    sdf = _Path(tempfile.mkdtemp()) / "URE.sdf"
+    mol.to_file(str(sdf), file_format="sdf")
+    topology = mol.to_topology().to_openmm()
+    for residue in topology.residues():
+        residue.name = "URE"
+
+    result = unscaled_torsions(topology, list(range(topology.getNumAtoms())), ligand_sdf=sdf)
+    classes = [e["class"] for e in result["central_bonds"]]
+    assert classes.count("urea_like") == 2, f"both C-N bonds, got {classes}"
+    assert "amide_omega" not in classes, "a urea is not a peptide bond"
 
 
 # --- 7. the amidate: a deprotonated amide nitrogen has TWO connections ---------------------------

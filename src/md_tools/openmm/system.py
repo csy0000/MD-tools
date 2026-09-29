@@ -721,7 +721,10 @@ PROTEIN_UNSCALED_BONDS = {
 
 #: The classes of central bond whose torsions stay unscaled, in the order they are decided and
 #: reported. Impropers are the fourth class and have no central bond.
-UNSCALED_BOND_CLASSES = ("amide_omega", "aromatic_ring", "double_bond")
+#: `urea_like` is a carbonyl carbon's TWO C-N bonds. It is listed beside `amide_omega`
+#: rather than folded into it because a urea is not a peptide bond, and a record that said
+#: so would be claiming evidence it does not have.
+UNSCALED_BOND_CLASSES = ("amide_omega", "urea_like", "aromatic_ring", "double_bond")
 
 
 
@@ -1011,8 +1014,6 @@ def _amide_candidates(topology, solute: set[int]) -> list[dict]:
             reason = f"carbon {c.index} has {len(carbonyl)} carbonyl oxygens (expected 1)"
         elif hydroxyl:
             reason = f"carbon {c.index} also carries a hydroxyl/ester oxygen: not a plain amide"
-        elif len(nitrogens) > 1:
-            reason = f"carbon {c.index} is bonded to {len(nitrogens)} nitrogens (urea-like)"
         out.append({
             "bond": (int(c.index), int(n.index)),
             "carbon": int(c.index), "nitrogen": int(n.index),
@@ -1022,6 +1023,22 @@ def _amide_candidates(topology, solute: set[int]) -> list[dict]:
             "carbon_residue_index": int(c.residue.index),
             "nitrogen_residue_index": int(n.residue.index),
             "inter_residue": c.residue.index != n.residue.index,
+            # A carbonyl carbon bearing TWO nitrogens: a urea. This used to be an abstention --
+            # "which of the two C-N bonds is the omega?" -- and the measurement says that is the
+            # wrong question, because BOTH are. Torsion-term barriers under openff-2.2.1:
+            #
+            #     N-methylacetamide amide C-N    29.0 kT   (the reference unscaled bond)
+            #     1,3-dimethylurea  C(=O)-N      25.3 kT   BOTH of them
+            #     1,3-dimethylurea  N-CH3        11.2 kT   the ordinary bond in the same molecule
+            #     ethane            C-C           7.3 kT   freely rotating
+            #
+            # Each C-N of a urea carries 87% of a genuine amide's barrier and 2.3x the ordinary
+            # N-C beside it, so scaling either one lets a hot state flatten a bond the physical
+            # state never flattens. Both are unscaled, and the class says urea_like rather than
+            # amide_omega so the record does not claim a peptide bond that is not there.
+            #
+            # Three nitrogens cannot arise: the carbon already spends a bond on the carbonyl.
+            "urea_like": len(nitrogens) > 1,
             "ambiguous": reason,
         })
     return out
@@ -1234,7 +1251,8 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         return len(neighbours.get(a, ())) >= 2 and len(neighbours.get(b, ())) >= 2
 
     amide_bonds = {tuple(sorted(c["bond"])) for c in unscaled + proline}
-    central: list[dict] = [{"bond": sorted(c["bond"]), "class": "amide_omega",
+    central: list[dict] = [{"bond": sorted(c["bond"]),
+                            "class": "urea_like" if c.get("urea_like") else "amide_omega",
                             "residue": c["nitrogen_residue"],
                             "residue_index": c["nitrogen_residue_index"],
                             "evidence": ("residue name" if c["nitrogen_residue"].upper()

@@ -131,8 +131,11 @@ Do not change these without a failing test that demonstrates a defect.
 
 * **REST2**: every replica at the same physical temperature — Hamiltonian scaling, not
   temperature REMD. Convention v3, `rest2-unscaled-torsions`: bonds and angles unscaled; every
-  UNSCALED TORSION unscaled — each proper torsion across an ordinary amide C–N (omega), an aromatic
-  ring bond or another double bond (the ARG guanidinium included), and every improper; eligible
+  UNSCALED TORSION unscaled — each proper torsion across an ordinary amide C–N (omega), BOTH C–N
+  bonds of a urea (a carbonyl carbon bearing two nitrogens: each carries 25.3 kT against a real
+  amide's 29.0 and an ordinary N–C's 11.2, so asking which one is "the" omega was the wrong
+  question), an aromatic ring bond or another double bond (the ARG guanidinium included), and
+  every improper; eligible
   solute torsions and CMAP by `(1-tau)²`; solute–solute nonbonded and 1-4 by `(1-tau)²`;
   solute–environment by `(1-tau)`; generalized-Born by `(1-tau)`. Exchanges never rescale
   velocities. The runtime is NVT. One trajectory per fixed thermodynamic **state**
