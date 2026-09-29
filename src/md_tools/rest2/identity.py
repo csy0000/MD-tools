@@ -37,7 +37,14 @@ import re
 #: md-tools-solute-selection/2.0 document (`hamiltonian_selection_projection`): hot atoms, torsion
 #: and CMAP decisions, protected bonds, ligand instances -- because under selective REST2 two
 #: selections with one nonbonded atom set can still be two Hamiltonians -- and NOT its provenance.
-FINGERPRINT_FORMAT = "md-tools-hamiltonian-identity/v3"
+#: v4 (0.6.3): `detector_policy_version` is OUT of the projection. It stamped which detector made
+#: the classification, which is provenance -- and this projection's whole contract is that it
+#: hashes what determines the Hamiltonian and NOT provenance. The bonds the detector produced are
+#: already here; the version that produced them changes no energy. It was a constant, so it
+#: distinguished nothing while making every digest depend on an implementation detail.
+FINGERPRINT_FORMAT = "md-tools-hamiltonian-identity/v4"
+#: What 0.6.1 and 0.6.2 wrote. Accepted ONLY through `_legacy_v3_agrees`.
+V3_FINGERPRINT_FORMAT = "md-tools-hamiltonian-identity/v3"
 #: What 0.6.0 wrote. Read, and accepted ONLY through `_legacy_v2_agrees` (shared contract §3).
 LEGACY_FINGERPRINT_FORMAT = "md-tools-hamiltonian-identity/v2"
 LEGACY_SELECTION_MODE = "legacy-full-solute"
@@ -45,6 +52,13 @@ LEGACY_SELECTION_MODE = "legacy-full-solute"
 #: The fields a v2 identity carried, all of which must match for the compatibility branch.
 V2_FIELDS = ("system_sha256", "selection_sha256", "tau", "temperature_k", "ensemble",
              "n_solute_atoms", "n_unscaled_central_bonds", "unscaled_impropers")
+
+#: Every value a v3 projection's `detector_policy_version` could hold: the detector constant of
+#: every release that wrote v3, or None where `unscaled_torsions: false` disabled classification
+#: and the scaler recorded no detector at all. The space is exactly these two, so a v3 digest is
+#: reproduced by trying both -- and the other eight identity fields must match regardless, so
+#: accepting either costs nothing in strictness.
+_V3_DETECTOR_POLICY_VERSIONS = (2, None)
 
 #: Attributes stripped before hashing: they describe the file, not the physics.
 _VOLATILE = (
@@ -197,7 +211,6 @@ def hamiltonian_selection_projection(document):
             or ()),
         "cmap": sorted([int(d["term"]), int(d["map"]), bool(d["scaled"])]
                        for d in document.get("cmap_decisions") or ()),
-        "detector_policy_version": document.get("detector_policy_version"),
         "policy": document.get("policy"),
         "ligand_instances": sorted(instances, key=lambda e: e["residue_key"]),
     })
@@ -207,6 +220,24 @@ def hamiltonian_selection_projection(document):
 def selection_identity_sha256(document):
     """sha256 of `hamiltonian_selection_projection(document)`: what `selection_sha256` is."""
     return _canonical_sha256(hamiltonian_selection_projection(document))
+
+
+def _v3_selection_sha256_candidates(document):
+    """Every `selection_sha256` v3 could have written for this selection. Kept for compatibility.
+
+    v3 hashed the projection with `detector_policy_version` in it, and that key is gone from both
+    the projection and the record, so its value cannot be read back off a current selection. It is
+    reconstructed instead: the space is `_V3_DETECTOR_POLICY_VERSIONS`, and a document that still
+    carries the key (one read from a v3-era file) pins it exactly.
+    """
+    carried = document.get("detector_policy_version", "<absent>")
+    values = (carried,) if carried != "<absent>" else _V3_DETECTOR_POLICY_VERSIONS
+    out = []
+    for value in values:
+        projection = hamiltonian_selection_projection(document)
+        projection["detector_policy_version"] = value
+        out.append(_canonical_sha256(projection))
+    return out
 
 
 def _canonical_sha256(document):
@@ -246,6 +277,9 @@ def identity_record(system, *, tau, temperature_k, ensemble, solute_indices=(),
         # The v2 way, so a 0.6.0 record of a legacy selection can be checked field for field.
         "v2_selection_sha256": _v2_selection_sha256(solute_indices, excluded_bonds,
                                                     unscaled_impropers),
+        # The v3 way, for the same reason: v3 hashed the detector stamp that v4 drops, so a 0.6.1
+        # or 0.6.2 record is only comparable against a digest computed with it back in place.
+        "v3_selection_sha256": _v3_selection_sha256_candidates(selection),
         "n_solute_atoms": len(list(solute_indices)),
         "n_unscaled_central_bonds": len(list(excluded_bonds)),
         "unscaled_impropers": bool(unscaled_impropers),
@@ -280,6 +314,8 @@ def require_same_hamiltonian(recorded, current, *, what="reservoir"):
             f"same distribution as the state it would refresh. Refusing rather than assuming.")
     if recorded.get("format") == LEGACY_FINGERPRINT_FORMAT:
         return _legacy_v2_agrees(recorded, current, what=what)
+    if recorded.get("format") == V3_FINGERPRINT_FORMAT:
+        return _legacy_v3_agrees(recorded, current, what=what)
     if recorded.get("format") != FINGERPRINT_FORMAT:
         raise HamiltonianMismatch(
             f"the {what}'s identity is {recorded.get('format')!r}, not {FINGERPRINT_FORMAT!r}; "
@@ -303,6 +339,34 @@ def hamiltonian_identities_agree(recorded, current):
         return bool(require_same_hamiltonian(recorded, current))
     except HamiltonianMismatch:
         return False
+
+
+def _legacy_v3_agrees(recorded, current, *, what):
+    """THE v3 COMPATIBILITY BRANCH: a 0.6.1 or 0.6.2 identity, under v4's projection.
+
+    v4 changed one thing: `detector_policy_version` left the projection, because it is provenance
+    and the projection hashes only what determines the Hamiltonian. A v3 run's Hamiltonian is
+    therefore byte-identical under v4 -- nothing about the energy moved -- so refusing it would
+    strand every in-flight 0.6.1/0.6.2 ladder and every AIS source ensemble for a digest change
+    that describes no physical difference.
+
+    Every field is compared exactly as in the v4 branch, except `selection_sha256`, which is
+    checked against the v3-way digests (see `_v3_selection_sha256_candidates`).
+    """
+    candidates = current.get("v3_selection_sha256") or []
+    differences = []
+    for key in ("system_sha256", "selection_mode", "selection_sha256", "tau", "temperature_k",
+                "ensemble", "n_solute_atoms", "n_unscaled_central_bonds", "unscaled_impropers"):
+        if key == "selection_sha256":
+            if recorded.get(key) not in candidates:
+                differences.append((key, recorded.get(key),
+                                    candidates[0] if candidates else current.get(key)))
+            continue
+        if recorded.get(key) != current.get(key):
+            differences.append((key, recorded.get(key), current.get(key)))
+    if not differences:
+        return True
+    _raise_differences(recorded, current, differences, what=what)
 
 
 def _legacy_v2_agrees(recorded, current, *, what):

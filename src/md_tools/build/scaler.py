@@ -694,7 +694,7 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
                                  for bond in unscaled["unscaled_central_bonds"]),
             topology_sha256=topology_digest(topology), detection=unscaled["detection_method"],
             mode=LEGACY_MODE, unscaled_impropers=bool(unscaled["unscaled_impropers"]),
-            detector_version=unscaled.get("detector_version"))
+            )
     arguments = selection.as_scaler_arguments()
     excluded = [tuple(int(a) for a in bond) for bond in arguments["excluded_bonds"]]
     impropers = bool(arguments["unscaled_impropers"])

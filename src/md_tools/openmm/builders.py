@@ -22,7 +22,7 @@ from ..build.strict import ConfigError
 from .system_config import openff_resource
 from .yaml_io import write_yaml
 from .system_defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT
-from ..rest2 import UNSCALED_TORSION_DETECTOR_VERSION, torsion_exclusion_report
+from ..rest2 import torsion_exclusion_report
 
 #: Short water labels an older configuration may still carry, and the QUALIFIED OpenMM resource
 #: each one has to become.
@@ -211,7 +211,6 @@ def _solute_document(topology, solute_indices, unscaled, *, route: str,
             # against the detector that produced it rather than against whichever detector
             # happens to be installed when it is read.
             "detection_route": route,
-            "detector_version": UNSCALED_TORSION_DETECTOR_VERSION,
             # Items neither rule could name, with their evidence. A NON-EMPTY LIST BLOCKS
             # PRODUCTION: guessing either way silently changes the Hamiltonian.
             "unclassified": [

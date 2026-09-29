@@ -221,12 +221,6 @@ def _scale_torsions(force, solute, solute_solute, excluded_bonds, bonds, unscale
                                        k_value * solute_solute)
 
 
-#: Bumped when the unscaled-torsion classification RULES change, not when their inputs do. A record
-#: carrying this version says which algorithm decided what, so a stored exclusion can be re-derived.
-#: 1: ordinary amide omega. 2: plus aromatic ring bonds, other double bonds and impropers.
-UNSCALED_TORSION_DETECTOR_VERSION = 2
-
-
 def torsion_exclusion_report(system, solute, excluded_bonds, unscaled_impropers=True,
                              selected_bonds=None):
     """Which PeriodicTorsionForce torsions each excluded central bond actually protects.
@@ -270,7 +264,6 @@ def torsion_exclusion_report(system, solute, excluded_bonds, unscaled_impropers=
             else:
                 scaled += 1
     return {
-        "detector_version": UNSCALED_TORSION_DETECTOR_VERSION,
         "excluded_central_bonds": [list(bond) for bond in sorted(report)],
         "excluded_torsion_indices": {f"{a}-{b}": indices for (a, b), indices in sorted(
             report.items())},

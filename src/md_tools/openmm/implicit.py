@@ -847,7 +847,7 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
         "omega_central_bonds": omega_central_bonds(topology, solute),
         "unscaled_torsions": {k: unscaled_info[k] for k in
                               ("unscaled_central_bonds", "central_bonds", "proline_like_scaled_bonds", "unclassified",
-         "unscaled_impropers", "detection_method", "detector_version", "amide_detail")},
+         "unscaled_impropers", "detection_method", "amide_detail")},
         "degrees_of_freedom": (3 * system.getNumParticles() - system.getNumConstraints() - 3),
         "implicit": info,
     }

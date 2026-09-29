@@ -33,7 +33,6 @@ from .hamiltonian import (  # noqa: F401
     clone_system,
     _scale_nonbonded,
     _scale_torsions,
-    UNSCALED_TORSION_DETECTOR_VERSION,
     system_bond_graph,
     is_improper,
     torsion_kind,

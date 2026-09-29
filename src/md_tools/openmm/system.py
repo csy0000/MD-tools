@@ -1095,7 +1095,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
 
     Returns ``unscaled_central_bonds`` (every class), ``central_bonds`` (each with its class,
     residue and evidence), ``proline_like_scaled_bonds``, ``unclassified``, ``unscaled_impropers``,
-    ``detection_method``, ``detector_version`` and ``amide_detail``. **A non-empty unclassified list
+    ``detection_method`` and ``amide_detail``. **A non-empty unclassified list
     must block production**; `unscaled_torsions` is the entry point that enforces it.
     """
     if ligand_sdf is not None and residue_sdfs is not None:
@@ -1145,10 +1145,9 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         else:
             source = (f"SDF {Path(ligand_sdf).name}" if ligand_sdf is not None
                       else "no SDF supplied (refused)")
-        # The pattern is INTERPOLATED, not spelled again. `detector_version` is deliberately not
-        # bumped for the NX2 widening, so this string is the only thing in the record that
-        # distinguishes a classification made before it from one made after: a hand-copied literal
-        # that drifted would make every record claim a pattern that never ran.
+        # The pattern is INTERPOLATED, not spelled again. Nothing else in the record says which
+        # amide pattern classified it -- the detector stamp that used to is gone (v4) -- so a
+        # hand-copied literal that drifted would make every record name a pattern that never ran.
         method += (f"; residues {sorted(non_standard_names)} from RDKit SMARTS "
                    f"{ORDINARY_AMIDE_SMARTS} over {source}, proline-like = amide N in a ring of "
                    f"<= {max_proline_ring_size} atoms")
@@ -1347,7 +1346,6 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
              "amide_test": e["ambiguous"]} for e in resolved],
         "unscaled_impropers": bool(unscaled_impropers),
         "detection_method": method,
-        "detector_version": 2,
         "amide_detail": {"unscaled": unscaled, "proline_like_scaled": proline},
     }
 
@@ -1842,7 +1840,6 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
             "unclassified": [], "unscaled_impropers": False,
             "detection_method": "disabled (rest2.unscaled_torsions = false): every solute "
                                 "torsion is scaled, impropers and ordinary amide omegas included",
-            "detector_version": 2,
             "amide_detail": {"unscaled": [], "proline_like_scaled": []},
         }
 
@@ -1859,7 +1856,7 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
         "hmr": hmr,
         "unscaled_torsions": {k: unscaled_info[k] for k in
                               ("unscaled_central_bonds", "central_bonds", "proline_like_scaled_bonds", "unclassified",
-         "unscaled_impropers", "detection_method", "detector_version", "amide_detail")},
+         "unscaled_impropers", "detection_method", "amide_detail")},
         "forcefield": ff_info,
         "degrees_of_freedom": (
             3 * system.getNumParticles() - system.getNumConstraints()

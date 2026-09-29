@@ -150,7 +150,10 @@ def test_the_report_names_every_torsion_an_excluded_bond_protects():
     system = _torsion_system([(0, 1, 2, 3), (1, 2, 3, 4), (2, 1, 2, 5), (0, 1, 6, 7)])
     report = scaling.torsion_exclusion_report(system, range(6), [(1, 2)])
 
-    assert report["detector_version"] == scaling.UNSCALED_TORSION_DETECTOR_VERSION
+    # No `detector_version`: the stamp was dropped in v4. It named the algorithm that made a
+    # classification, which is provenance, and it had been a constant since 0.6.0 -- so it
+    # distinguished nothing while making every selection digest depend on it.
+    assert "detector_version" not in report
     assert report["excluded_central_bonds"] == [[1, 2]]
     assert report["excluded_torsion_indices"] == {"1-2": [0, 2]}, (
         "both torsions about the excluded central bond, not just the first"

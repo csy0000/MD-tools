@@ -622,7 +622,7 @@ def explicit_selection(topology, system, region: Mapping[str, Any],
         labels=tuple(labels), detection=str(classified["detection_method"]),
         mode=EXPLICIT_MODE, torsion_bonds=tuple(selected),
         cmap_terms=tuple(d["term"] for d in decisions if d["scaled"]),
-        unscaled_impropers=True, detector_version=classified.get("detector_version"),
+        unscaled_impropers=True,
         details=details)
 
 

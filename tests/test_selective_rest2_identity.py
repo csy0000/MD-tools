@@ -197,3 +197,78 @@ def test_an_exclusion_files_bytes_are_not_its_identity():
     document = {"format": "md-tools-solute-selection/2.0", "selection_mode": "explicit"}
     assert hamiltonian_selection_projection(dict(document, ligand_instances=[entry])) == \
         hamiltonian_selection_projection(dict(document, ligand_instances=[other]))
+
+
+# --- v3 -> v4: the detector stamp left the projection ---------------------------------------------
+
+def _v3_record(system, selection=None, **overrides):
+    """A v3 identity: the v4 projection with `detector_policy_version` put back, as v3 hashed it."""
+    from md_tools.rest2.identity import V3_FINGERPRINT_FORMAT, _v3_selection_sha256_candidates
+
+    document = selection or _legacy_document()
+    record = dict(_current(system, selection),
+                  format=V3_FINGERPRINT_FORMAT,
+                  selection_sha256=_v3_selection_sha256_candidates(document)[0])
+    record.pop("v3_selection_sha256", None)
+    record.update(overrides)
+    return record
+
+
+def _legacy_document():
+    from md_tools.rest2.identity import _legacy_selection_document
+
+    return _legacy_selection_document(SOLUTE, EXCLUDED, True)
+
+
+def test_the_detector_stamp_is_not_in_the_projection(system):
+    """It named which algorithm classified, which is provenance -- and this projection's contract
+    is that it hashes what determines the Hamiltonian and NOT provenance."""
+    from md_tools.rest2.identity import hamiltonian_selection_projection
+
+    assert "detector_policy_version" not in hamiltonian_selection_projection(EXPLICIT)
+    # And a document that still carries it (read from a 0.6.1 file) does not smuggle it back in.
+    carried = dict(EXPLICIT, detector_policy_version=2)
+    assert hamiltonian_selection_projection(carried) == hamiltonian_selection_projection(EXPLICIT)
+
+
+def test_a_v3_identity_resumes_under_v4(system):
+    """A v3 run's Hamiltonian is byte-identical under v4: only the digest's inputs changed.
+
+    Refusing it would strand every in-flight 0.6.1/0.6.2 ladder for a difference that describes no
+    physical change.
+    """
+    current = _current(system)
+    assert current["format"] == FINGERPRINT_FORMAT
+    assert require_same_hamiltonian(_v3_record(system), current) is True
+
+
+def test_a_v3_identity_of_an_explicit_selection_resumes_too(system):
+    """Unlike v2, v3 COULD describe a selective region, so this branch must accept one."""
+    assert require_same_hamiltonian(_v3_record(system, EXPLICIT),
+                                    _current(system, EXPLICIT)) is True
+
+
+@pytest.mark.parametrize("field, value", [
+    ("system_sha256", "0" * 64), ("selection_sha256", "1" * 64), ("tau", 0.31),
+    ("temperature_k", 310.0), ("ensemble", "NPT"), ("n_solute_atoms", 39),
+    ("n_unscaled_central_bonds", 3), ("unscaled_impropers", False),
+])
+def test_a_v3_identity_with_one_field_changed_is_still_refused(system, field, value):
+    """The branch forgives the dropped stamp and nothing else."""
+    with pytest.raises(HamiltonianMismatch, match=field):
+        require_same_hamiltonian(_v3_record(system, **{field: value}), _current(system))
+
+
+def test_a_v3_identity_of_a_DIFFERENT_selection_is_refused(system):
+    """The stamp is forgiven; a genuinely different Hamiltonian is not."""
+    other = dict(EXPLICIT, selected_torsion_central_bonds=[[1, 2], [2, 3]])
+    with pytest.raises(HamiltonianMismatch, match="selection_sha256"):
+        require_same_hamiltonian(_v3_record(system, EXPLICIT), _current(system, other))
+
+
+def test_the_v4_digest_really_differs_from_the_v3_one(system):
+    """If these were equal the compatibility branch would be untested dead code."""
+    from md_tools.rest2.identity import (_v3_selection_sha256_candidates,
+                                         selection_identity_sha256)
+
+    assert selection_identity_sha256(EXPLICIT) not in _v3_selection_sha256_candidates(EXPLICIT)

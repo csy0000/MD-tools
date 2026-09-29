@@ -106,7 +106,6 @@ class ScalingSelection:
     torsion_bonds: tuple[tuple[int, int], ...] | None = None
     cmap_terms: tuple[int, ...] | None = None
     unscaled_impropers: bool = True
-    detector_version: int | None = None
     #: The rest of the 2.0 record (policy, masks, residue map, owners, CMAP decisions, ligand
     #: instances), kept verbatim: it is provenance, and part of what the identity hashes.
     details: tuple[tuple[str, Any], ...] = field(default=())
@@ -164,7 +163,7 @@ class ScalingSelection:
                    topology_sha256=topology_digest(topology),
                    labels=tuple(labels), detection=str(classified["detection_method"]),
                    unscaled_impropers=bool(classified.get("unscaled_impropers", True)),
-                   detector_version=classified.get("detector_version"))
+                   )
 
     # -- persisting -----------------------------------------------------------------------------
 
@@ -184,7 +183,6 @@ class ScalingSelection:
             "unscaled_torsion_central_bonds": [list(b) for b in self.excluded_bonds],
             "excluded_central_bonds": [list(b) for b in self.excluded_bonds],
             "improper_policy": {"unscaled_impropers": bool(self.unscaled_impropers)},
-            "detector_policy_version": self.detector_version,
             "labels": [dict(entry) for entry in self.labels],
             "detection_method": self.detection,
         }
@@ -256,7 +254,6 @@ class ScalingSelection:
                        tuple(sorted(int(i) for i in pair)) for pair in torsion)),
                    cmap_terms=None if cmap is None else tuple(int(i) for i in cmap),
                    unscaled_impropers=bool(policy.get("unscaled_impropers", True)),
-                   detector_version=document.get("detector_policy_version"),
                    details=details if fmt == SELECTION_FORMAT else (), record_format=fmt)
 
     def write(self, path: str | Path) -> Path:
