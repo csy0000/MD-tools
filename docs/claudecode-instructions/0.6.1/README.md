@@ -5,7 +5,7 @@ not an active instruction for this branch.
 
 | | |
 |---|---|
-| shared roadmap | [20260918 parallel 0.6.1–0.7.2 development](../20260918_parallel-0.6.1-0.7.x-development.md) |
+| shared roadmap | the 20260918 roadmap (in `MD-tools-archive`, branch `development-records-20260923`) |
 | what this branch is for | [aims](../../development/0.6.1/AIMS.md) |
 | where it stands | [status](../../development/0.6.1/STATUS.md) |
 | records shared with 0.7.0 | [shared contracts](../../development/shared-contracts.md) |

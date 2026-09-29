@@ -148,6 +148,35 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         # `cv_file` is one: a list of restraints does not fit a namelist.
         "umbrella_file": "umbrella.file",
     },
+    # An alchemical ladder's own block. Its own section rather than more keys in &cntrl, as
+    # `&remd` and `&AIS` are: the settings here are read by one protocol, and an input that
+    # reads as one block per idea is one a person can check against the method they meant to run.
+    "alchemical": {
+        # The topology plan DIRECTORY `combine-topology` wrote. A path and not the plan's
+        # contents, for the reason `cv_file` and `umbrella_file` are paths: the record holds two
+        # serialised Systems, an atom map and a combined topology, and none of that fits a
+        # namelist -- nor should it be restated where it could disagree with the plan itself.
+        "plan": "alchemical.plan",
+        "lambda_path": "alchemical.lambda_path",
+        "staged_knot": "alchemical.staged_knot",
+        "number_of_windows": "alchemical.number_of_windows",
+        # Numbers written out, comma- or space-separated. A namelist has no list syntax, and
+        # `resolved.config` and the `.in` beside it must resolve to each other.
+        "lambda_values": "alchemical.lambda_values",
+        # The Amber18 softcore settings, spelled as `alchemical:` and an Amber mdin both spell
+        # them (`md_tools.alchemy.softcore.SoftcoreSettings`), so the same name means the same
+        # thing in the configuration, in the input and in the record.
+        "sc": "alchemical.sc",
+        "softcore_function": "alchemical.softcore_function",
+        "scalpha": "alchemical.scalpha",
+        "scbeta": "alchemical.scbeta",
+        "sc_boundary_14": "alchemical.sc_boundary_14",
+        "window_steps": "alchemical.window_steps",
+        "equilibration_steps": "alchemical.equilibration_steps",
+        "report_interval_steps": "alchemical.report_interval_steps",
+        "checkpoint_interval_steps": "alchemical.checkpoint_interval_steps",
+        "minimize_iterations": "alchemical.minimize_iterations",
+    },
 }
 
 #: Keys people write when they mean a different one. Named explicitly because a suggestion built

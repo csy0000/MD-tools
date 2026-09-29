@@ -24,6 +24,7 @@ A key that a protocol does not read is refused rather than ignored, so this tabl
 | `REST2` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables`, `umbrella`, `rest2` |
 | `AIS` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables`, `ais`, `ais_source` |
 | `umbrella` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables`, `umbrella` |
+| `alchemical` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables`, `alchemical` |
 
 ## `build-top`: topology and System construction
 
@@ -249,9 +250,9 @@ Resolved by `md-openmm build-md`. Unknown keys are refused by name rather than i
 
 #### `protocol`
 
-type: string · default: `cMD` · one of `cMD`, `REST2`, `AIS`, `umbrella`
+type: string · default: `cMD` · one of `cMD`, `REST2`, `AIS`, `umbrella`, `alchemical`
 
-cMD is plain molecular dynamics. REST2 adds a replica-exchange ladder in which only the solute's Hamiltonian is scaled. AIS runs non-equilibrium switching paths from an EXISTING equilibrium source ensemble -- it has no minimisation or equilibration chain of its own, because its input is a trajectory you have already produced.
+cMD is plain molecular dynamics. REST2 adds a replica-exchange ladder in which only the solute's Hamiltonian is scaled. AIS runs non-equilibrium switching paths from an EXISTING equilibrium source ensemble -- it has no minimisation or equilibration chain of its own, because its input is a trajectory you have already produced. umbrella is cMD with a bias on named collective variables. alchemical samples fixed-lambda windows of an alchemical path between the two end states of a topology plan `md-openmm combine-topology` wrote.
 
 #### `solvent`
 
@@ -584,6 +585,100 @@ Umbrella sampling: restrain named collective variables and report them. Producin
 type: string or null · default: `null`
 
 Path to the restraint definition, resolved beside `resolved.config` -- the same rule `collective_variables.file` follows. A LIST of restraints does not fit a namelist `.in`, and inventing a packed-string encoding for one would make the most consequential line of an umbrella input the least readable. So the restraints live in their own YAML, referenced by path, exactly as the collective variables they name already do. Each entry names a CV from `collective_variables.file` and says how it is restrained -- see `md_tools.umbrella.load_umbrella_definition` for the schema and every way it is refused.
+
+### `alchemical`
+
+Alchemical free energy: fixed-lambda windows of one path between the two end states of a topology plan. WHAT IS HERE AND WHAT IS NOT. The two end states, the atom map, the environment and the combined numbering are in the PLAN, which `md-openmm combine-topology` wrote and which carries its own digests; this section says which path is walked across it, where the windows sit on that path, how the pair potential is softened, and how long each window samples. Nothing here restates a fact the plan already holds -- a second copy of it would be the one that drifts. The integrator, the temperature, the pressure and the timestep are in `dynamics`, and the preparation chain is in `stages`, because a window is ordinary dynamics at a fixed Hamiltonian and has no business owning a second set of them. Turning the windows' samples into a free energy is ANALYSIS and is deliberately not configured here, exactly as WHAM and MBAR are not configured under `umbrella`: the samples are what this engine produces.
+
+#### `alchemical.plan`
+
+type: string or null · default: `null`
+
+The topology plan DIRECTORY `md-openmm combine-topology` wrote -- the one holding `plan.json`, `system_a.xml`, `system_b.xml`, `combined.pdb` and `positions.npy`. Resolved beside `resolved.config`, the rule `collective_variables.file` and `umbrella.file` already follow. It is this key, and not the presence of the section, that says a run is alchemical: the two end states, the atom map and the environment are all in that record, and nothing here restates any of them. The plan's own contents are validated when it is LOADED (`md_tools.alchemy.topology.load_plan`, which re-verifies every digest in it), not here, for the reason `umbrella.file` gives: parsing it twice under two sets of rules means the second parse is the one the run actually uses.
+
+#### `alchemical.lambda_path`
+
+type: string · default: `linear` · one of `linear`, `staged`
+
+How the named lambda components move from end state A (s = 0) to end state B (s = 1). `linear` moves electrostatics and sterics together. `staged` moves electrostatics first and sterics afterwards, with the handover at `staged_knot`. The path is piecewise linear in both cases and `md_tools.alchemy.paths` builds it; this key chooses which of its two constructors is used, so the configuration and the runtime cannot hold two different ideas of the same ladder.
+
+#### `alchemical.staged_knot`
+
+type: number or null · default: `null` · minimum 0.0; maximum 1.0
+
+The progress coordinate `s` at which electrostatics finish and sterics begin, for `lambda_path: staged`. Required for it, and refused without it. A WINDOW MUST SIT EXACTLY ON IT: the slope of every component jumps here, so dU/ds has different left and right values and no amount of sampling lets a trapezoid drawn across the knot recover the integral. A window placement that misses it is refused with the arithmetic that would fix it, never moved to the nearest grid point.
+
+#### `alchemical.number_of_windows`
+
+type: integer · default: `0` · minimum 0
+
+Windows placed EVENLY over s in [0, 1], both end points included, so N windows sit at i/(N-1). 0 means the placement is given as `lambda_values` instead; exactly one of the two is set. A count whose grid does not land exactly on `staged_knot` is refused rather than rounded, for the reason that key states.
+
+#### `alchemical.lambda_values`
+
+type: string or number or integer or null · default: `null`
+
+The windows' progress coordinates, written out: `0.0, 0.1, 0.3, 0.6, 1.0`. Comma- or space-separated, strictly increasing, and it must begin at 0.0 and end at 1.0 -- an alchemical path runs between two end states, and a ladder that stops short of one of them measures a free energy between a physical state and an arbitrary one. A packed string, deliberately and for one reason only: a namelist `.in` has no list syntax, and `resolved.config` and the `.in` beside it must resolve to each other. The values are NUMBERS, not a mask or an expression, so nothing about them has to be decoded to be read.
+
+#### `alchemical.sc`
+
+type: boolean · default: `true`
+
+Soften the pair potential of an appearing or disappearing region. True is the MD-tools default, chosen by the user; it is not a claim that AMBER's own `ifsc` defaults to 1 (it defaults to 0). `false` selects ordinary linear mixing with no softening, which is only defined when no particle appears or disappears -- the Hamiltonian builder refuses it otherwise rather than softening behind your back.
+
+#### `alchemical.softcore_function`
+
+type: string · default: `amber18`
+
+The softcore functional form. `amber18` -- Amber18 manual section 21.1.5, equations 21.5-21.7 -- is the only one implemented. OpenFE's Gapsys default, its Beutler option and AMBER's later smoothstep variant are different functions and are refused BY NAME with what each one actually is, rather than mapped onto this one: a false label on a validated-looking number is the failure this refusal exists to prevent.
+
+#### `alchemical.scalpha`
+
+type: number · default: `0.5` · minimum 0.0
+
+The Lennard-Jones softening constant `alpha` of equations 21.5 and 21.6. Dimensionless, and strictly positive: zero is not a soft potential, it is the singular one.
+
+#### `alchemical.scbeta`
+
+type: number · default: `12.0` · minimum 0.0; unit: angstrom^2
+
+The electrostatic softening constant `beta` of equation 21.7, in SQUARE ANGSTROMS as an Amber mdin writes it (12.0 A^2 = 0.12 nm^2 internally). Strictly positive, for the reason `scalpha` gives.
+
+#### `alchemical.sc_boundary_14`
+
+type: string · default: `scaled` · one of `scaled`, `unscaled`
+
+1-4 exceptions BETWEEN a softcore particle and a common one. `scaled` mixes them between the end states like every other exception, so they vanish where the region is a dummy -- pmemd 20+ `gti_add_sc = 1`, the AMBER default since Amber20, and what keeps a dummy's partition function separable. `unscaled` keeps them at full strength at every lambda -- the Amber18 manual rule (`gti_add_sc = 0`), which the Amber20+ manual calls theoretically incorrect; it is kept so an Amber18 run can be reproduced. Exceptions INSIDE a region are unscaled under both. Every record says which rule ran, because the two are not the same experiment.
+
+#### `alchemical.window_steps`
+
+type: integer · default: `0` · minimum 0; unit: steps
+
+Production steps SAMPLED IN EACH WINDOW, after `equilibration_steps`. Every window runs the same length: a ladder whose windows differ in length is a set of estimates with different variances, and the estimators downstream have no column that says so.
+
+#### `alchemical.equilibration_steps`
+
+type: integer · default: `0` · minimum 0; unit: steps
+
+Steps run at the window's own Hamiltonian BEFORE the first sample, discarded. A window starts from a configuration equilibrated at some other lambda, so its first frames are not from its own ensemble. A multiple of `report_interval_steps`, so the sample grid starts on it.
+
+#### `alchemical.report_interval_steps`
+
+type: integer · default: `0` · minimum 0; unit: steps
+
+How often a window writes one sample: the configuration's energy at EVERY state of the path and the complete derivative at its own, which is what FEP, BAR, MBAR and TI all consume. It must divide `window_steps` exactly; a schedule that would have to be rounded is refused, because a final partial gap breaks the uniform spacing every downstream time-series analysis assumes and none of them can detect.
+
+#### `alchemical.checkpoint_interval_steps`
+
+type: integer · default: `0` · minimum 0; unit: steps
+
+How often the window commits a generation transaction -- the Context state, the step, and the committed prefix of the sample stream, together. A multiple of `report_interval_steps` so a committed generation never splits a report, and it must divide `window_steps` exactly.
+
+#### `alchemical.minimize_iterations`
+
+type: integer · default: `0` · minimum 0
+
+Minimiser ITERATIONS at the window's own state on a FRESH start, before velocities are drawn (0 = none). Iterations, not steps: minimisation does not integrate and has no timestep. It is part of the window's identity, so changing it is a different experiment rather than a different warm-up.
 
 ## What a run writes
 
