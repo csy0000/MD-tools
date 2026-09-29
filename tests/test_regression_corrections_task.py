@@ -63,7 +63,7 @@ def test_dash_s_is_the_serialised_system_and_dash_x_is_the_trajectory():
     assert args.trajectory == "min.dcd"
 
 
-def test_the_system_is_mandatory_and_the_trajectory_is_optional():
+def test_the_system_is_mandatory_and_the_trajectory_is_optional(tmp_path, capsys):
     """`-s` or `-groupfile`, exactly one. The trajectory stays optional.
 
     MIGRATED. `-s` used to be `required=True` in the parser, and this asserted that argparse
@@ -78,7 +78,7 @@ def test_the_system_is_mandatory_and_the_trajectory_is_optional():
     launch naming NEITHER is refused, and one naming BOTH is refused too, because they are two
     answers to one question -- which System each replica integrates.
     """
-    from md_tools.run.main import _check_file_roles, md_run_parser
+    from md_tools.run.main import _check_file_roles, md_run_main, md_run_parser
 
     args = md_run_parser().parse_args(["-i", "min.in", "-p", "built.pdb", "-s", "built.xml"])
     assert args.trajectory is None, "a stage supplies its own default trajectory name"
@@ -89,10 +89,21 @@ def test_the_system_is_mandatory_and_the_trajectory_is_optional():
     assert grouped.system is None and grouped.groupfile == "remd.group"
     _check_file_roles(grouped)          # accepted: the group file says what to integrate
 
-    # Neither: still refused, now by name.
-    with pytest.raises(SystemExit) as neither:
-        _check_file_roles(md_run_parser().parse_args(["-i", "min.in", "-p", "built.pdb"]))
-    assert "-groupfile" in str(neither.value) and "-s" in str(neither.value), str(neither.value)
+    # Neither: still refused by name, and MIGRATED AGAIN in 0.7.0's X1 -- to the point where the
+    # protocol is known, because an alchemical ladder has neither. Its System is the prepared leg
+    # beside `-odir`, so this check could no longer live in `_check_file_roles`, which runs before
+    # the input has been read. `_check_file_roles` now ACCEPTS the absence and `md_run_main`
+    # refuses it, still before `-odir` or any record of the run exists.
+    _check_file_roles(md_run_parser().parse_args(["-i", "min.in", "-p", "built.pdb"]))
+
+    written = tmp_path / "min.in"
+    written.write_text("&cntrl\n  protocol = cMD,\n  stage = min,\n/\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    assert md_run_main(["-i", str(written), "-p", str(tmp_path / "built.pdb"),
+                        "-odir", str(out_dir)]) == 2
+    message = capsys.readouterr().err
+    assert "-groupfile" in message and "-s" in message, message
+    assert not out_dir.exists(), "a refused invocation created its output directory"
 
     # Both: refused, because one `-s` beside a group file claims one Hamiltonian for every rung.
     with pytest.raises(SystemExit) as both:

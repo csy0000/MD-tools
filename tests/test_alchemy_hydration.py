@@ -165,3 +165,42 @@ def test_a_vacuum_plan_makes_a_vacuum_window_and_nothing_else_does(tmp_path):
     record = json.loads(window_paths(tmp_path / "leg" / "windows" / "r1", "w000")["record"]
                         .read_text())
     assert record["solvation"] == "vacuum"
+
+
+def test_a_dual_vacuum_leg_with_no_common_atoms_carries_no_information():
+    """`mode="dual"` in vacuum is lambda-INDEPENDENT, and that is a property, not an accident.
+
+    M2.6b measured this: pmemd's dual vacuum leg gives +1.2520 kcal/mol and MD-tools' gives
+    exactly 0.0000 +- 0.0000. Neither is wrong. With no common atoms both whole-molecule dummies
+    retain every internal term at BOTH ends, so nothing couples to lambda here; AMBER instead
+    scales each copy's whole potential with lambda, so its vacuum leg is the two molecules'
+    internal free-energy difference. The conventions agree on ddG and differ per leg.
+
+    Asserted because "exactly 0.0000" looks like a bug to one reader and like a pass to another,
+    and because a future change could couple something to lambda here without any test noticing.
+    The solvated case is checked alongside: there the environment IS common, the Hamiltonian does
+    depend on lambda, and this test would be vacuous without that contrast.
+    """
+    from md_tools.alchemy.hamiltonian import from_plan
+    from md_tools.alchemy.topology import build_topology_plan
+
+    a, b = af.package(af.ETHANE), af.package(af.CHLOROETHANE)
+    diagonal = [dict(zip(NAMES, (v, v, v))) for v in (0.0, 0.25, 0.5, 0.75, 1.0)]
+
+    def energies(environment):
+        plan = build_topology_plan(a, b, af.core_map(a, b), environment, mode="dual")
+        h = from_plan(plan)
+        ctx = openmm.Context(h.system, openmm.VerletIntegrator(0.001),
+                             openmm.Platform.getPlatformByName("Reference"))
+        ctx.setPositions(plan.positions_nm)
+        return plan, [h.energy(ctx, s) for s in diagonal], h.derivatives(ctx, diagonal[2])
+
+    plan, vacuum, derivatives = energies(af.vacuum_environment(a, constraints=None))
+    assert not plan.common, "the premise of this property: a dual plan has no common ligand atoms"
+    assert vacuum == pytest.approx([vacuum[0]] * len(vacuum), abs=1e-9), vacuum
+    assert all(v == pytest.approx(0.0, abs=1e-9) for v in derivatives.values()), derivatives
+
+    # the contrast: with an environment there ARE common atoms, and lambda matters again
+    _, solvated, solvated_derivatives = energies(af.water_environment_v2())
+    assert solvated != pytest.approx([solvated[0]] * len(solvated), abs=1e-6)
+    assert any(abs(v) > 1.0 for v in solvated_derivatives.values()), solvated_derivatives
