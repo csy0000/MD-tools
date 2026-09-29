@@ -113,7 +113,11 @@ def test_npt_on_cuda_leaves_nothing_stale(precision):
     tolerance is meaningless at that magnitude. The subject here is whether anything box-dependent
     goes stale, not whether an overlapped start survives; the clash geometry is covered by the
     energy, force and derivative rows, which evaluate it rather than integrate it. So: no clash, a
-    sanity gate on the energy before any comparison, and a relative tolerance.
+    sanity gate on the energy before any comparison, and -- since 2026-09-30 -- no absolute or
+    relative tolerance at all, but a RATIO against the staleness signal the test itself computes.
+    The power check runs FIRST and asserts that signal exists, because a ratio fails OPEN where an
+    absolute bound fails closed: a tiny gap beats a tiny signal, so a fixture that quietly stopped
+    producing one would pass forever.
     """
     sa, sb, a, b, x = fx.build(True, dispersion=True)
     for s in (sa, sb):
