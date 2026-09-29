@@ -163,6 +163,18 @@ Do not change these without a failing test that demonstrates a defect.
   scale. A UREA sits between the two (~11 kcal/mol, ~10 µs, both C–N bonds partially double because
   both nitrogens donate into one carbonyl) and is SCALED, with the bonds recorded as
   recognised-and-scaled so that seeing a case and not protecting it never looks like missing it.
+* **A run directory links the shared inputs relatively, and nothing reads the links.** Every
+  `<method>-run<N>/` gets `build -> ../build`, `input -> ../input`, `min -> ../min`. The generated
+  scripts already reach these by relative path (`-p ../build/built.pdb`), so a run does not NEED
+  them — they exist so a run directory is self-describing to anything that walks the tree without
+  reading `run.sh`, which is what a dataset manifest declaring components BY PATH does (hpREST2's
+  convention, agreed 2026-09-29). That is also why they must not be deleted as unused: nothing
+  reading them is the point, not evidence they are dead. RELATIVE always — a 0.5.4-era
+  `REST2-run1/build` was an absolute link into a project path and broke the moment the dataset
+  was relocated, which `data-register` does by design. Linking never replaces a real directory or
+  re-points an existing link (replacing data with a link is a deliberate act, not something a
+  build step does on the way past), and a target that does not exist yet is fine: `min/` appears
+  only once a minimisation has run.
 * **A MISSING INPUT is refused; an unnameable BOND is scaled, recorded and overridable.** These are
   two different things and only the first can be fixed by the user. A non-standard residue whose
   bond orders were never supplied is a missing input: with no SDF the classifier sees NOTHING, so

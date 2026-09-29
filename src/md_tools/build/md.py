@@ -2100,6 +2100,38 @@ def _sha256_file(path) -> str:
     return sha256_file(Path(path))
 
 
+#: The dataset-level inputs every run reads, linked into each run directory.
+SHARED_INPUTS = ("build", "input", "min")
+
+
+def _link_shared_inputs(run_root: Path) -> None:
+    """`build -> ../build`, `input -> ../input`, `min -> ../min`, relative, inside a run directory.
+
+    The generated scripts already reach these by relative path (`-p ../build/built.pdb`), so the
+    links add nothing a run NEEDS. They make the run directory self-describing to anything that
+    walks the tree without reading run.sh -- which is what a dataset manifest declaring components
+    BY PATH does, and the convention hpREST2 settled on 2026-09-29.
+
+    RELATIVE, always. An absolute link is the one failure this cannot be allowed to reproduce: a
+    0.5.4-era `REST2-run1/build` pointed into an absolute project path and broke the moment the
+    dataset was relocated, which `data-register` does by design.
+
+    Never overwrites. A real directory of that name is left exactly as it is -- replacing data
+    with a link is a deliberate act, not something a build step does on the way past -- and an
+    existing link is left alone rather than re-pointed. A missing target is not an error either:
+    `min/` does not exist until a minimisation has run, and a link that dangles today resolves
+    once it does.
+    """
+    for name in SHARED_INPUTS:
+        here = run_root / name
+        if here.exists() or here.is_symlink():
+            continue
+        try:
+            here.symlink_to(Path("..") / name, target_is_directory=True)
+        except OSError:
+            # A filesystem without symlinks is not a reason to fail a build: nothing reads these.
+            return
+
 def build_scripts(*, config_path: Path | None, out_dir: Path,
                   overwrite: bool = False, echo: bool = True) -> dict[str, Any]:
     """Generate one run. `out_dir` is the RUN directory; returns the record written in it.
@@ -2245,6 +2277,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         raise ConfigError(str(refusal)) from None
 
     run_root.mkdir(parents=True, exist_ok=True)
+    _link_shared_inputs(run_root)
     # Kept as `out_dir` below: the cv/umbrella copies, the build log and the generated helpers all
     # belong to this run and stay at its root.
     out_dir = run.root

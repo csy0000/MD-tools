@@ -16,6 +16,7 @@ PLATFORM_POLICY_EXEMPTION: System construction and serialisation only. No Contex
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -691,3 +692,60 @@ def _proper_bonds(build):
 
     system = XmlSerializer.deserialize((build / "built.xml").read_text(encoding="utf-8"))
     return sorted(_proper_central_bonds(system))
+
+
+# --- the shared inputs are linked into every run directory ----------------------------------------
+
+def test_a_run_directory_links_the_shared_inputs_relatively(tmp_path):
+    """hpREST2's convention (2026-09-29): a run directory is self-describing to anything that
+    walks the tree without reading run.sh, which is what a manifest declaring components BY PATH
+    does. The generated scripts already reach these by relative path, so the links add nothing a
+    run needs -- they are for the reader.
+    """
+    from md_tools.build.md import SHARED_INPUTS, _link_shared_inputs   # noqa: PLC2701
+
+    run_root = tmp_path / "REST2-run1"
+    run_root.mkdir()
+    _link_shared_inputs(run_root)
+
+    for name in SHARED_INPUTS:
+        link = run_root / name
+        assert link.is_symlink(), f"{name} must be a link"
+        target = os.readlink(link)
+        assert target == os.path.join("..", name), f"{name} -> {target}"
+        assert not os.path.isabs(target), (
+            "ABSOLUTE is the one failure this must not reproduce: a 0.5.4-era REST2-run1/build "
+            "pointed into an absolute project path and broke the moment the dataset moved, "
+            "which data-register does by design")
+
+
+def test_linking_never_replaces_real_data_or_an_existing_link(tmp_path):
+    """Replacing a real directory with a link is a deliberate act, not something a build step
+    does on the way past."""
+    from md_tools.build.md import _link_shared_inputs                  # noqa: PLC2701
+
+    run_root = tmp_path / "REST2-run2"
+    (run_root / "min").mkdir(parents=True)
+    (run_root / "min" / "min.xml").write_text("real data", encoding="utf-8")
+    (run_root / "input").symlink_to(Path("..") / "somewhere-else", target_is_directory=True)
+
+    _link_shared_inputs(run_root)
+
+    assert not (run_root / "min").is_symlink(), "a real directory must survive untouched"
+    assert (run_root / "min" / "min.xml").read_text(encoding="utf-8") == "real data"
+    assert os.readlink(run_root / "input") == os.path.join("..", "somewhere-else"), (
+        "an existing link is left alone rather than re-pointed")
+    assert (run_root / "build").is_symlink(), "and the missing one is still made"
+
+
+def test_a_link_to_a_target_that_does_not_exist_yet_is_not_an_error(tmp_path):
+    """`min/` does not exist until a minimisation has run. A link that dangles today resolves
+    once it does, so refusing to make it would mean never making it."""
+    from md_tools.build.md import _link_shared_inputs                  # noqa: PLC2701
+
+    run_root = tmp_path / "cMD-run1"
+    run_root.mkdir()
+    _link_shared_inputs(run_root)
+
+    assert (run_root / "min").is_symlink()
+    assert not (run_root / "min").exists(), "the target is genuinely absent, and that is fine"
