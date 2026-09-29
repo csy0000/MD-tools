@@ -133,9 +133,16 @@ def test_npt_on_cuda_leaves_nothing_stale(precision):
     # every stage is bit-identical -- minimisation, 10 steps, 10 steps with the barostat, and
     # the full 500 steps: dE = dV = 0.000e+00. The residue was the CPU platform summing force
     # reductions in thread-completion order (`md_tools.remd.driver` records the same), with
-    # 500 steps of Langevin dynamics amplifying it. Whether CUDA is reproducible under these
-    # seeds is a SEPARATE question that needs a card; if it is not, the bound below must be
-    # calibrated against the spread rather than the input frozen.
+    # 500 steps of Langevin dynamics amplifying it.
+    #
+    # AND THE SEEDS ARE NOT ENOUGH ON CUDA, measured by S0 on card 7: three replications of this
+    # setup diverged ALREADY AFTER MINIMISATION -- -1847.52 / -1833.69 / -1861.23 kJ/mol -- before
+    # a single seeded step. `LocalEnergyMinimizer` takes no seed and is not reproducible there, in
+    # mixed OR double, while single-point energies and forces over 50 fresh Context pairs are
+    # bit-identical. So minimisation is REMOVED from this setup rather than seeded: what this test
+    # asks is whether anything box-dependent goes stale, and that question never needed a
+    # minimised start. The seeds stay because they make the rest of the input fixed and cost
+    # nothing.
     integrator = openmm.LangevinMiddleIntegrator(300.0, 1.0, 0.0005)
     integrator.setRandomNumberSeed(20260929)
     for s in (sa, sb):
@@ -147,7 +154,6 @@ def test_npt_on_cuda_leaves_nothing_stale(precision):
     state = dict(zip(NAMES, (0.5, 0.5, 0.5)))
     h.set_state(live, state)
     live.setVelocitiesToTemperature(300.0, 20260929)
-    openmm.LocalEnergyMinimizer.minimize(live, 1.0, 2000)
     start = live.getState(getEnergy=True).getPotentialEnergy()._value
     v0 = live.getState().getPeriodicBoxVolume()._value
     live.getIntegrator().step(500)
@@ -156,17 +162,20 @@ def test_npt_on_cuda_leaves_nothing_stale(precision):
     assert np.isfinite(energy) and abs(energy) < abs(start) + 5000.0, (precision, start, energy)
     assert st.getPeriodicBoxVolume()._value != v0, "the barostat never moved the box"
     box, pos = st.getPeriodicBoxVectors(), st.getPositions(asNumpy=True)._value
-    # UNCALIBRATED, AND KNOWN TO BE SO (2026-09-29). 1e-6 is the package's DOUBLE-precision
-    # two-Context figure: `md_tools.alchemy.windows.SELF_CHECK_REL` measures mixed at 2e-5 and
-    # double at 1e-6, from two Contexts over one System and one set of positions on CUDA. This
-    # test applies the double number to mixed, so it is ~20x tighter than the only measurement
-    # this package has of the quantity it is bounding -- which is why a 1.2x miss was reachable at
-    # all. It is NOT widened here on that basis: those figures were measured on a 1038-atom
-    # solvated system and this fixture is 102 particles, so the right number is a measurement on
-    # THIS fixture (two Contexts, same System, same positions, CUDA mixed, repeated), which needs
-    # a card. Requested from S0; until it exists the bound stays where it was, with its provenance
-    # stated rather than implied.
-    rel = {"mixed": 1e-6, "double": 1e-10}[precision]
+    # NO ABSOLUTE TOLERANCE. This test used `abs=rel*|E| + 1e-6` with rel = 1e-6 at mixed, and S0
+    # measured that bound sitting directly on top of the noise it was bounding: a 3.9e-4 kJ/mol
+    # gap against a 3.2e-4 bound, failing once in five runs on CUDA. Widening it would have needed
+    # a number nobody had measured on THIS fixture, and borrowing windows.py's 2e-5 -- taken from
+    # a 1038-atom solvated system -- would have been the same error in the other direction.
+    #
+    # The test does not need one. It already computes the signal it is looking for: the same
+    # comparison against a Context left at the ORIGINAL box. So the assertion is a RATIO --
+    # whatever the correct comparison costs on this device at this precision, staleness must cost
+    # hugely more -- and it calibrates itself on every platform, in the same run, with no constant
+    # to go stale. Measured: on Reference the correct comparison is 0.000e+00 against a 3.26e+01
+    # staleness signal; on CUDA mixed S0 measured 3.9e-4 against the same ~3e+01, a ratio of ~1e5.
+    # RATIO_FLOOR is 1e3, two orders below the smallest ratio either platform has shown.
+    ratio_floor = 1e3
 
     def fresh_energy(t, vectors):
         fresh = _cuda_context(h.system, pos, openmm.VerletIntegrator(0.001), precision)
@@ -175,8 +184,9 @@ def test_npt_on_cuda_leaves_nothing_stale(precision):
     stale = [v._value for v in sa.getDefaultPeriodicBoxVectors()]
     for t in ((0.0, 0.0, 0.0), (0.25, 0.5, 0.75), (1.0, 1.0, 1.0)):
         moved = h.energy(live, dict(zip(NAMES, t)))
-        again = fresh_energy(t, box)
-        tol = rel * max(1.0, abs(again)) + 1e-6
-        assert moved == pytest.approx(again, abs=tol), (precision, t, moved, again, tol)
-        # the check can fail: the same comparison against a Context left at the ORIGINAL box
-        assert abs(moved - fresh_energy(t, stale)) > 100 * tol, (precision, t)
+        gap = abs(moved - fresh_energy(t, box))              # nothing should be stale here
+        signal = abs(moved - fresh_energy(t, stale))         # everything box-dependent IS stale here
+        # the power check first, so a fixture that stopped producing a signal cannot pass quietly
+        assert signal > 1.0, (precision, t, "the stale-box comparison produced no signal, so this "
+                                            "test could not have failed either way", signal)
+        assert gap * ratio_floor < signal, (precision, t, moved, gap, signal, gap / signal)
