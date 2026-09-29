@@ -1740,9 +1740,11 @@ def _stage_targets(plan: list[dict[str, Any]], *, run, dataset) -> dict[str, dic
     can no longer live in the filename lives in each stage's `.out` header and resolved
     configuration, which state it explicitly.
 
-    `min` and every `.in` are DATASET paths, not run paths: minimisation draws no velocities and
-    has no seeded stochastic element, so every run on one system minimises to the same structure,
-    and an input says what a method was asked to do rather than which repeat this is.
+    `min` and every `.in` are DATASET paths, not run paths: every run on one system uses the SAME
+    minimised structure, and an input says what a method was asked to do rather than which repeat
+    this is. Shared because it is minimised ONCE -- not because minimising twice would agree.
+    Minimisation draws no velocities and has no seeded stochastic element, but on CUDA it is not
+    deterministic, and there is no seed that would make it so (see `md_tools.layout`).
     """
     targets: dict[str, dict[str, Any]] = {}
     for stage in plan:

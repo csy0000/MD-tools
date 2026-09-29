@@ -101,9 +101,17 @@ Read the tree, correct what is wrong, and the implementation follows the correct
 **What is shared and what is not follows from the physics, not from tidiness.**
 
 `build/`, `min/` and `input/` are shared because every run on this system starts from the same
-built System, the same minimised coordinates and the same instructions. Minimisation draws no
-velocities and has no seeded stochastic element, so two runs minimising the same System produce
-the same structure, and a second copy could only drift from the first. `eq/` is per-run because
+built System, the same minimised coordinates and the same instructions.
+
+`min/` is shared for a stronger reason than tidiness, and this page used to give the wrong one. It
+said minimisation draws no velocities and has no seeded stochastic element, so two runs minimising
+the same System produce the same structure. **The premise is true and the conclusion is false on
+CUDA.** Measured on the softcore System (2026-09-30): single-point energies and forces are
+bit-identical across ten fresh Contexts — spread exactly 0.000e+00 — and yet five minimisations
+from that identical start scatter by 16 kJ/mol in mixed precision and 24 in double. Minimisation
+has no seed, so nothing can be set to make it agree. Sharing `min/` is therefore load-bearing:
+it is what makes every run on a system start from *the same* minimised coordinates, rather than
+from coordinates that merely ought to be the same. `eq/` is per-run because
 equilibration draws Maxwell velocities from that run's own seed: two repeats are *supposed* to
 diverge there, and that divergence is the point of a repeat.
 
@@ -176,7 +184,15 @@ one `.in` no longer corresponds to one stage — a change to a currently tested 
 
 **The seed is the whole reason two repeats differ.** `derive_seed(base, *purpose)` hashes the base
 seed with each stage and replica name, so every stream in a run descends from that one number:
-two runs sharing an identical input and an identical seed would be bit-identical, not repeats.
+two runs sharing an identical input and an identical seed would be repeats of nothing — which is
+why the seed is per run.
+
+**On CUDA that is a statement about intent, not a guarantee.** Two runs with the same input and
+the same seed are not bit-identical on a card: minimisation diverges with no seed to set (above),
+and the AIS entry in the guide already records that a resume is exact in committed state and not
+in trajectory, because the mixing force's inner Contexts keep atom-ordering state no checkpoint
+captures. On CPU and Reference the guarantee holds. Nothing downstream should be written as
+though a seed made a card reproduce.
 The migrated reference run carries `dynamics.seed: 700501` here.
 
 It is a file rather than a command-line flag (`md-run` has no seed override, and adding one

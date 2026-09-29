@@ -17,8 +17,12 @@ THE LAYOUT, as `docs/basics/run-layout.md` specifies it:
 
 WHAT IS SHARED FOLLOWS FROM THE PHYSICS. `build/`, `min/` and `input/` sit at the dataset root
 because every run on one system starts from the same built System, the same minimised coordinates
-and the same instructions -- minimisation draws no velocities and has no seeded stochastic
-element, so a second copy could only drift from the first. `eq/` is per run because equilibration
+and the same instructions. A second copy of `min/` could DIFFER from the first, not merely drift:
+minimisation draws no velocities and has no seeded stochastic element, but on CUDA it is not
+deterministic either -- measured 2026-09-30, five minimisations from bit-identical positions and
+bit-identical forces scattered by 16 kJ/mol in mixed precision. There is no seed to set. Sharing
+one `min/` is what makes every run start from THE SAME minimised coordinates rather than from
+coordinates that ought to be the same. `eq/` is per run because equilibration
 draws Maxwell velocities from that run's own seed: two repeats are SUPPOSED to diverge there.
 
 WHY A MODULE RATHER THAN STRING JOINS AT SEVEN CALL SITES. `reservoir.py`, `run/continuation.py`,
