@@ -28,7 +28,7 @@ from typing import Any, Iterable, Sequence
 
 from .identity import (HamiltonianMismatch, canonical_system_xml, force_summary, identity_record,
                        require_same_hamiltonian, system_fingerprint)
-from .scaler import (REST2_IMPLEMENTATION,
+from .scaler import (UNSCALED_TORSION_DETECTOR_VERSION, REST2_IMPLEMENTATION,
                      UnclassifiedForceError,
                      audit_force_classes, build_scaled_system, clone_system, linear_tau_ladder,
                      require_compatible_implementation, scaling_for_tau, torsion_exclusion_report)

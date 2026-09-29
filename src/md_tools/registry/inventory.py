@@ -22,20 +22,60 @@ EXCLUDED = frozenset({INVENTORY_NAME, "dataset.yaml", "dataset.resolved.yaml",
                       "dataset.draft.yaml"})
 
 
+def _is_internal_relative_link(path: Path, root: Path) -> bool:
+    """A link that is RELATIVE and resolves INSIDE this dataset -- neither hazard applies to it.
+
+    The rule below refuses symlinks for two stated reasons: a link dangles once the dataset moves,
+    or it points at content the dataset does not own. A relative link whose target is inside the
+    same root does neither. It moves with the tree, and the bytes it reaches are the dataset's
+    own, inventoried once at their real location.
+
+    This is what lets a run directory carry `build -> ../build`, `input -> ../input` and
+    `min -> ../min` (the per-system convention) and still register. The permission is written as
+    the PROPERTY that makes it safe rather than as those three names, so a link that leaves the
+    dataset is still refused no matter what it is called.
+    """
+    if not path.is_symlink():
+        return False
+    if Path(os.readlink(path)).is_absolute():
+        return False
+    try:
+        resolved = path.resolve(strict=False)
+        resolved.relative_to(root.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
 def walk(root: Path) -> list[Path]:
-    """Every regular file beneath `root`, sorted, with symlinks refused.
+    """Every regular file beneath `root`, sorted. Symlinks out of the dataset are refused.
 
     A symlink inside a dataset would either dangle after the move or point outside it, and either
-    way the inventory would describe something other than what a reader gets.
+    way the inventory would describe something other than what a reader gets -- UNLESS it is
+    relative and lands back inside this same dataset, which is the one case where neither of those
+    is true. See `_is_internal_relative_link`.
+
+    A permitted link is NOT DESCENDED INTO. Walking through it would inventory the same bytes a
+    second time under a second path, which would both inflate the dataset and break the one-real-
+    copy rule the link exists to preserve. The link itself carries no bytes and is not inventoried;
+    it is recreated from the tree's shape, not from a checksum.
     """
     root = Path(root)
     files: list[Path] = []
+    skip_below: list[Path] = []
     for path in sorted(root.rglob("*")):
+        if any(parent in path.parents for parent in skip_below):
+            continue
         if path.is_symlink():
+            if _is_internal_relative_link(path, root):
+                skip_below.append(path)
+                continue
             raise RegistrationError(
                 f"{path.relative_to(root)} is a symlink. A dataset holds its own bytes: a link "
                 f"either dangles once the dataset moves or points at content this dataset does "
-                f"not own. Replace it with the file, or exclude it from the dataset.")
+                f"not own. Replace it with the file, or exclude it from the dataset.\n"
+                f"  (A RELATIVE link that resolves back inside this dataset is allowed -- that is "
+                f"how a run directory carries build/input/min -- but this one does not.)")
         if path.is_dir():
             continue
         if path.name in EXCLUDED and path.parent == root:

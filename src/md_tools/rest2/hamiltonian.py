@@ -221,6 +221,18 @@ def _scale_torsions(force, solute, solute_solute, excluded_bonds, bonds, unscale
                                        k_value * solute_solute)
 
 
+#: Which detector rules classified a selection, for the RECORD. DUPLICATED from
+#: `openmm.system.UNSCALED_TORSION_DETECTOR_VERSION`, and it cannot be imported from there.
+#:
+#: This module is copied BYTE FOR BYTE into every REST2 reference bundle, where `verify_rungs.py`
+#: rebuilds each rung from rung 0 on a machine with no md_tools installed. It may therefore import
+#: nothing but OpenMM -- an import of anything else breaks silently, only inside a bundle, only on
+#: a machine without the package, which is the worst place to find out.
+#:
+#: So the copy is forced by that contract, not by carelessness, and the control for it is
+#: `test_the_detector_version_has_not_drifted_from_the_classifier` rather than a shared import.
+UNSCALED_TORSION_DETECTOR_VERSION = 2
+
 def torsion_exclusion_report(system, solute, excluded_bonds, unscaled_impropers=True,
                              selected_bonds=None):
     """Which PeriodicTorsionForce torsions each excluded central bond actually protects.
@@ -264,6 +276,7 @@ def torsion_exclusion_report(system, solute, excluded_bonds, unscaled_impropers=
             else:
                 scaled += 1
     return {
+        "detector_version": UNSCALED_TORSION_DETECTOR_VERSION,
         "excluded_central_bonds": [list(bond) for bond in sorted(report)],
         "excluded_torsion_indices": {f"{a}-{b}": indices for (a, b), indices in sorted(
             report.items())},

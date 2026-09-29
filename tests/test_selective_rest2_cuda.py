@@ -43,6 +43,7 @@ SELECTIONS = {
                                          "L02": {"mask": f":{RESIDUE['LGB']}"}}},
 }
 
+from md_tools.rest2.identity import FINGERPRINT_FORMAT                          # noqa: E402
 
 def _environment(root: Path) -> dict:
     env = _env(root, REPO / "src")
@@ -119,7 +120,11 @@ def test_the_identity_is_the_explicit_selection(ladder):
     _name, root, run = ladder
     hamiltonian = json.loads((run / "restart.json").read_text(encoding="utf-8"))[
         "scientific_identity"]["hamiltonian"]
-    assert hamiltonian["format"] == "md-tools-hamiltonian-identity/v3"
+    # The CONSTANT, not the literal. A hardcoded version string is the same defect as the
+    # three hardcoded detector versions removed in 0.6.3: a bump moves one source and
+    # leaves the others asserting a format nothing writes. The v3 -> v4 bump caught this
+    # in the gate, having passed every fast lane.
+    assert hamiltonian["format"] == FINGERPRINT_FORMAT
     assert hamiltonian["selection_mode"] == "explicit"
 
 

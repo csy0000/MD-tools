@@ -42,6 +42,7 @@ pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("selective-rest2-integra
 
 STATES, EXCHANGE_EVERY, EXCHANGES = 3, 10, 2
 
+from md_tools.rest2.identity import FINGERPRINT_FORMAT                          # noqa: E402
 
 def _v060_source(tmp_path_factory) -> Path:
     found = subprocess.run(["git", "-C", str(REPO), "cat-file", "-e", f"{V060}^{{commit}}"],
@@ -294,7 +295,11 @@ def _bundle(selective_ladder, tmp_path) -> Path:
 def test_a_selective_ladder_records_its_region_in_the_identity(selective_ladder):
     _root, run, _env_ = selective_ladder
     hamiltonian = _restart_identity(run)["hamiltonian"]
-    assert hamiltonian["format"] == "md-tools-hamiltonian-identity/v3"
+    # The CONSTANT, not the literal. A hardcoded version string is the same defect as the
+    # three hardcoded detector versions removed in 0.6.3: a bump moves one source and
+    # leaves the others asserting a format nothing writes. The v3 -> v4 bump caught this
+    # in the gate, having passed every fast lane.
+    assert hamiltonian["format"] == FINGERPRINT_FORMAT
     assert hamiltonian["selection_mode"] == "explicit"
 
 

@@ -31,6 +31,7 @@ from .hamiltonian import (  # noqa: F401
     REST2_IMPLEMENTATION,
     scaling_for_tau,
     clone_system,
+    UNSCALED_TORSION_DETECTOR_VERSION,
     _scale_nonbonded,
     _scale_torsions,
     system_bond_graph,

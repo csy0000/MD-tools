@@ -230,7 +230,12 @@ def _copy_of_the_run(finished, tmp_path):
 
     root, _run, _bundle, _manifest = finished
     copy = tmp_path / "copy"
-    shutil.copytree(root, copy, ignore=shutil.ignore_patterns("bundle"))
+    # symlinks=True, and it is load-bearing. A run directory carries `build -> ../build` and its
+    # two siblings, and copytree FOLLOWS links by default -- so the copy would hold a second,
+    # real `cMD-run1/build/` beside the root's. Damaging one then leaves the other intact, and a
+    # test that damages the recorded structure would find the export reading an undamaged copy
+    # and refusing nothing. Copying a dataset should preserve its shape, not silently fatten it.
+    shutil.copytree(root, copy, symlinks=True, ignore=shutil.ignore_patterns("bundle"))
     return copy
 
 

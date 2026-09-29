@@ -333,15 +333,20 @@ def test_the_refusal_names_the_ATOMS_not_just_their_elements(tmp_path):
     from md_tools.openmm.system import UnclassifiedTorsionError, unscaled_torsions
 
     # The trigger is a UREA -- the carbonyl carbon carries two nitrogens, so `_amide_candidates`
-    # refuses it structurally, from the topology, and no bond-order evidence can settle which C-N
-    # is the omega.
+    # THE TRIGGER IS NO SDF, and that is the third one this test has had in a day.
     #
-    # It used to be a deprotonated benzoyl amide, chosen because the amide SMARTS could not match
-    # a two-connected nitrogen. That was the amidate gap, and widening the pattern to
-    # `[CX3](=[OX1])[NX2,NX3]` closed it -- so that molecule now builds and this test stopped
-    # firing. The vehicle changed; the subject did not. A urea cannot be fixed by widening a
-    # nitrogen class, so this trigger does not rot the same way.
-    smi = "c1cc(ccc1NC(=O)N[C@@H](CCC(=O)O)C(=O)O)NCc2cnc3c(n2)C(=O)N=C(N3)N"
+    # It began as a deprotonated benzoyl amide, which stopped refusing when the amidate gap closed
+    # (`[CX3](=[OX1])[NX2,NX3]`). It became a urea, which stopped refusing two commits later when
+    # a urea was measured and left scalable. Both vehicles were CHEMISTRY, and this release spent
+    # its time moving chemistry out of the refusing set -- so any chemical trigger was going to rot
+    # again, and the second one did, caught by the gate after passing every fast lane.
+    #
+    # Missing bond orders is not chemistry. It is the one thing that still refuses BY DESIGN and
+    # cannot be argued out of it: with no SDF the classifier sees nothing, so nothing is protected,
+    # and scaling a whole aromatic ring because a file was forgotten is the failure the refusal
+    # exists to prevent. The subject of this test -- does the message name the ATOMS rather than
+    # the bare element letters -- never depended on which trigger fired.
+    smi = "c1cc(ccc1C(=O)N[C@@H](CCC(=O)O)C(=O)O)NCc2cnc3c(n2)C(=O)NC(=N3)N"
     mol = Molecule.from_smiles(smi, allow_undefined_stereo=True)
     mol.generate_conformers(n_conformers=1)
     mol.name = "FOL"
@@ -355,7 +360,7 @@ def test_the_refusal_names_the_ATOMS_not_just_their_elements(tmp_path):
         residue.name = "FOL"
 
     with pytest.raises(UnclassifiedTorsionError) as refusal:
-        unscaled_torsions(topology, list(range(topology.getNumAtoms())), ligand_sdf=sdf)
+        unscaled_torsions(topology, list(range(topology.getNumAtoms())))   # no ligand_sdf
 
     line = next(ln.strip() for ln in str(refusal.value).splitlines()
                 if ln.strip().startswith("bond "))

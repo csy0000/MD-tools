@@ -732,6 +732,20 @@ PROTEIN_UNSCALED_BONDS = {
 #:
 #: WHICH rule fired is kept per bond under `evidence`, so collapsing the categories loses nothing
 #: a reader had before.
+#: Which RULES decided a classification, for the RECORD. Bumped when the classification rules
+#: change, not when their inputs do, so a stored exclusion can be re-derived by a reader who knows
+#: which algorithm produced it. 1: ordinary amide omega. 2: plus aromatic ring bonds, other double
+#: bonds and impropers.
+#:
+#: It is PROVENANCE, and it lives here -- in the detector -- so that one definition serves every
+#: consumer. It was previously defined in `rest2.hamiltonian` while this module hardcoded the
+#: literal 2 in two more places: three sources for one number, where a bump moves one and leaves
+#: the others.
+#:
+#: It is deliberately NOT part of `hamiltonian_selection_projection`. A digest of what determines
+#: the Hamiltonian must not depend on which algorithm named a bond; that was the v3 -> v4 change.
+UNSCALED_TORSION_DETECTOR_VERSION = 2
+
 UNSCALED_BOND_CLASSES = ("amide_omega", "non_rotatable")
 
 #: The specific rules that make a bond `non_rotatable`, as they appear in a bond's `evidence`.
@@ -1125,7 +1139,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
 
     Returns ``unscaled_central_bonds`` (every class), ``central_bonds`` (each with its class,
     residue and evidence), ``proline_like_scaled_bonds``, ``unclassified``, ``unscaled_impropers``,
-    ``detection_method`` and ``amide_detail``. **A non-empty unclassified list
+    ``detection_method``, ``detector_version`` and ``amide_detail``. **A non-empty unclassified list
     must block production**; `unscaled_torsions` is the entry point that enforces it.
     """
     if ligand_sdf is not None and residue_sdfs is not None:
@@ -1401,6 +1415,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
             {"bond": list(e["bond"]), "resolved_by": e["resolved_by"],
              "amide_test": e["ambiguous"]} for e in resolved],
         "unscaled_impropers": bool(unscaled_impropers),
+        "detector_version": UNSCALED_TORSION_DETECTOR_VERSION,
         "detection_method": method,
         "amide_detail": {"unscaled": unscaled, "proline_like_scaled": proline},
     }
@@ -1912,7 +1927,7 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
         "hmr": hmr,
         "unscaled_torsions": {k: unscaled_info[k] for k in
                               ("unscaled_central_bonds", "central_bonds", "proline_like_scaled_bonds", "unclassified",
-         "unscaled_impropers", "detection_method", "amide_detail")},
+         "unscaled_impropers", "detection_method", "detector_version", "amide_detail")},
         "forcefield": ff_info,
         "degrees_of_freedom": (
             3 * system.getNumParticles() - system.getNumConstraints()
