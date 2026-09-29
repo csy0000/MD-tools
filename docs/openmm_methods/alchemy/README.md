@@ -10,14 +10,27 @@ md-openmm combine-topology --config example.config -odir ./plan
 
 ## What this is today, and what it is not
 
-`combine-topology` is under construction for 0.7.0, and the honest statement is short: **nothing
-downstream consumes a plan yet.** There is no `protocol: alchemical` in `build-md`, no `.in` file
-that names a plan, and no generated run directory. What the command produces is a plan directory
-for the Python API — `md_tools.alchemy.topology.load_plan` reads it back with every digest
-re-verified — not a runnable campaign.
+`combine-topology` is under construction for 0.7.0. The honest statement, stated precisely because
+the halfway point is where a reader is most likely to assume the rest:
 
-So this page documents a builder and its refusals. Everything below is true of the command as it
-stands; none of it describes a workflow you can launch.
+* **A plan is a finished artefact.** The command writes one, and
+  `md_tools.alchemy.topology.load_plan` reads it back with every digest re-verified.
+* **`protocol: alchemical` resolves.** `build-md` accepts an `alchemical` section naming a plan, a
+  λ path, a window placement, the Amber18 softcore settings and the per-window lengths, and
+  `md-run` parses the matching `&alchemical` block. Every refusal that belongs to one of those
+  values fires where it is written.
+* **Neither surface runs a window yet.** `build-md` refuses to generate the run directory and
+  `md-run` refuses to dispatch, each by name. Left to fall through, the first would write scripts
+  that minimise, equilibrate and stop — a complete-looking run that sampled nothing — and the
+  second would report the success of a campaign it never ran.
+* **The window runtime itself works**, through the Python API
+  (`md_tools.alchemy.windows.run_window`, `md_tools.alchemy.campaign`), and has produced absolute
+  hydration free energies that agree with an independent alchemical route — see
+  [validation.md](validation.md).
+
+So a campaign today is driven from Python, not from a generated directory. What is missing is the
+step between the configuration and the runtime, and both surfaces say so rather than approximating
+it.
 
 ## The example file beside this README
 
@@ -25,7 +38,8 @@ stands; none of it describes a workflow you can launch.
 |---|---|
 | [`example.config`](example.config) | what you hand to `md-openmm combine-topology` |
 
-There is no `example.in` here, and that absence is the point made above.
+There is no `example.in` here: `build-md` does not yet write one for an alchemical ladder, and a
+hand-written example of a file no command produces is a file nothing checks.
 
 ## The command
 
