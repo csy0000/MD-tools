@@ -2402,6 +2402,13 @@ the installed md_tools package, and the ladder is in `resolved.config` beside th
 Windows are INDEPENDENT: no ordering, no restart handed from one to the next, and a window that
 already completed and verifies is skipped rather than rerun. Run them on as many devices as you
 have; the campaign is complete when every window is.
+
+MINIMISATION IS NOT REPRODUCIBLE ON CUDA, so a window with alchemical.minimize_iterations > 0 is
+not either, seed or no seed. Measured on this Hamiltonian (2026-09-29): across ten fresh Contexts
+the energies and forces at the same positions were bit-identical, spread exactly 0, and yet five
+minimisations from that same start scattered by 16 kJ/mol in mixed precision and 24 in double.
+The System, the plan and this declaration ARE reproducible -- what follows from them on a card is
+a new realisation. Two --cpu runs agreeing says nothing about a card.
 """
 from md_tools.alchemy import run_generated_window
 

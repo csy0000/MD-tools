@@ -12,7 +12,12 @@ either side. A directory that referred to a plan elsewhere would break silently 
 exists and holds something else.
 
 PLATFORM_POLICY_EXEMPTION: every simulating test here passes an explicit `--cpu`. This exercises
-the two surfaces and is NOT CUDA evidence (see the S4 acceptance matrix).
+the two surfaces and is NOT CUDA evidence (see the S4 acceptance matrix). The caveat is sharper
+than the usual one: `LocalEnergyMinimizer.minimize` is not deterministic on CUDA for this System
+(S0, 2026-09-29 -- 16 kJ/mol spread in mixed precision, 24 in double, from bit-identical starting
+energies), so these tests agreeing twice on the CPU says nothing about whether a window on a card
+repeats. What they assert is the WIRING -- which dispatch is reached, what is refused, what is
+written -- and none of it depends on the trajectory.
 """
 from __future__ import annotations
 
