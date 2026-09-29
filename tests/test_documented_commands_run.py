@@ -30,7 +30,7 @@ CLI = [sys.executable, "-m", "md_tools.cli.md_openmm"]
 pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("documented-commands")]
 
 #: The pages whose command blocks are contractual.
-PAGES = [REPO / "README.md", REPO / "CLAUDE.md", REPO / "docs" / "md-run.md",
+PAGES = [REPO / "README.md", REPO / "CLAUDE.md", REPO / "docs" / "basics" / "md-run.md",
          REPO / "docs" / "openmm_methods" / "cMD" / "README.md",
          REPO / "docs" / "openmm_methods" / "REST2" / "README.md",
          REPO / "docs" / "openmm_methods" / "AIS" / "README.md"]
@@ -204,7 +204,7 @@ def generated(installed):
 
 
 def test_the_canonical_stage_command_runs_against_the_installed_wheel(installed, generated):
-    """The exact command `docs/md-run.md` opens with, on the CPU, end to end."""
+    """The exact command `docs/basics/md-run.md` opens with, on the CPU, end to end."""
     _binaries, work = installed
     script = generated
     done = _run(installed, "md-run", "-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",

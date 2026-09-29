@@ -246,7 +246,10 @@ def test_tau_linear_refuses_a_v1_that_is_not_the_scaled_source(saved_state, tmp_
     root, state = saved_state
     other = tmp_path / "other.xml"
     other.write_text((root / "build" / "built.xml").read_text() + "\n")
-    with pytest.raises(PreflightError, match="not the System -s was scaled from"):
+    # The refusal now names both acceptable digests -- the recorded source AND that
+    # record's tau = 0 state, which are byte-identical -- so it reads "neither ... nor".
+    with pytest.raises(PreflightError,
+                       match="neither the System -s was scaled from nor"):
         _claim(state, other)
 
 

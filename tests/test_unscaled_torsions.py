@@ -68,15 +68,18 @@ def test_paracetamol_keeps_its_amide_and_its_six_ring_bonds(tmp_path):
     result = unscaled_torsions(topology, solute, residue_sdfs=sdfs)
     classes = _by_class(result)
 
+    # Two CATEGORIES now; which rule fired is kept per bond as evidence, so both are checked.
     assert len(classes.get("amide_omega", ())) == 1
-    assert len(classes.get("aromatic_ring", ())) == 6
-    assert classes.get("double_bond", set()) == set(), (
-        "C=O has no torsion across it: a terminal oxygen is never a central bond")
+    assert len(classes.get("non_rotatable", ())) == 6
+    rules = {e["evidence"].rsplit(": ", 1)[-1] for e in result["central_bonds"]
+             if e["class"] == "non_rotatable"}
+    assert rules == {"aromatic ring bond"}, (
+        f"all six are ring bonds, and no C=O: a terminal oxygen is never a central bond; {rules}")
     ring = {tuple(sorted((b.GetBeginAtomIdx(), b.GetEndAtomIdx())))
             for b in mol.GetBonds() if b.GetIsAromatic()}
-    assert classes["aromatic_ring"] == ring
+    assert classes["non_rotatable"] == ring
     assert sorted(result["unscaled_central_bonds"]) == sorted(
-        classes["amide_omega"] | classes["aromatic_ring"])
+        classes["amide_omega"] | classes["non_rotatable"])
     assert result["unscaled_impropers"] is True
 
 
@@ -84,11 +87,13 @@ def test_a_chain_double_bond_is_kept(tmp_path):
     from md_tools.openmm.system import unscaled_torsions
 
     topology, solute, sdfs, mol = _ligand(tmp_path, "C/C=C/C(=O)O")      # crotonic acid
-    classes = _by_class(unscaled_torsions(topology, solute, residue_sdfs=sdfs))
+    result = unscaled_torsions(topology, solute, residue_sdfs=sdfs)
+    classes = _by_class(result)
     double = {tuple(sorted((b.GetBeginAtomIdx(), b.GetEndAtomIdx()))) for b in mol.GetBonds()
               if b.GetBondTypeAsDouble() == 2.0 and b.GetBeginAtom().GetSymbol() == "C"
               and b.GetEndAtom().GetSymbol() == "C"}
-    assert classes.get("double_bond") == double
+    assert classes.get("non_rotatable") == double
+    assert {e["evidence"].rsplit(": ", 1)[-1] for e in result["central_bonds"]} == {"double bond"}
     assert "amide_omega" not in classes, "an acid is not an amide"
 
 
@@ -118,7 +123,7 @@ def test_chinolin_with_its_sdf_keeps_its_eleven_ring_bonds(tmp_path):
 
     topology, solute, sdfs, _ = _ligand(tmp_path, "c1ccc2ncccc2c1", name="CHI")
     assert len(_by_class(unscaled_torsions(topology, solute,
-                                           residue_sdfs=sdfs))["aromatic_ring"]) == 11
+                                           residue_sdfs=sdfs))["non_rotatable"]) == 11
 
 
 # --- proteins, from a residue table -------------------------------------------------------------
@@ -144,6 +149,9 @@ def test_every_bond_in_the_protein_table_exists_in_openmms_templates():
 def test_the_protein_table_is_the_decided_one():
     from md_tools.openmm.system import PROTEIN_UNSCALED_BONDS
 
+    # This table's keys are the RULE that fires, not the category the classifier records. The
+    # classifier maps them onto `non_rotatable` and keeps the rule as the bond's evidence, so a
+    # reader of a record still learns that ARG's three are a guanidinium and PHE's six are a ring.
     counts = {name: {kind: len(pairs) for kind, pairs in classes.items()}
               for name, classes in PROTEIN_UNSCALED_BONDS.items()}
     assert counts["PHE"] == {"aromatic_ring": 6}
@@ -188,8 +196,8 @@ def test_a_peptide_keeps_its_rings_its_guanidinium_and_its_backbone_amides():
     topology = _peptide(["PHE", "TYR", "TRP", "HIS", "ARG", "PRO", "ALA"])
     result = unscaled_torsions(topology, [a.index for a in topology.atoms()])
     classes = _by_class(result)
-    assert len(classes["aromatic_ring"]) == 6 + 6 + 10 + 5
-    assert len(classes["double_bond"]) == 3
+    # One category; the rings and the guanidinium are told apart by their evidence, not class.
+    assert len(classes["non_rotatable"]) == 6 + 6 + 10 + 5 + 3
     # PHE-TYR, TYR-TRP, TRP-HIS, HIS-ARG and PRO-ALA are ordinary; ARG-PRO is proline-like.
     assert len(classes["amide_omega"]) == 5
     assert len(result["proline_like_scaled_bonds"]) == 1

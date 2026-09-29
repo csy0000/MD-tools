@@ -150,6 +150,9 @@ def test_the_report_names_every_torsion_an_excluded_bond_protects():
     system = _torsion_system([(0, 1, 2, 3), (1, 2, 3, 4), (2, 1, 2, 5), (0, 1, 6, 7)])
     report = scaling.torsion_exclusion_report(system, range(6), [(1, 2)])
 
+    # The stamp is PROVENANCE and stays in the record; what left in v4 is its presence in the
+    # identity PROJECTION, where a digest of the Hamiltonian must not depend on which algorithm
+    # named a bond. One definition now, in `openmm.system`, where the detector is.
     assert report["detector_version"] == scaling.UNSCALED_TORSION_DETECTOR_VERSION
     assert report["excluded_central_bonds"] == [[1, 2]]
     assert report["excluded_torsion_indices"] == {"1-2": [0, 2]}, (

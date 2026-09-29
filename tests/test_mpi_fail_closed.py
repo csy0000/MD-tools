@@ -47,16 +47,22 @@ def _inputs(protocol):
     A REST2 ladder reads -s ONLY from its group file (0.5.4): each line names one saved scaled
     state, `build/REST2/system_state<i>.xml`, and continues from `-c eq/eq_3.xml`. `-s` beside it
     is refused by name, so passing it here would test that refusal instead of the MPI behaviour.
-    AIS takes both end states on the command line: V0 as -s and V1 as -s2/-p2 (the saved tau-0.5
-    state, a parameter-only edit of the same particles), or it refuses by name before MPI is
-    reached -- which would test that refusal instead.
+    AIS takes both end states on the command line: V0 as -s and V1 as -s2/-p2, or it refuses by
+    name before MPI is reached -- which would test that refusal instead. Since the state
+    renumbering, V0 is the SCALED saved state (state 1, tau_max) and V1 the physical one
+    (state 0, tau 0). This used to pass `built.xml` as V0 against state 0 as V1: those are the
+    SAME Hamiltonian -- state 0 is a byte-identical untouched clone -- so the pair check refuses
+    them with "every path would measure exactly zero work", and the MPI behaviour under test is
+    never reached.
     """
     if protocol == "REST2":
         return ["--groupfile", "remd_groupfile.1"]
-    return ["-s", "../build/built.xml", *AIS_V1]
+    return [*AIS_V0, *AIS_V1]
 
 
-#: V1 for every AIS launch here, built into `build/AIS/` by the `projects` fixture.
+#: The AIS end states, built into `build/AIS/` by the `projects` fixture. V0 is the scaled state
+#: the source ensemble was sampled from; V1 is the physical end state the paths anneal to.
+AIS_V0 = ["-s", "../build/AIS/system_state1.xml"]
 AIS_V1 = ["-p2", "../build/built.pdb", "-s2", "../build/AIS/system_state0.xml"]
 
 
@@ -480,7 +486,7 @@ def test_a_rank_local_failure_after_preflight_stops_the_whole_ais_run(failing_ra
 
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(project / "AIS.py"),
-         "-p", "../build/built.pdb", "-s", "../build/built.xml", *AIS_V1,
+         "-p", "../build/built.pdb", *AIS_V0, *AIS_V1,
          "-source-traj", "../source.dcd", "-odir", str(destination), "--cpu"],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(**{FAIL_PHASE: f"AIS: opening the rank reports:{failing_rank}"}))

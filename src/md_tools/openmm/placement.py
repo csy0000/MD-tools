@@ -630,7 +630,7 @@ def refuse_unverified_sharing(plan: LaunchPlan, mps: MpsStatus, *, rank: int,
         f"  Without MPS, workers on one GPU are time-sliced: each waits for the others' kernels, "
         f"and a synchronous ladder runs at the pace of that shared GPU. MPS is required whenever "
         f"a GPU hosts more than one worker, and this package does not start or stop the daemon.\n"
-        f"  Start one (docs/md-run.md, \"CPUs, devices and MPS\"):\n"
+        f"  Start one (docs/basics/md-run.md, \"CPUs, devices and MPS\"):\n"
         f"      export CUDA_MPS_PIPE_DIRECTORY=<a directory you own>\n"
         f"      export CUDA_MPS_LOG_DIRECTORY=<another>\n"
         f"      nvidia-cuda-mps-control -d\n"
@@ -668,6 +668,7 @@ def _why_doubled_up(plan: "LaunchPlan", mine: Mapping[str, Any]) -> str:
 # ---------------------------------------------------------------------------------------------
 
 def measure_device_throughput(system, positions, *, devices: int, precision: str,
+                              box_vectors=None, relax_iterations: int = 0,
                               warmup_steps: int = 50, min_seconds: float = 1.0,
                               max_steps: int = 5000, timestep_ps: float = 0.002,
                               clock=time.perf_counter) -> dict[str, Any]:
@@ -680,6 +681,22 @@ def measure_device_throughput(system, positions, *, devices: int, precision: str
 
     A Verlet integrator with no thermostat, because this measures kernels rather than sampling
     anything, and nothing it produces is kept.
+
+    **`positions` must be a state the run could integrate, and `box_vectors` must be ITS box.**
+    A Verlet integrator conserves energy, so it has nothing to dissipate a close contact with:
+    handed a freshly solvated structure, it converts the contact energy to motion, steps into a
+    worse contact, and diverges. Barnase-barstar reached `Particle coordinate is NaN` in ten
+    steps that way, from `build/built.pdb` at -188350 kJ/mol against an equilibrated -402289.
+    The caller therefore passes the run's own `-c`, and its box with it -- those same positions
+    in the System's DEFAULT box are +7e11 kJ/mol, so taking one without the other trades a NaN
+    for a worse one.
+
+    `relax_iterations` is the fallback for a launch that HAS no `-c`. AIS is one: it starts its
+    paths from frames of a source trajectory, so its command line carries no restart, and the
+    first fix for this bug covered ladders only -- multi-rank AIS reached the same measurement
+    with the same unrelaxed topology coordinates and the same NaN. A short minimisation removes
+    the stored contact energy that an energy-conserving integrator cannot shed; on a 30k-atom
+    complex 200 iterations cost under a second.
     """
     from openmm import Context, Platform, VerletIntegrator
 
@@ -690,7 +707,14 @@ def measure_device_throughput(system, positions, *, devices: int, precision: str
         context = Context(system, integrator, platform,
                           {"DeviceIndex": str(device), "Precision": precision})
         try:
+            if box_vectors is not None:
+                context.setPeriodicBoxVectors(*box_vectors)
             context.setPositions(positions)
+            if relax_iterations and device == 0:
+                from openmm import LocalEnergyMinimizer
+
+                LocalEnergyMinimizer.minimize(context, maxIterations=int(relax_iterations))
+                positions = context.getState(getPositions=True).getPositions()
             context.setVelocitiesToTemperature(300.0, 1)
             integrator.step(int(warmup_steps))
             context.getState(getEnergy=True)                   # synchronise before timing

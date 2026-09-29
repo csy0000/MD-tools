@@ -132,7 +132,7 @@ def dataset_defaults() -> dict[str, Any]:
     """The MD-data dataset identity, as editable YAML with every unguessable field left null.
 
     MD-tools owns the dataset contract now: the v2 model and its generated schema live in
-    `md_tools.data_contract`, and `docs/data-contract.md` states where the FAIR boundary falls.
+    `md_tools.data_contract`, and `docs/structure/project-data.md` states where the FAIR boundary falls.
     (MD-data owned v1, at `docs/contracts/dataset-v1.md`; nothing here validates against it.) This
     block is the smallest input `build-top` needs to WRITE a manifest that the validator accepts. It
     lives in `sys.config.yaml` rather than in both files because a dataset has one identity, and
@@ -254,11 +254,16 @@ def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT,
         "implicit_solvent": {
             "model": "GBn2",
             "radii": "mbondi3",
-            # The ACE surface-area nonpolar term. False matches Amber's igb=8 with gbsa=0, which
-            # is the context GBn2's parameters were fit in; OpenMM's implicit/gbn2.xml turns it on
-            # by default. The two differ by ~16 kJ/mol (~6 kT) on ACE-ALA-NME, so this is a
-            # modelling choice and is stated rather than inherited.
-            "nonpolar_sasa": False,
+            # The ACE surface-area nonpolar term. True matches OpenMM's implicit/gbn2.xml, which
+            # turns it on by default; False matches Amber's igb=8 with gbsa=0, the context GBn2's
+            # POLAR parameters were fit in. The two differ by ~16 kJ/mol (~6 kT) on ACE-ALA-NME,
+            # so this is a modelling choice and is stated rather than inherited.
+            "nonpolar_sasa": True,
+            # The surface tension in that term, in kcal/mol/A^2. null means ACE's own 0.0054,
+            # which reproduces OpenMM's hard-coded prefactor exactly. Amber's `pmemd` GB default
+            # is 0.005. OpenMM offers no way to set this -- md-tools rewrites the built term --
+            # so it is a real parameter here and is recorded as one.
+            "nonpolar_surften": None,
         },
         # The MD-data dataset identity. Disabled by default: a plain inputs/ + MD/ tree needs no
         # manifest, and a manifest cannot be written from values this package would have to guess.

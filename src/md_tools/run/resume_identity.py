@@ -44,7 +44,7 @@ from typing import Any
 #: a stored document can be read as "written before this field existed" rather than "deliberately
 #: removed": absence alone cannot distinguish the two, and the difference decides whether a resume
 #: is safe. Bump it when a section or field is ADDED or REMOVED, not when a default changes.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 #: Never part of any run's identity: metadata about the document, not about the calculation.
 METADATA_KEYS = ("schema_version",)

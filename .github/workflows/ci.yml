@@ -190,7 +190,6 @@ jobs:
               "sys/build-top.config",
               "md/cMD.config",
               "md/REST2.config",
-              "md/rREST2.config",
               "md/AIS.config",
           }
           assert {str(r) for r in EXAMPLES} == expected, sorted(str(r) for r in EXAMPLES)
@@ -198,10 +197,10 @@ jobs:
           assert not missing, f"declared but not shipped: {missing}"
 
           resolve_build_config(example("sys/build-top.config"))
-          for name in ("cMD", "REST2", "rREST2", "AIS"):
+          for name in ("cMD", "REST2", "AIS"):
               resolved = resolve_md_config(example(f"md/{name}.config"))
               assert resolved["protocol"] == name, (name, resolved["protocol"])
-          print("six shipped examples present and resolving")
+          print("five shipped examples present and resolving")
           PY
 
       - name: the documented examples, through the same resolvers
@@ -215,15 +214,15 @@ jobs:
           from md_tools.data_contract.model import Dataset
 
           docs = Path("docs")
-          for name in ("cMD", "REST2", "rREST2", "AIS"):
+          for name in ("cMD", "REST2", "AIS"):
               path = docs / "openmm_methods" / name / "example.config"
               assert resolve_md_config(path)["protocol"] == name, path
-          print("four documented method examples resolve")
+          print("three documented method examples resolve")
 
           Dataset.model_validate(
-              yaml.safe_load((docs / "data_register" / "dataset.yaml.example").read_text()))
+              yaml.safe_load((docs / "basics" / "data-register" / "dataset.yaml.example").read_text()))
           Extension.model_validate(
-              yaml.safe_load((docs / "data_register" / "extension.yaml.example").read_text()))
+              yaml.safe_load((docs / "basics" / "data-register" / "extension.yaml.example").read_text()))
           print("registration examples validate against their models")
           PY
 
@@ -236,7 +235,6 @@ jobs:
                                    run_stage)
           from md_tools.remd import (NeighborExchangeRule, REMDRunner, run_generated_remd,
                                      run_remd)
-          from md_tools.remd.reservoir import ReservoirRefreshRule
           from md_tools.rest2 import REST2Scaler, ScalingSelection
 
           print("every documented public name imports")
@@ -283,7 +281,7 @@ jobs:
                                  "info_printout": 10, "checkpoint_printout": 10}}
           # A BUILT SYSTEM FIRST, because 0.5.3 moved rung scaling to build time: `build-md` for a
           # ladder deserialises `../build/built.xml`, scales it to every rung and serialises the
-          # result, so REST2 and rREST2 cannot be generated from an empty directory any more. Two
+          # result, so REST2 cannot be generated from an empty directory any more. Two
           # Systems are enough -- one explicit, one implicit -- and they are built with the REAL
           # `build-top` rather than a hand-parameterised stand-in, because this step is the one
           # that claims the shipped commands work together. ALA is small: ~2.5 s each, tleap
@@ -327,14 +325,12 @@ jobs:
               ("REST2", "explicit", {"protocol": "REST2", "solvent": "explicit", **SHORT,
                          "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 10,
                                    "number_of_exchanges": 2}}, [],
-               {"REST2.py", "run.sh", "resolved.config", "eq", "remd0", "remd1",
-                "remd_groupfile.1", "remd_records", "rank", "build_states.log"}),
-              ("rREST2", "explicit", {"protocol": "rREST2", "solvent": "explicit", **SHORT,
-                          "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 10,
-                                    "number_of_exchanges": 2},
-                          "reservoir": {"enabled": True, "path": "./reservoir"}}, [],
-               {"rREST2.py", "run.sh", "resolved.config", "eq", "remd0", "remd1",
-                "remd_groupfile.1", "remd_records", "rank", "build_states.log"}),
+               # `remd0`/`remd1` and `build_states.log` were the 0.5.x layout, when build-md
+               # scaled the rungs itself and wrote a directory per replica. The states are now
+               # built by `build-top --rest2-scaler` into `build/REST2/` and the run directory
+               # holds the entry point, the declarations and the per-rank tree.
+               {"REST2.py", "run.sh", "resolved.config", "run.config", "build-md.log",
+                "eq", "remd_groupfile.1", "remd_records", "rank"}),
               ("AIS", "explicit", {"protocol": "AIS", "solvent": "explicit",
                        "ais": {"number_of_paths": 2, "switching_steps": 20,
                                "observation_interval_steps": 10},
@@ -356,6 +352,26 @@ jobs:
                   source = Path(f"sys-{system}") / artefact
                   if source.is_file():
                       shutil.copy2(source, root / "build" / artefact)
+              # A HOT LADDER NEEDS ITS SAVED STATES FIRST. Since 0.6.0 `build-md` refuses a
+              # REST2 run until `build/<method>/scaler.yaml` exists: every scaled Hamiltonian is
+              # written as a file by `build-top --rest2-scaler` and never re-derived at run time.
+              # This step generated the bundle straight from `build-md` and had been failing on
+              # that refusal -- the CI reporting a contract it had not been taught.
+              if name == "REST2":
+                  scaler = Path(f"scaler-{name}.config")
+                  scaler.write_text(yaml.safe_dump(
+                      {"method": "REST2",
+                       "schedule": {"n_states": 2, "tau_min": 0.0, "tau_max": 0.5}},
+                      sort_keys=False), encoding="utf-8")
+                  states = subprocess.run(
+                      ["md-openmm", "build-top", "--rest2-scaler",
+                       "-s", str(root / "build" / "built.xml"),
+                       "-p", str(root / "build" / "built.pdb"),
+                       "--config", str(scaler)],
+                      capture_output=True, text=True)
+                  assert states.returncode == 0, f"{name} scaler: {states.stdout}{states.stderr}"
+                  assert (root / "build" / "REST2" / "scaler.yaml").is_file(), f"{name}: no scaler.yaml"
+
               out = root / f"{name}-run1"
               result = subprocess.run(
                   ["md-openmm", "build-md", "-odir", str(out), "--config", str(config), *extra],

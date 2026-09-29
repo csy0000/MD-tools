@@ -292,7 +292,13 @@ def ais_project(tmp_path_factory):
 def _run_ais(root: Path, destination: Path, *extra, environment=None):
     return subprocess.run(
         [sys.executable, str(root / "AIS-run1" / "AIS.py"),
-         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
+         # V0 is the SCALED state the source ensemble came from (state 1 since the renumbering),
+         # V1 the physical end state (state 0). This used to pass built.xml as V0 against state 0
+         # as V1, which is the SAME Hamiltonian twice -- a pair with nothing to switch. It only
+         # ever ran because state 0 was not yet written for AIS; once it was, the pair check
+         # refused it, correctly.
+         "-p", str(root / "build" / "built.pdb"),
+         "-s", str(root / "build" / "AIS" / "system_state1.xml"),
          "-p2", str(root / "build" / "built.pdb"),
          "-s2", str(root / "build" / "AIS" / "system_state0.xml"),
          "-source-traj", str(root / "source.dcd"),

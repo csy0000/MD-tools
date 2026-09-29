@@ -3,7 +3,7 @@
 Step 0 needs root and is done once per machine; steps 1–4 are a normal user install. If you
 already have a conda environment with OpenMM 8.6, skip to step 3.
 
-Once this is done, see [machine configuration](machine-configuration.md) for the one file that
+Once this is done, see [machine configuration](structure/machine-config.md) for the one file that
 says which platform this machine runs on and where registered data goes.
 
 ## 0. The NVIDIA driver — the one step conda cannot do
@@ -164,6 +164,6 @@ Running simulations needs none of this — it matters only for the suite.
 
 ## Next
 
-* [Machine configuration](machine-configuration.md) — the platform this machine uses, and `$MD_DATA`.
+* [Machine configuration](structure/machine-config.md) — the platform this machine uses, and `$MD_DATA`.
 * [Methods](openmm_methods/README.md) — pick a protocol and run it.
-* [Running](md-run.md) — the flags, the `.in` language, the MPI rules.
+* [Running](basics/md-run.md) — the flags, the `.in` language, the MPI rules.

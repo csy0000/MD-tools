@@ -250,3 +250,38 @@ def test_no_message_tells_an_md_run_user_to_pass_a_flag_md_run_does_not_define()
     assert not offenders, (
         "these messages tell an md-run user to pass a flag md-run does not define:\n  "
         + "\n  ".join(offenders) + f"\n  md-run defines: {' '.join(sorted(defined))}")
+
+
+# -- 0.6.1: the selective-REST2 claim keys ------------------------------------------------------------
+
+SELECTORS = ("backbone_scaling_list", "sidechain_scaling_list", "ligand_scaling_dict")
+
+
+def _as_written_by_0_6_0():
+    """A REST2 `resolved.config` as 0.6.0 wrote it: schema version 3, no selector keys."""
+    stored = _rest2_document()
+    stored["schema_version"] = 3
+    for key in SELECTORS:
+        stored["rest2"].pop(key, None)
+    return stored
+
+
+def test_a_0_6_0_ladder_resumes_under_0_6_1():
+    """Adding three keys to `rest2:` must not make every in-flight ladder unresumable. It would have:
+    the gate forgives a missing default only across a schema-version change, so without the bump to
+    4 each of these keys was a difference."""
+    now = _as_written_by_0_6_1()
+    assert resume_identity.differences(_as_written_by_0_6_0(), now) == []
+
+
+def _as_written_by_0_6_1():
+    """What 0.6.1's build-md writes: the three keys present, null (no claim)."""
+    document = _rest2_document()
+    document["rest2"].update({key: None for key in SELECTORS})
+    return document
+
+
+def test_a_selector_claim_added_on_resume_is_a_difference():
+    now = _as_written_by_0_6_1()
+    now["rest2"]["backbone_scaling_list"] = ":2"
+    assert resume_identity.differences(_as_written_by_0_6_0(), now) == ["rest2.backbone_scaling_list"]

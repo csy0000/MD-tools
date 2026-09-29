@@ -19,14 +19,15 @@ shared contract by asking the coordinator, never with a private variant.
 
 ## The package
 
-One installed executable, `md-openmm`. Exactly four public work commands:
+One installed executable, `md-openmm`. Exactly five public work commands:
 
 ```text
-md-openmm build-top      a structure       -> built.xml + built.pdb + built.log
-                         --rest2-scaler: a built System -> build/<method>/system_state<i>.xml + scaler.yaml
-md-openmm build-md       a protocol config -> run scripts, .in files and run.sh in ./md_script/
-md-openmm md-run         an Amber-like .in -> a stage, a ladder, or AIS switching paths
-md-openmm data-register  a finished tree   -> a verified dataset under $MD_DATA
+md-openmm build-top         a structure       -> built.xml + built.pdb + built.log
+                            --rest2-scaler: a built System -> build/<method>/system_state<i>.xml + scaler.yaml
+md-openmm build-md          a protocol config -> run scripts, .in files and run.sh in ./md_script/
+md-openmm md-run            an Amber-like .in -> a stage, a ladder, or AIS switching paths
+md-openmm data-register     a finished tree   -> a verified dataset under $MD_DATA
+md-openmm export-reference  a finished run    -> a bundle that runs on OpenMM alone
 ```
 
 **On the 0.7.0 line only**, `md-openmm combine-topology` (two ligand parameter packages, one
@@ -35,7 +36,7 @@ UNDER CONSTRUCTION: `md_tools.build.combine` is its surface, `md_tools.alchemy.t
 work, and nothing downstream consumes a plan yet. See [0.7.0 status](docs/development/0.7.0/STATUS.md).
 
 AIS is `protocol: AIS` in a `build-md` configuration and `protocol = AIS` in an `.in` file. **Do
-not add a fifth command**, and do not add a second executable: `md-run` is a SUBCOMMAND.
+not add a sixth command**, and do not add a second executable: `md-run` is a SUBCOMMAND.
 
 `md-run` is a surface, not an implementation. It parses the Amber-like input, resolves it through
 `md_tools.build.md`, writes the resulting `resolved.config` into `-odir` with the input's sha256,
@@ -152,7 +153,57 @@ Do not change these without a failing test that demonstrates a defect.
   The directory is staged and renamed into place; `--overwrite` moves the old one aside, never
   deletes it. `md_tools.build.scaler` is the one writer and `md_tools.rest2.states.
   scaled_state_identity` the one reader.
-* **Unscaled torsions are CLASSIFIED, and a torsion nobody can classify is refused.** Proteins by
+* **A torsion is unscaled when it has no other state to reach.** This is the principle the classes
+  follow, and the one to reason from when a new case appears. Scale a torsion when it has real
+  alternative states behind a barrier the cold run cannot cross — that is what REST2 is for. Leave
+  it unscaled only when there is no alternative conformer and scaling would buy distortion instead
+  of sampling: an AROMATIC ring bond (planarity is enforced by delocalisation, so any excursion is
+  pure strain), a DOUBLE bond (cis/trans is a chemical isomer, not a conformer), an AMIDE OMEGA
+  (~20 kcal/mol, ~10 ms; cis-peptide is effectively a distinct chemical state — convention v3), and
+  every IMPROPER. A SATURATED ring bond is scaled: chair/twist-boat is a real flip (~10.4 kcal/mol,
+  ~µs) that swaps axial and equatorial, and freezing it would hide the conformational change that
+  often decides binding. A macrocycle's φ/ψ are scaled for the same reason — they are why one runs
+  REST2 on a cyclic peptide. Ring MEMBERSHIP is not the criterion, π character is: RDKit's
+  `NumRotatableBonds` calls every ring bond rigid and would leave a cyclic peptide with nothing to
+  scale. A UREA sits between the two (~11 kcal/mol, ~10 µs, both C–N bonds partially double because
+  both nitrogens donate into one carbonyl) and is SCALED, with the bonds recorded as
+  recognised-and-scaled so that seeing a case and not protecting it never looks like missing it.
+* **A run directory links the shared inputs relatively, and nothing reads the links.** Every
+  `<method>-run<N>/` gets `build -> ../build`, `input -> ../input`, `min -> ../min`. The generated
+  scripts already reach these by relative path (`-p ../build/built.pdb`), so a run does not NEED
+  them — they exist so a run directory is self-describing to anything that walks the tree without
+  reading `run.sh`, which is what a dataset manifest declaring components BY PATH does (hpREST2's
+  convention, agreed 2026-09-29). That is also why they must not be deleted as unused: nothing
+  reading them is the point, not evidence they are dead. RELATIVE always — a 0.5.4-era
+  `REST2-run1/build` was an absolute link into a project path and broke the moment the dataset
+  was relocated, which `data-register` does by design. Linking never replaces a real directory or
+  re-points an existing link (replacing data with a link is a deliberate act, not something a
+  build step does on the way past), and a target that does not exist yet is fine: `min/` appears
+  only once a minimisation has run.
+* **A MISSING INPUT is refused; an unnameable BOND is scaled, recorded and overridable.** These are
+  two different things and only the first can be fixed by the user. A non-standard residue whose
+  bond orders were never supplied is a missing input: with no SDF the classifier sees NOTHING, so
+  paracetamol goes from 7 protected bonds to 0, and defaulting that to scaled would put a whole
+  benzene ring on the λ path because somebody forgot a file — with no refusal and nothing red in
+  the picture to notice. That refuses, naming the file to supply. A bond the evidence COULD not
+  name — a carbon with two carbonyl oxygens, one also carrying a hydroxyl or ester oxygen, or an
+  SDF that simply says this C–N is not an ordinary amide — is not fixable by supplying anything, so
+  refusing it would refuse forever: it is scaled, recorded under `unnamed_scaled_bonds`, and can be
+  protected by `unscaled_list`. **Two user-facing categories**, `amide_omega` and `non_rotatable`,
+  with the rule that fired kept per bond as `evidence`; `PROTEIN_UNSCALED_BONDS` and
+  `rest2.sidechains` key their tables by the RULE and the classifier maps them onto the category,
+  so those two tables must move together or the agreement test that exists to catch drift will say
+  so. **`unscaled_list` and `scaled_list`** in the scaler config are the person's answer on top of
+  the rules, as `[i, j]` topology index pairs — the indices the refusal quotes and the picture
+  annotates. They are applied BEFORE the selection is built, so a declared bond is part of the
+  identity like any other and two runs differing only in a list are two Hamiltonians with two
+  digests. A listed bond that is the central bond of no proper torsion is refused, which is what
+  makes an index safe to write down: after a rebuild the same number is a different atom. A bond in
+  both lists is refused rather than resolved by precedence, and a four-atom entry is refused —
+  a torsion is named by its central bond, because every torsion across that bond moves together.
+* **Unscaled torsions are CLASSIFIED, and the EVIDENCE for the classification is required.**
+  (Until 0.6.2 this read "a torsion nobody can classify is refused"; the refusal now turns on
+  missing evidence rather than on an unnameable bond — see the entry above.) Proteins by
   the residue table (`PROTEIN_UNSCALED_BONDS`), small molecules by bond orders from an SDF:
   `sdf_filelist` in the scaler config, else `<RESNAME>.sdf` beside the System, else `built.sdf`
   when it is the only non-standard residue; with several and no mapping it refuses rather than

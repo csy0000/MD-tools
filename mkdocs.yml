@@ -8,7 +8,7 @@
 # more than the deletion would be; they are not published because a reader cannot tell an
 # evidence note from an instruction.
 #
-# `docs/md-configuration.md` IS GENERATED (`md_tools.build.manual.render()`) and
+# `docs/basics/build-md/configuration.md` IS GENERATED (`md_tools.build.manual.render()`) and
 # `tests/test_configuration_manual.py` fails on a hand-edit. The site renders the committed file;
 # it must never be authored here.
 #
@@ -69,6 +69,14 @@ exclude_docs: |
   /README.md
   history/
   campaigns/
+  # The parallel-development record: aims, status, handoffs, shared contracts and campaign plans
+  # for 0.6.1 and 0.7.x. Same rule as the rest of this list -- kept in the repository because the
+  # reasoning is worth more than the deletion, kept off the site because a reader cannot tell a
+  # development record from documentation. It also carries in-flight decisions, unfinished
+  # evidence and session-coordination detail, none of which is a statement to a user. Added
+  # 2026-09-22, after a strict build showed these pages WERE being published and two of their
+  # repository-relative links (`../README.md`, `../../CLAUDE.md`) aborted the build.
+  development/
   integration/
   amber-like-fix/
   claudecode-instructions/
@@ -102,34 +110,59 @@ nav:
   - Home: index.md
   - Getting started:
       - Installing: install.md
-      - Machine configuration: machine-configuration.md
   - Tutorials:
       - tutorial/README.md
-      - cMD:
-          - Paracetamol: tutorial/cMD/paracetamol.md
-          - Chignolin: tutorial/cMD/chignolin.md
-          - Barnase-barstar (1BRS): tutorial/cMD/barnase-barstar.md
-          - Bromodomain + paracetamol (4A9K): tutorial/cMD/bromodomain-paracetamol.md
-      - REST2:
-          - Paracetamol: tutorial/REST2/paracetamol.md
-          - Chignolin: tutorial/REST2/chignolin.md
-      - AIS:
-          - Alanine dipeptide: tutorial/AIS/alanine.md
-          - Paracetamol: tutorial/AIS/paracetamol.md
+      - Alanine dipeptide:
+          - The system: tutorial/ALA/index.md
+          - cMD: tutorial/ALA/cMD.md
+          - REST2: tutorial/ALA/REST2.md
+          - AIS: tutorial/ALA/AIS.md
+      - Paracetamol:
+          - The system: tutorial/paracetamol/index.md
+          - cMD: tutorial/paracetamol/cMD.md
+          - REST2: tutorial/paracetamol/REST2.md
+          - AIS: tutorial/paracetamol/AIS.md
+      - Chignolin:
+          - The system: tutorial/chignolin/index.md
+          - cMD: tutorial/chignolin/cMD.md
+          - REST2: tutorial/chignolin/REST2.md
+          - Choosing tau_max: tutorial/chignolin/choosing-tau.md
+      - Barnase + barstar:
+          - The system: tutorial/barnase-barstar/index.md
+          - cMD: tutorial/barnase-barstar/cMD.md
+      - TYK2 + ejm_31:
+          - The system: tutorial/tyk2-ejm31/index.md
+          - cMD: tutorial/tyk2-ejm31/cMD.md
+          - Selective REST2: tutorial/tyk2-ejm31/REST2.md
+          - AIS: tutorial/tyk2-ejm31/AIS.md
+          - Choosing the ladder: tutorial/tyk2-ejm31/choosing-the-ladder.md
       - Archived:
           - tutorial/archived/README.md
           - 0.5.3 cMD paracetamol: tutorial/archived/0.5.3/cMD/paracetamol.md
           - 0.5.3 cMD Chinolin: tutorial/archived/0.5.3/cMD/chinolin.md
           - 0.5.3 REST2 paracetamol: tutorial/archived/0.5.3/REST2/paracetamol.md
-  - Running a simulation:
-      - The commands:
-          - Building a system (build-top): build-top.md
-          - Running a stage or ladder (md-run): md-run.md
-      - What a run writes:
-          - The run layout: run-layout.md
-          - Collective variables: collective_variables/README.md
-      - Configuration:
-          - Every key, generated: md-configuration.md
+  - Basics:
+      - basics/README.md
+      - Building a system:
+          - build-top: basics/build-top/index.md
+          - Parameterising a ligand: basics/build-top/parameterization.md
+      - Generating a run:
+          - build-md: basics/build-md/index.md
+          - Every configuration key: basics/build-md/configuration.md
+      - Running it:
+          - md-run: basics/md-run.md
+          - The run layout: basics/run-layout.md
+          - Collective variables: basics/collective-variables.md
+      - Registering:
+          - What registration is: basics/data-register/index.md
+          - A ligand parameter package: basics/data-register/ligand-parameter.md
+          - A dataset: basics/data-register/dataset.md
+      - Ligand parameter packages: basics/ligand-packages.md
+  - Structure:
+      - structure/README.md
+      - Project data: structure/project-data.md
+      - Registered data: structure/registered-data.md
+      - Machine configuration: structure/machine-config.md
   - Methods:
       - openmm_methods/README.md
       - Equilibrium:
@@ -140,13 +173,13 @@ nav:
           - AIS:
               - openmm_methods/AIS/README.md
               - Implementation: openmm_methods/AIS/AIS_implementation.md
-  - Data:
-      - Registering a finished run: data_register/README.md
-      - The dataset contract: data-contract.md
   - Reference:
       - Scientific defaults: scientific-defaults.md
       - Support matrix: support-matrix.md
       - Releases:
+          - 0.6.3: release-notes/v0.6.3.md
+          - 0.6.2: release-notes/v0.6.2.md
+          - 0.6.1: release-notes/v0.6.1.md
           - 0.6.0: release-notes/v0.6.0.md
           - 0.5.4: release-notes/v0.5.4.md
           - 0.5.3: release-notes/v0.5.3.md

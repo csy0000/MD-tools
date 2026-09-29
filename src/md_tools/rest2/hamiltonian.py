@@ -166,13 +166,34 @@ def is_improper(atoms, bonds):
     return torsion_kind(atoms, bonds) == "improper"
 
 
-def torsion_is_scaled(atoms, solute, unscaled_bonds, bonds, unscaled_impropers=True):
+def torsion_is_scaled(atoms, solute, unscaled_bonds, bonds, unscaled_impropers=True,
+                      selected_bonds=None):
     """THE rule for one PeriodicTorsionForce term. Every scaler and every report asks this.
 
-    Scaled iff all four atoms are solute, its central bond is not an unscaled central bond, and --
-    under `unscaled_impropers` -- it is not an improper.
+    Two selections, and the caller's choice between them is `selected_bonds`:
+
+    * `None` -- the whole-solute selection every release before 0.6.1 used: scaled iff all four
+      atoms are solute, its central bond is not an unscaled central bond, and -- under
+      `unscaled_impropers` -- it is not an improper.
+    * a set of central bonds (frozensets) -- a SELECTIVE region: scaled iff it is a PROPER torsion
+      whose central bond is selected and not unscaled. The four atoms need not be in the
+      nonbonded set: chi1 (N-CA-CB-CG) belongs to its CA-CB bond, which a sidechain selection owns,
+      while N and CA are backbone atoms it does not heat. An improper is never scaled here, and a
+      selective region with scaled impropers is refused by whoever builds one, because an
+      improper has no central bond to decide ownership by.
     """
     i, j, k, l = (int(a) for a in atoms)
+    if selected_bonds is not None:
+        if frozenset((j, k)) not in selected_bonds or frozenset((j, k)) in unscaled_bonds:
+            return False
+        kind = torsion_kind((i, j, k, l), bonds)
+        if kind is None:
+            raise ValueError(
+                f"torsion {i}-{j}-{k}-{l} is neither a bonded chain nor centred on one atom "
+                f"bonded to the other three, according to the System's bonds and constraints. "
+                f"Whether it is an improper -- and so whether it stays unscaled -- cannot be "
+                f"decided; refusing rather than guessing. Is a bond force missing?")
+        return kind == "proper"
     if not (i in solute and j in solute and k in solute and l in solute):
         return False
     if frozenset((j, k)) in unscaled_bonds:
@@ -190,21 +211,30 @@ def torsion_is_scaled(atoms, solute, unscaled_bonds, bonds, unscaled_impropers=T
     return True
 
 
-def _scale_torsions(force, solute, solute_solute, excluded_bonds, bonds, unscaled_impropers=True):
+def _scale_torsions(force, solute, solute_solute, excluded_bonds, bonds, unscaled_impropers=True,
+                    selected_bonds=None):
     for index in range(force.getNumTorsions()):
         i, j, k, l, periodicity, phase, k_value = force.getTorsionParameters(index)
-        if torsion_is_scaled((i, j, k, l), solute, excluded_bonds, bonds, unscaled_impropers):
+        if torsion_is_scaled((i, j, k, l), solute, excluded_bonds, bonds, unscaled_impropers,
+                             selected_bonds):
             force.setTorsionParameters(index, i, j, k, l, periodicity, phase,
                                        k_value * solute_solute)
 
 
-#: Bumped when the unscaled-torsion classification RULES change, not when their inputs do. A record
-#: carrying this version says which algorithm decided what, so a stored exclusion can be re-derived.
-#: 1: ordinary amide omega. 2: plus aromatic ring bonds, other double bonds and impropers.
+#: Which detector rules classified a selection, for the RECORD. DUPLICATED from
+#: `openmm.system.UNSCALED_TORSION_DETECTOR_VERSION`, and it cannot be imported from there.
+#:
+#: This module is copied BYTE FOR BYTE into every REST2 reference bundle, where `verify_rungs.py`
+#: rebuilds each rung from rung 0 on a machine with no md_tools installed. It may therefore import
+#: nothing but OpenMM -- an import of anything else breaks silently, only inside a bundle, only on
+#: a machine without the package, which is the worst place to find out.
+#:
+#: So the copy is forced by that contract, not by carelessness, and the control for it is
+#: `test_the_detector_version_has_not_drifted_from_the_classifier` rather than a shared import.
 UNSCALED_TORSION_DETECTOR_VERSION = 2
 
-
-def torsion_exclusion_report(system, solute, excluded_bonds, unscaled_impropers=True):
+def torsion_exclusion_report(system, solute, excluded_bonds, unscaled_impropers=True,
+                             selected_bonds=None):
     """Which PeriodicTorsionForce torsions each excluded central bond actually protects.
 
     The stored exclusion is a pair of ATOM indices, but what it does is leave a set of TORSION
@@ -219,6 +249,8 @@ def torsion_exclusion_report(system, solute, excluded_bonds, unscaled_impropers=
     """
     excluded = {frozenset((int(a), int(b))) for a, b in excluded_bonds}
     solute = set(int(i) for i in solute)
+    selected = (None if selected_bonds is None
+                else {frozenset((int(a), int(b))) for a, b in selected_bonds})
     bonds = system_bond_graph(system)
     report = {tuple(sorted(bond)): [] for bond in excluded}
     impropers = []
@@ -229,13 +261,17 @@ def torsion_exclusion_report(system, solute, excluded_bonds, unscaled_impropers=
             continue
         for torsion in range(force.getNumTorsions()):
             i, j, k, l, _periodicity, _phase, _k = force.getTorsionParameters(torsion)
-            if not all(a in solute for a in (i, j, k, l)):
-                continue
             central = frozenset((int(j), int(k)))
+            if selected is None:
+                if not all(a in solute for a in (i, j, k, l)):
+                    continue
+            elif central not in selected and central not in excluded:
+                # Selective: a candidate is any torsion across a selected or protected bond.
+                continue
             if central in excluded:
                 report[tuple(sorted(central))].append(int(torsion))
             elif not torsion_is_scaled((i, j, k, l), solute, excluded, bonds,
-                                       unscaled_impropers):
+                                       unscaled_impropers, selected):
                 impropers.append(int(torsion))
             else:
                 scaled += 1
@@ -252,33 +288,44 @@ def torsion_exclusion_report(system, solute, excluded_bonds, unscaled_impropers=
     }
 
 
-def cmap_map_roles(force, solute):
+def _cmap_term_is_scaled(force, index, solute, scaled_terms):
+    """Whether CMAP term `index` is scaled: all eight atoms solute, or -- selective -- listed."""
+    if scaled_terms is not None:
+        return index in scaled_terms
+    return all(a in solute for a in force.getTorsionParameters(index)[1:])
+
+
+def cmap_map_roles(force, solute, scaled_terms=None):
     """Which CMAP maps belong to the solute, to the environment, or to both.
 
     A map is a shared lookup table, not a per-torsion parameter: one map is typically referenced by
     every torsion of the same residue type in the system. So "is this map the solute's" is a
     question about its USERS, and it has three answers, not two.
+
+    `scaled_terms`, when given, is the set of CMAP TERM indices a selective region scales; a term
+    then belongs to "the solute" by being listed rather than by its atoms. `None` is the
+    whole-solute rule.
     """
     solute_maps, other_maps = set(), set()
     for index in range(force.getNumTorsions()):
-        parameters = force.getTorsionParameters(index)
-        map_index, atoms = parameters[0], parameters[1:]
-        (solute_maps if all(a in solute for a in atoms) else other_maps).add(map_index)
+        map_index = force.getTorsionParameters(index)[0]
+        (solute_maps if _cmap_term_is_scaled(force, index, solute, scaled_terms)
+         else other_maps).add(map_index)
     return {"exclusive_solute": solute_maps - other_maps,
             "shared": solute_maps & other_maps,
             "exclusive_other": other_maps - solute_maps}
 
 
-def shared_cmap_originals(force, solute):
+def shared_cmap_originals(force, solute, scaled_terms=None):
     """The shared maps, in the deterministic order duplicates are appended in.
 
     The order is part of the contract: it is what lets a duplicate be matched back to its original
     later, without storing a side table that could drift from the System it describes.
     """
-    return sorted(cmap_map_roles(force, solute)["shared"])
+    return sorted(cmap_map_roles(force, solute, scaled_terms)["shared"])
 
 
-def duplicate_shared_cmaps(force, solute):
+def duplicate_shared_cmaps(force, solute, scaled_terms=None):
     """Give the solute its own copy of every shared map, and point its torsions at the copy.
 
     Scaling a shared map in place would scale it for the environment too. Leaving it alone -- what
@@ -290,7 +337,7 @@ def duplicate_shared_cmaps(force, solute):
     scaled in place; a map used only by the environment is untouched.
     """
     duplicates = {}
-    for original in shared_cmap_originals(force, solute):
+    for original in shared_cmap_originals(force, solute, scaled_terms):
         size, energy = force.getMapParameters(original)
         duplicates[force.addMap(size, list(energy))] = original
     if not duplicates:
@@ -298,13 +345,13 @@ def duplicate_shared_cmaps(force, solute):
     redirect = {original: duplicate for duplicate, original in duplicates.items()}
     for index in range(force.getNumTorsions()):
         parameters = list(force.getTorsionParameters(index))
-        if parameters[0] in redirect and all(a in solute for a in parameters[1:]):
+        if parameters[0] in redirect and _cmap_term_is_scaled(force, index, solute, scaled_terms):
             parameters[0] = redirect[parameters[0]]
             force.setTorsionParameters(index, *parameters)
     return duplicates
 
 
-def cmap_targets(force, solute, duplicates=None):
+def cmap_targets(force, solute, duplicates=None, scaled_terms=None):
     """The maps a switch must scale -- and therefore exactly the ones it must restore first.
 
     One rule, read by both halves. `_scale_cmap` and `_restore_cmap` disagreeing about which maps
@@ -312,16 +359,17 @@ def cmap_targets(force, solute, duplicates=None):
     its amplitude on every switch, and the path drifts away from the Hamiltonian it reports.
     """
     if duplicates is None:
-        duplicates = duplicate_shared_cmaps(force, solute)
+        duplicates = duplicate_shared_cmaps(force, solute, scaled_terms)
     # Computed after duplication, so the fresh copies count as the solute's own.
-    return sorted(set(cmap_map_roles(force, solute)["exclusive_solute"]) | set(duplicates))
+    return sorted(set(cmap_map_roles(force, solute, scaled_terms)["exclusive_solute"])
+                  | set(duplicates))
 
 
-def _scale_cmap(force, solute, solute_solute, duplicates=None):
+def _scale_cmap(force, solute, solute_solute, duplicates=None, scaled_terms=None):
     """Scale exactly the maps the solute owns, after duplicating any it has to share."""
     if duplicates is None:
-        duplicates = duplicate_shared_cmaps(force, solute)
-    targets = cmap_targets(force, solute, duplicates)
+        duplicates = duplicate_shared_cmaps(force, solute, scaled_terms)
+    targets = cmap_targets(force, solute, duplicates, scaled_terms)
     for map_index in sorted(targets):
         size, energy = force.getMapParameters(map_index)
         force.setMapParameters(map_index, size, [e * solute_solute for e in energy])
@@ -332,7 +380,7 @@ def _scale_cmap(force, solute, solute_solute, duplicates=None):
 REST2_GB_SCALE_PARAMETER = "rest2_scale_gb"
 
 
-def _scale_customgb(force, system, solute, solute_environment):
+def _scale_customgb(force, system, solute, solute_environment, *, as_literal=False):
     """Scale the ENTIRE generalised-Born energy by the LINEAR factor, `(1 - tau)`.
 
     The whole GB contribution is a solute-environment interaction: it is the solute's coupling to a
@@ -364,6 +412,26 @@ def _scale_customgb(force, system, solute, solute_environment):
             f"{len(missing)} of {system.getNumParticles()} particles are outside it "
             f"({shown}{more}). A generalised-Born energy is not separable per atom.")
 
+    # `as_literal` writes the factor into the expression instead of behind a global parameter.
+    # AIS needs it: its two end states are combined into ONE System, and two Forces declaring
+    # `rest2_scale_gb` with different defaults is rejected by OpenMM outright. A literal also
+    # keeps the tau = 0 state a byte-identical untouched clone, so a degenerate pair -- a System
+    # against its own unscaled state -- still has nothing to switch and is still refused.
+    # REST2 and cMD keep the global: their saved states' bytes are a compatibility surface.
+    factor = float(solute_environment)
+    if as_literal:
+        if factor == 1.0:
+            return                      # unscaled: leave the force exactly as it was
+        for term in range(force.getNumEnergyTerms()):
+            expression, computation = force.getEnergyTermParameters(term)
+            if ";" in expression:
+                head, tail = expression.split(";", 1)
+                scaled = f"{factor!r}*({head});{tail}"
+            else:
+                scaled = f"{factor!r}*({expression})"
+            force.setEnergyTermParameters(term, scaled, computation)
+        return
+
     existing = {force.getGlobalParameterName(i)
                 for i in range(force.getNumGlobalParameters())}
     if REST2_GB_SCALE_PARAMETER not in existing:
@@ -381,7 +449,7 @@ def _scale_customgb(force, system, solute, solute_environment):
 
     index = [force.getGlobalParameterName(i)
              for i in range(force.getNumGlobalParameters())].index(REST2_GB_SCALE_PARAMETER)
-    force.setGlobalParameterDefaultValue(index, float(solute_environment))
+    force.setGlobalParameterDefaultValue(index, factor)
 
 
 #: Force classes this module knows how to scale. Each has an explicit `_scale_*` implementation.
@@ -439,32 +507,71 @@ def audit_force_classes(system, where="tau scaling"):
 
 
 def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=(),
-                        unscaled_impropers=True):
+                        unscaled_impropers=True, torsion_central_bonds=None, cmap_terms=None,
+                        gb_literal=False):
     """A copy of `base_system` with the solute Hamiltonian scaled for this rung.
 
-    At tau = 0 the result is an untouched clone. (A `prepare_for_switching` flag used to make that
-    clone carry the CustomGBForce scale parameter for the single-topology AIS, which switched tau
-    on a live Context; it was retired with that AIS in 0.5.4.)
+    At tau = 0 the result is an untouched clone, in every mode. (A `prepare_for_switching` flag
+    used to make that clone carry the CustomGBForce scale parameter for the single-topology AIS,
+    which switched tau on a live Context; it was retired with that AIS in 0.5.4 and has NOT come
+    back -- see `gb_literal` for why the obvious revival is the wrong fix.)
+
+    `gb_literal` writes the generalised-Born factor into the energy expression instead of behind
+    the `rest2_scale_gb` global parameter. Only AIS passes it, and it exists because AIS combines
+    its two end states into ONE System: two Forces declaring that global with different defaults
+    is rejected by OpenMM, so the scaled state cannot carry it. Writing the factor as a literal
+    leaves the tau = 0 state an untouched clone, which keeps a DEGENERATE pair -- a System against
+    its own unscaled state -- with nothing to switch, and therefore still refused. Giving the
+    tau = 0 clone an inert `rest2_scale_gb = 1.0` would have matched the layouts and silently
+    defeated that guard.
+
+    Explicit solvent has no CustomGBForce, so this is a no-op there and the flag costs nothing.
+
+    `solute_indices` is the NONBONDED hot set: its atoms carry `(1-tau)` on charge and `(1-tau)^2`
+    on epsilon. With `torsion_central_bonds` and `cmap_terms` both None, torsions and CMAP follow
+    the whole-solute rule every release before 0.6.1 used, and the result is byte-identical to it.
+    A SELECTIVE region (0.6.1, `md-tools-selective-rest2/1`) passes both: the proper torsions
+    across exactly those central bonds, and exactly those CMAP terms, are scaled, whatever the
+    nonbonded set -- because which torsions are hot and which atoms are hot are two different
+    questions. A selective region is explicit-solvent only and keeps impropers unscaled.
     """
+    selective = torsion_central_bonds is not None or cmap_terms is not None
+    if selective and (torsion_central_bonds is None or cmap_terms is None):
+        raise ValueError("a selective region names BOTH its torsion central bonds and its CMAP "
+                         "terms; one without the other would leave the other on the whole-solute "
+                         "rule, which describes a different region")
+    if selective and not unscaled_impropers:
+        raise ValueError("a selective region keeps every improper unscaled: an improper has no "
+                         "central bond, so which region owns it is undefined")
     solute_solute, solute_environment = scaling_for_tau(tau)
     # Before touching anything: refuse a System carrying an energy term that cannot be placed.
     # Doing this first means the failure is "this System has a force I do not understand", not a
     # half-scaled System that looks finished.
     audit_force_classes(base_system)
+    if selective and any(isinstance(base_system.getForce(i), CustomGBForce)
+                         for i in range(base_system.getNumForces())):
+        raise ValueError("a selective REST2 region is explicit-solvent only: a generalised-Born "
+                         "energy is not separable per atom, so a partial region has no defined "
+                         "scaling. Omit every selector for the whole-system implicit ladder.")
     system = clone_system(base_system)
     if solute_solute == 1.0:
         return system                              # the cold replica is the unmodified system
     solute = set(int(i) for i in solute_indices)
     excluded = {frozenset((int(a), int(b))) for a, b in excluded_bonds}
+    selected = (None if torsion_central_bonds is None
+                else {frozenset((int(a), int(b))) for a, b in torsion_central_bonds})
+    terms = None if cmap_terms is None else {int(i) for i in cmap_terms}
     bonds = system_bond_graph(system)
     for index in range(system.getNumForces()):
         force = system.getForce(index)
         if isinstance(force, NonbondedForce):
             _scale_nonbonded(force, solute, solute_solute, solute_environment)
         elif isinstance(force, PeriodicTorsionForce):
-            _scale_torsions(force, solute, solute_solute, excluded, bonds, unscaled_impropers)
+            _scale_torsions(force, solute, solute_solute, excluded, bonds, unscaled_impropers,
+                            selected)
         elif isinstance(force, CMAPTorsionForce):
-            _scale_cmap(force, solute, solute_solute)
+            _scale_cmap(force, solute, solute_solute, scaled_terms=terms)
         elif isinstance(force, CustomGBForce):
-            _scale_customgb(force, system, solute, solute_environment)
+            _scale_customgb(force, system, solute, solute_environment,
+                            as_literal=gb_literal)
     return system

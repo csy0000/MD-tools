@@ -88,3 +88,4 @@ src/md_tools/_commit.py
 
 # --- agent worktrees and settings, never committed ---
 /.claude/
+
