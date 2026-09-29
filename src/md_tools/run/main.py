@@ -11,8 +11,9 @@
 
 Anyone who has run `pmemd -i mdin -p prmtop -c inpcrd -o mdout -x mdcrd -r restrt` can read those
 without a manual, which is the whole reason the surface exists. It is a *surface*, not a second
-implementation: every one of the three protocols is handed to exactly the same function a
-generated script calls -- `stage_main`, `replica_main`, `ais_main`. There is no behaviour reachable
+implementation: every one of the four protocols is handed to exactly the same function a
+generated script calls -- `stage_main`, `replica_main`, `ais_main`, `window_main`. There is no
+behaviour reachable
 from here that a generated directory cannot reach, and none the other way round.
 
 WHICH FILE IS AUTHORITATIVE
@@ -58,8 +59,8 @@ def md_run_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         prog="md-openmm md-run",
-        description="Run a stage, a replica-exchange ladder or a set of AIS switching paths from "
-                    "a short Amber-like input file.",
+        description="Run a stage, a replica-exchange ladder, a set of AIS switching paths or "
+                    "the windows of an alchemical ladder, from a short Amber-like input file.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         # No abbreviation. argparse resolves a unique prefix by default, so `--traj` would become
         # `--trajectory` and a misspelling would RUN, with a setting nobody wrote.
@@ -402,7 +403,8 @@ def md_run_main(argv: list[str] | None = None) -> int:
     # from a run that happened, and the next person to look will read it as one.
     #
     # The checks themselves live in `md_tools.run.preflight`, shared with `stage_main`,
-    # `replica_main` and `ais_main`, because the generated wrappers call THOSE directly. A guard
+    # `replica_main`, `ais_main` and the window runtime `window_main` reaches, because the generated
+    # wrappers call THOSE directly. A guard
     # that lives only here is a property of one entry point rather than of the runtime.
     try:
         _check_file_roles(args)
@@ -618,7 +620,7 @@ def md_run_main(argv: list[str] | None = None) -> int:
 
 
 # ---------------------------------------------------------------------------------------------
-# the three protocols, each handed to the function a generated script would have called
+# the four protocols, each handed to the function a generated script would have called
 # ---------------------------------------------------------------------------------------------
 
 def _run_stages(args, resolved: dict[str, Any], stage: str | None, config_path: Path) -> int:
