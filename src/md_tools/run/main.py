@@ -86,8 +86,19 @@ def md_run_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-i", "--input", required=True, metavar="FILE",
                         help="the run input: &cntrl / &remd / &AIS sections (Amber's -i mdin)")
-    parser.add_argument("-p", "--topology", required=True, metavar="PDB",
-                        help="topology and reference coordinates, built.pdb (Amber's -p prmtop)")
+    # NOT `required=True`, for the same shape of reason `-s` is not: an alchemical ladder has no
+    # single topology to name on the command line. Its topology and its System are `leg/` beside
+    # `-odir`, built ONCE by `build-md` and checked against the digest recorded there, exactly as a
+    # REST2 rung's Hamiltonian is. A `-p` accepted here would be a second topology for the same
+    # windows, and which one they ran under would depend on which the runtime read.
+    #
+    # Every other protocol still requires it, and `_require_topology` refuses BY NAME below --
+    # after the input has been read, so the refusal can say which protocol is speaking. argparse
+    # cannot: it decides before anything knows what the run is.
+    parser.add_argument("-p", "--topology", default=None, metavar="PDB",
+                        help="topology and reference coordinates, built.pdb (Amber's -p prmtop). "
+                             "Required for every protocol but an alchemical ladder, whose "
+                             "topology is the prepared leg beside -odir")
     # NOT `required=True`, and the reason is a ladder rather than a convenience.
     #
     # EXACTLY ONE of `-s` and `-groupfile` is given, and that is checked below by name. A REST2
@@ -149,6 +160,12 @@ def md_run_parser() -> argparse.ArgumentParser:
                         metavar="TRAJ",
                         help="for AIS: the equilibrium trajectory the switching paths are drawn "
                              "from. Overrides ais_source.trajectory in the input")
+
+    parser.add_argument("--window", default=None, metavar="SELECTOR",
+                        help="for an alchemical ladder: which windows to run -- `w003`, an index, "
+                             "a range `0-5`, or a list `0,3,7`. Every window when omitted. "
+                             "Windows are independent, so a selector is how a campaign is spread "
+                             "over several devices; a completed window is skipped either way.")
     parser.add_argument("--cpu", action="store_true",
                         help="run this invocation on the OpenMM CPU platform, overriding "
                              "machine.openmm.platform. The only per-run platform override there "
@@ -358,12 +375,8 @@ def _check_file_roles(args) -> None:
             f"for every rung.\n"
             f"  Pass -groupfile for a ladder whose rungs differ, or -s for a single System, "
             f"never both.")
-    if not args.system and not args.groupfile:
-        raise SystemExit(
-            "neither -s nor -groupfile was given, so nothing says which System to integrate.\n"
-            "  Pass -s built.xml for a stage, an AIS campaign or a homogeneous ladder; pass "
-            "-groupfile for a REST2 ladder, whose lines name each rung's own pre-scaled "
-            "System.")
+    # "Neither" is refused where the PROTOCOL is known, not here: an alchemical ladder has
+    # neither, and this function runs before the input has been read. See `_require_system`.
 
     # `-o` and `-log` are two artefacts for two readers. One file cannot be both, so an actual
     # collision is refused -- and ONLY a collision: different paths are the normal case.
@@ -409,19 +422,34 @@ def md_run_main(argv: list[str] | None = None) -> int:
 
     resolved = run_input.resolved
     protocol = resolved["protocol"]
-    # AN INPUT THIS SURFACE CANNOT HONOUR IS REFUSED BY NAME, before `-odir` or any record of it
-    # exists. `protocol: alchemical` resolves -- the configuration and the `.in` language are
-    # wired -- but no dispatch reaches a window yet, so an input naming it and no stage would fall
-    # through to the stage chain and run the PREPARATION of an alchemical campaign while
-    # reporting the success of the campaign itself. An input naming a stage is a different thing
-    # and still works: `stage` decides, not `protocol`, and minimisation is minimisation.
-    if protocol == "alchemical" and run_input.stage is None:
-        print("md-run: protocol = alchemical names the lambda-window ladder, which md-run does "
-              "not yet dispatch to (0.7.0, X1). The window runtime exists "
-              "(md_tools.alchemy.windows.run_window) and this input resolves, but nothing here "
-              "would run a window -- the run would prepare the system and report success. An "
-              "input naming a preparation `stage` is unaffected.", file=sys.stderr)
+    # `-p` BY NAME, now that the protocol is known. argparse used to carry this, which made
+    # the alchemical ladder -- the one protocol that has no single topology -- impossible to
+    # start through this command.
+    if protocol != "alchemical" and not args.topology:
+        print("md-run: -p/--topology is required. It is built.pdb: the topology and the "
+              "reference coordinates. Only an alchemical ladder runs without one, because "
+              "its topology is the prepared leg beside -odir.", file=sys.stderr)
         return 2
+    if protocol != "alchemical" and not args.system and not args.groupfile:
+        print("md-run: neither -s nor -groupfile was given, so nothing says which System to "
+              "integrate.\n"
+              "  Pass -s built.xml for a stage, an AIS campaign or a homogeneous ladder; "
+              "pass -groupfile for a REST2 ladder, whose lines name each rung's own "
+              "pre-scaled System.", file=sys.stderr)
+        return 2
+    if protocol == "alchemical":
+        # Both refused BY NAME, and for one reason: a window's topology and System are the
+        # prepared leg, whose digest the runtime checks the rebuilt Hamiltonian against. A
+        # `-p` or `-s` accepted here would be a second answer to what the windows integrated,
+        # and which one ran would depend on which the runtime read.
+        for flag, value in (("-p", args.topology), ("-s", args.system),
+                            ("-groupfile", args.groupfile)):
+            if value:
+                print(f"md-run: {flag} {value} is refused for an alchemical ladder. Its "
+                      f"topology and System are leg/ beside -odir, built once by `build-md` "
+                      f"and bound to the digest the windows check their rebuild against.",
+                      file=sys.stderr)
+                return 2
     replicas = (int(resolved["rest2"]["number_of_replicas"])
                 if protocol == "REST2" else None)
     # A LADDER READS -s ONLY FROM ITS GROUP FILE (0.5.4). Refused by name here, before -odir or
@@ -568,6 +596,8 @@ def md_run_main(argv: list[str] | None = None) -> int:
             return _run_ladder(args, resolved, protocol, config_path)
         if protocol == "AIS":
             return _run_ais(args, resolved, config_path)
+        if protocol == "alchemical":
+            return _run_alchemical(args, resolved, config_path)
         return _run_stages(args, resolved, None, config_path)
     finally:
         if checking is not None:
@@ -682,6 +712,49 @@ def _run_ladder(args, resolved: dict[str, Any], protocol: str, config_path: Path
     # as a defect in `docs/backlog.md` on the strength of that reading. It was reaching
     # `replica_main` the whole time; what it did not do there was replace anything.
     return replica_main(ladder, argv)
+
+
+def _run_alchemical(args, resolved: dict[str, Any], config_path: Path) -> int:
+    """An alchemical ladder: the windows this invocation was asked for, or all of them.
+
+    A SURFACE, like every other branch here: it resolves, picks the windows and hands off to
+    `window_main`, which is the same function `python w003.py` reaches. The window loop exists
+    once.
+    """
+    from ..alchemy.generated import GeneratedWindowError, select_windows, window_main
+
+    if args.trajectory:
+        # One name cannot describe N windows' files, and a "prefix" option is how that pretence
+        # grows a meaning nobody tested. Each window writes its own stream into the leg.
+        print(f"md-run: -x {args.trajectory} names one trajectory, but an alchemical ladder "
+              f"writes one sample stream per window, into the leg beside resolved.config. Omit "
+              f"-x.", file=sys.stderr)
+        return 2
+    try:
+        windows = select_windows(resolved, args.window)
+    except GeneratedWindowError as refusal:
+        print(f"md-run: {refusal}", file=sys.stderr)
+        return 2
+    # THE RUN DIRECTORY IS `-odir`, and it is read from `args` rather than from `config_path`.
+    # They are the same directory on an ordinary invocation -- `_write_resolved` puts
+    # `resolved.config` in `-odir` -- but under `--check` the resolved document is deliberately
+    # written to a temporary directory that is thrown away, and taking the run directory from it
+    # would send every `--check` looking for the leg inside that temporary directory. The leg,
+    # the copied-in plan and the windows' outputs are one directory, which is `-odir`.
+    directory = Path(args.out_dir)
+    try:
+        return window_main(resolved, directory=directory, windows=windows,
+                           cpu=bool(args.cpu),
+                           device=int(args.device) if args.device is not None else None,
+                           # md-run has no --machine-config: the machine configuration is
+                           # discovered ($MD_TOOLS_CONFIG, then the user file) by the one
+                           # resolver, and a second way to name it here would be a second policy.
+                           machine_config=None,
+                           overwrite=bool(getattr(args, "overwrite", False)),
+                           check=bool(getattr(args, "check", False)))
+    except GeneratedWindowError as refusal:
+        print(f"md-run: {refusal}", file=sys.stderr)
+        return 2
 
 
 def _run_ais(args, resolved: dict[str, Any], config_path: Path) -> int:

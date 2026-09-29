@@ -45,12 +45,40 @@ SOFTCORE_DEFAULTS = SoftcoreSettings()
 
 PROTOCOLS = ("cMD", "REST2", "AIS", "umbrella", "alchemical")
 
-#: The lambda components an alchemical path moves, in the order the softcore expressions
-#: (`md_tools.alchemy.softcore.pair_expressions`) name them. Stated here so resolving a
-#: configuration does not import the Hamiltonian builder; `md_tools.alchemy.paths` owns the
-#: NAMING RULE that refuses anything else, and `_check_alchemical` builds the real path object
-#: through it rather than describing one here.
-ALCHEMICAL_COMPONENTS = ("lambda_electrostatics", "lambda_sterics")
+#: The lambda components an alchemical path moves. **Every component the Hamiltonian has**, which
+#: is what `AlchemicalHamiltonian.parameter_names` reports: a path that moves fewer is refused at
+#: run time by `windows.check_hamiltonian_matches_path`, because a component left out is not a
+#: component held at zero -- it is a parameter whose value nobody declared.
+#:
+#: `lambda_bonded` was missing here until 0.7.0's X1, and the gap was invisible from either side:
+#: `build-md` accepted the configuration, the Hamiltonian refused the path, and nothing connected
+#: the two until a window tried to run. Measured rather than reasoned: the refusal names
+#: `Missing from the path: ['lambda_bonded']`.
+ALCHEMICAL_COMPONENTS = ("lambda_electrostatics", "lambda_sterics", "lambda_bonded")
+
+
+def alchemical_path(resolved: dict[str, Any], *, endpoint_a: str = "A", endpoint_b: str = "B"):
+    """The path object this configuration declares. ONE construction, two callers.
+
+    `_check_alchemical` builds it to validate the window placement and `build_scripts` builds it
+    to prepare the leg; if each built its own, a configuration could validate against one path and
+    run under another.
+    """
+    from ..alchemy.paths import linear_path
+
+    block = dict(resolved.get("alchemical") or {})
+    if block.get("lambda_path") == "staged":
+        raise ConfigError(
+            "alchemical.lambda_path: `staged` is not implemented, and the missing piece is a "
+            "SCIENTIFIC decision rather than code.\n"
+            "  A staged path moves electrostatics and then sterics. This Hamiltonian also moves "
+            "`lambda_bonded` -- the common-core bonded terms that differ between the end states -- "
+            "and which stage carries it changes the path every window samples. Choosing one here "
+            "silently would be a convention nobody agreed to, recorded in results as though it "
+            "had been.\n"
+            "  Use `lambda_path: linear`, the Amber18 one-step diagonal where all three "
+            "components move together, until that decision is recorded.")
+    return linear_path(ALCHEMICAL_COMPONENTS, endpoint_a=endpoint_a, endpoint_b=endpoint_b)
 
 #: rREST2 -- REST2 plus a Boltzmann reservoir refresh of the top rung -- is ARCHIVED for 0.5.4
 #: (user, 2026-09-17). Its protocol name and its `reservoir` section are refused BY NAME, before
@@ -897,6 +925,26 @@ def _lambda_values(stated: Any) -> tuple[float, ...]:
     return tuple(values)
 
 
+def alchemical_lambda_values(resolved: dict[str, Any]) -> tuple[float, ...]:
+    """The progress coordinates of this ladder's windows, in increasing lambda.
+
+    ONE derivation, used by the check below, by the generation that names the scripts, and by the
+    runtime that maps a window id back to its state. `build-md` writing `w000.py..w015.py` while
+    the runtime believed in seventeen windows would be a directory whose scripts and declaration
+    describe different ladders, so neither side is allowed its own arithmetic.
+    """
+    block = dict(resolved.get("alchemical") or {})
+    count = int(block.get("number_of_windows") or 0)
+    stated = block.get("lambda_values")
+    if count and stated is None:
+        return tuple(index / (count - 1) for index in range(count))
+    if stated is not None and not count:
+        return _lambda_values(stated)
+    # Both or neither: `_check_alchemical` refuses each by name, and this is not the place to
+    # repeat it -- a second refusal here would be a second wording of the same rule.
+    raise ConfigError("alchemical: the windows are placed by number_of_windows OR lambda_values")
+
+
 def _check_alchemical(resolved: dict[str, Any]) -> None:
     """`alchemical.plan` and `protocol: alchemical` are given together or not at all, and the
     window placement is one the path can be integrated on EXACTLY.
@@ -951,41 +999,25 @@ def _check_alchemical(resolved: dict[str, Any]) -> None:
         raise ConfigError(
             "protocol is alchemical but neither alchemical.number_of_windows nor "
             "alchemical.lambda_values is set, so the ladder has no windows. Give one of them.")
-    if count:
-        if count < 2:
-            raise ConfigError(
-                f"alchemical.number_of_windows = {count}. A ladder runs between two end states, "
-                f"so it needs at least the two of them (s = 0 and s = 1).")
-        s_values = tuple(index / (count - 1) for index in range(count))
-    else:
-        s_values = _lambda_values(stated_values)
+    if count and count < 2:
+        raise ConfigError(
+            f"alchemical.number_of_windows = {count}. A ladder runs between two end states, "
+            f"so it needs at least the two of them (s = 0 and s = 1).")
+    s_values = alchemical_lambda_values(resolved)
 
     # THE REAL PATH OBJECT, built through the module that owns the rule, so "a window on every
     # knot" is the runtime's own check rather than a second description of it. The endpoint labels
     # are placeholders: a path's endpoints are named from the plan, which is not read here.
     knot = block.get("staged_knot")
-    if block.get("lambda_path") == "staged":
-        if knot is None:
-            raise ConfigError(
-                "alchemical.lambda_path is `staged` but alchemical.staged_knot is not set. A "
-                "staged path moves electrostatics and then sterics, and the knot is where the "
-                "first hands over to the second; there is no default for it, because a wrong "
-                "guess is a path nobody chose.")
-        if not 0.0 < float(knot) < 1.0:
-            raise ConfigError(
-                f"alchemical.staged_knot = {knot} is not strictly between 0 and 1. At 0 or 1 one "
-                f"of the two stages has zero width, which is a linear path with a component that "
-                f"never moves -- say that with `lambda_path: linear` instead.")
-        path = staged_path([(ALCHEMICAL_COMPONENTS[0], float(knot)),
-                            (ALCHEMICAL_COMPONENTS[1], 1.0)],
-                           endpoint_a="A", endpoint_b="B")
-    else:
-        if knot is not None:
-            raise ConfigError(
-                f"alchemical.staged_knot = {knot} is set but alchemical.lambda_path is "
-                f"`linear`, which has no knot: every component moves over the whole path. Set "
-                f"`lambda_path: staged` or remove the knot.")
-        path = linear_path(ALCHEMICAL_COMPONENTS, endpoint_a="A", endpoint_b="B")
+    if block.get("lambda_path") != "staged" and knot is not None:
+        raise ConfigError(
+            f"alchemical.staged_knot = {knot} is set but alchemical.lambda_path is "
+            f"`linear`, which has no knot: every component moves over the whole path. Set "
+            f"`lambda_path: staged` or remove the knot.")
+    # THE REAL PATH OBJECT, through the one construction `build_scripts` also uses, so a
+    # configuration cannot validate against one path and run under another. The endpoint labels
+    # are placeholders here: a path's endpoints are named from the plan, which is not read yet.
+    path = alchemical_path(resolved)
 
     try:
         path.require_knots_sampled(s_values)
@@ -1639,11 +1671,17 @@ def in_file_text(resolved: dict[str, Any], *, stage: str | None = None,
 
     protocol = resolved["protocol"]
     suppressed = _NOT_IN_INPUT | (_preparation_suppressed(stage) if preparation else frozenset())
+    # A ladder takes no -p and no -s: its topology and System are the `leg/` beside `-odir`,
+    # built once at generation. Printing the ordinary invocation here would offer a second
+    # System for the windows to run under, which is what `run.sh` refuses to do as well.
+    invocation = ("!     md-openmm md-run -i THIS_FILE -odir RUN_DIRECTORY --window w000"
+                  if protocol == "alchemical"
+                  else "!     md-openmm md-run -i THIS_FILE -p ../built.pdb -s ../built.xml")
     lines = [f"! {heading or protocol}",
              "!",
              "! Generated by `md-openmm build-md`. Run it with:",
              "!",
-             "!     md-openmm md-run -i THIS_FILE -p ../built.pdb -s ../built.xml",
+             invocation,
              "!",
              "! `resolved.config` beside this file is AUTHORITATIVE: md-run resolves this input",
              "! and writes the result there, and that resolved document is what the run reads.",
@@ -2060,6 +2098,58 @@ def _group_file_text(*, protocol: str, states: int, segment: int, segments: int,
     return "\n".join(lines) + "\n"
 
 
+def _alchemical_run_sh(resolved: dict[str, Any]) -> str:
+    """Every window of a ladder, in order, through `md-openmm md-run`.
+
+    ITS OWN SCRIPT rather than a branch of the chained one, because a ladder takes none of the
+    arguments that one takes. There is no `-p`, no `-s` and no `-c`: a window's topology and
+    System are `leg/`, built ONCE at generation time and checked against the digest recorded
+    there -- the rule a REST2 ladder follows with its saved scaled states. Passing `../build`
+    paths here would offer a second System for the windows to run under, and the one that was
+    actually integrated would be decided by which of the two the runtime happened to read.
+    """
+    from ..alchemy.generated import window_ids
+
+    windows = " ".join(window_ids(resolved))
+    return "\n".join([
+        '#!/usr/bin/env bash',
+        '# Run this alchemical ladder: every window.',
+        '#',
+        '# Generated by `md-openmm build-md`. WINDOWS ARE INDEPENDENT -- no ordering, no restart',
+        '# handed from one to the next -- so this loop is the simplest way to run them and not the',
+        '# only one. Give each device its own subset and it is the same campaign; a window that',
+        '# already completed and verifies is skipped rather than rerun, so re-running this script',
+        '# after an interruption finishes what is left.',
+        '#',
+        '#   ./run.sh                        every window, on the machine\'s platform',
+        '#   ./run.sh --cpu                  ... on the CPU',
+        '#   WINDOWS="w000 w003" ./run.sh    only those',
+        '#   python w000.py --check          one window, validating and creating nothing',
+        '#',
+        '# No -p and no -s. A window reads `leg/`, whose System was built once at generation and',
+        '# whose digest the runtime checks the rebuild against. A ../build path offered here',
+        '# would be a second System for the same windows.',
+        'set -euo pipefail',
+        '',
+        'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+        'cd "${HERE}"',
+        '',
+        'if [[ ! -f leg/leg.json ]]; then',
+        '  echo "run.sh: no prepared leg at ${HERE}/leg; regenerate this run" >&2; exit 2',
+        'fi',
+        '',
+        f'WINDOWS="${{WINDOWS:-{windows}}}"',
+        'for window in ${WINDOWS}; do',
+        '  echo "== ${window} =="',
+        # The SHARED input, one level up, for the reason the AIS call says: an input states what a
+        # method was asked to do, which is a property of the system rather than of one repeat.
+        '  md-openmm md-run -i ../input/alchemical.in -odir . --window "${window}" "$@"',
+        'done',
+        '',
+        'echo "run.sh: all windows reported completion"',
+        ''])
+
+
 def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
             resolved: dict[str, Any], targets: dict[str, dict[str, Any]],
             segments: int = 1) -> str:
@@ -2070,6 +2160,8 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
     same thing that could drift from the documented way. The `.py` entry points remain and do the
     same work -- `python min.py` and `md-openmm md-run -i min.in` reach the same function.
     """
+    if protocol == "alchemical":
+        return _alchemical_run_sh(resolved)
     states = int((resolved.get("rest2") or {}).get("number_of_replicas") or 0)
     lines = ['#!/usr/bin/env bash',
              '# Run this protocol, in order.',
@@ -2296,6 +2388,27 @@ raise SystemExit(run_generated_ais(__file__))
 '''
 
 
+_WINDOW_SCRIPT = '''#!/usr/bin/env python
+"""{window}: one fixed-lambda window of an alchemical ladder, at s = {s:g}.
+
+Generated by `md-openmm build-md`. An ENTRY POINT: the softcore Hamiltonian, the cross-state
+reporting, the checkpoint transaction and the resume semantics are the validated implementation in
+the installed md_tools package, and the ladder is in `resolved.config` beside this file.
+
+    python {window}.py                 # this window
+    python {window}.py --cpu --check   # validate, create nothing
+    md-openmm md-run -i ../input/alchemical.in -odir . --window {window}
+
+Windows are INDEPENDENT: no ordering, no restart handed from one to the next, and a window that
+already completed and verifies is skipped rather than rerun. Run them on as many devices as you
+have; the campaign is complete when every window is.
+"""
+from md_tools.alchemy import run_generated_window
+
+raise SystemExit(run_generated_window(__file__, "{window}"))
+'''
+
+
 _REPLICA_SCRIPT = '''#!/usr/bin/env python
 """{protocol}: one coordinated replica-exchange ladder.
 
@@ -2497,15 +2610,6 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
     # preparation chain alone -- minimisation and equilibration, correct in themselves -- and a
     # `run.sh` built from it would run to completion having sampled no window at all. A generated
     # directory is a claim about what it runs.
-    if resolved["protocol"] == "alchemical":
-        raise ConfigError(
-            "protocol: alchemical resolves, but `build-md` does not yet write the per-window run "
-            "scripts for it.\n"
-            "  The configuration, its refusals and the `.in` language are in place, and "
-            "`md_tools.alchemy.windows.run_window` runs a window; what is missing is the step "
-            "between them, which is the next piece of work (0.7.0, X1).\n"
-            "  Generating the chain anyway would give you a run directory whose scripts "
-            "minimise, equilibrate and stop -- a complete-looking run that sampled no window.")
     run_root = Path(out_dir)
     # REFUSED IF IT EXISTS AT ALL, not merely if it is non-empty. A run directory is an identity:
     # `REST2-run1` names one experiment, and generating a second one into it would leave two sets
@@ -2536,15 +2640,27 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
     # `built.xml`. `build-md` used to generate a cMD run in a bare directory and leave every one
     # of those questions to the first stage that opened the System, which is the whole-chain
     # preflight `--all-in-one` carried and the split form did not.
-    missing = [path for path in (dataset.built("xml"), dataset.built("pdb"))
-               if not path.is_file()]
+    #
+    # EXCEPT AN ALCHEMICAL LADDER, which has no `built.xml` to be validated against and must not
+    # acquire one. Its System is the leg's, built here from `alchemical.plan` -- the plan carries
+    # the environment it was combined into -- and the windows check their rebuild against the
+    # digest recorded with it. A `build/built.xml` required beside the run would be a SECOND
+    # System for the same windows, which is the thing `run.sh`, the `.in` and `md-run` each
+    # refuse by name. A vacuum leg, half of every hydration cycle, has no build-top output at all.
+    missing = [] if resolved["protocol"] == "alchemical" else [
+        path for path in (dataset.built("xml"), dataset.built("pdb")) if not path.is_file()]
     if missing:
         raise ConfigError(
             "build-md validates the whole chain when it generates it, so it needs the built "
             "system that every run on this dataset shares:\n"
             + "".join(f"  missing: {path}\n" for path in missing)
             + f"  Run `md-openmm build-top` into {dataset.build}/ first.")
-    _refuse_vacuum_system(dataset.built("xml"))
+    # A VACUUM BUILD IS AN ALCHEMICAL LEG, which is what this refusal's own message says. The
+    # check exists so ordinary MD does not run in vacuum under an implicit-solvent label; an
+    # alchemical ladder in vacuum is the other half of a hydration cycle and is the one thing a
+    # vacuum System is for.
+    if resolved["protocol"] != "alchemical":
+        _refuse_vacuum_system(dataset.built("xml"))
 
     ladder_states = None
     if resolved["protocol"] == "REST2":
@@ -2588,7 +2704,12 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
             # Written into resolved.config, so the run reads a number and never a REST2 record.
             resolved["ais"] = dict(resolved["ais"],
                                    lambda_schedule_tau0=float(resolved["dynamics"]["tau"]))
-    chain_plan = stage_plan(resolved)
+    # NO PREPARATION CHAIN FOR AN ALCHEMICAL LADDER. Each window minimises at its OWN state
+    # and discards its own equilibration -- `alchemical.minimize_iterations` and
+    # `alchemical.equilibration_steps` -- because a chain minimised at one lambda and handed
+    # forward would start every window from the same state, which is the correlation a window
+    # ladder exists to avoid. So there is no chain to validate and none to generate.
+    chain_plan = [] if resolved["protocol"] == "alchemical" else stage_plan(resolved)
     chain_targets = _stage_targets(chain_plan, run=run, dataset=dataset)
     from ..run.preflight import PreflightError, validate_generated_chain
 
@@ -2631,11 +2752,17 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
             "trajectory": odir / f"{key}.dcd", "restart": odir / f"{key}.xml",
             "checkpoint": odir / f"{key}.chk",
         })
-    try:
-        validate_generated_chain(topology=dataset.built("pdb"), system=dataset.built("xml"),
-                                 stages=chain, where="this chain")
-    except PreflightError as refusal:
-        raise ConfigError(str(refusal)) from None
+    # NOT FOR A LADDER, which has no chain and no `built.xml` to validate one against. Its
+    # equivalent check is the leg: `prepare_leg` builds the Hamiltonian below and records its
+    # digest, and each window re-derives it and refuses a rebuild that differs. Running this with
+    # the dataset's built System would be validating a chain that does not exist against a System
+    # the windows never integrate.
+    if resolved["protocol"] != "alchemical":
+        try:
+            validate_generated_chain(topology=dataset.built("pdb"), system=dataset.built("xml"),
+                                     stages=chain, where="this chain")
+        except PreflightError as refusal:
+            raise ConfigError(str(refusal)) from None
 
     run_root.mkdir(parents=True, exist_ok=True)
     _link_shared_inputs(run_root)
@@ -2745,7 +2872,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
             "restraints": [entry.record() for entry in restraints],
         }
 
-    plan = stage_plan(resolved)
+    plan = [] if resolved["protocol"] == "alchemical" else stage_plan(resolved)
     protocol = resolved["protocol"]
     log = LogWriter(out_dir / "build-md.log", record_type="build-md", echo=echo)
     log("md-openmm build-md")
@@ -2816,6 +2943,91 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
                                else f"{switching_steps} steps")
         log.field("observations", f"{observations} (both endpoints included)")
         log.field("source", resolved["ais_source"]["trajectory"])
+
+    if protocol == "alchemical":
+        # THE LEG IS PREPARED HERE, so the Hamiltonian is built ONCE, as a file, at generation
+        # time -- the same rule a REST2 ladder follows with its saved scaled states. The windows
+        # rebuild it from the copied-in plan and `run_leg` checks the rebuild against the
+        # `system_sha256` recorded now, so a rebuild that differs is refused rather than run.
+        from ..alchemy.campaign import prepare_leg
+        from ..alchemy.generated import window_ids
+        from ..alchemy.hamiltonian import from_plan
+        from ..alchemy.softcore import SoftcoreSettings
+        from ..alchemy.topology import load_plan
+
+        block = resolved["alchemical"]
+        source_plan = Path(block["plan"])
+        if not source_plan.is_absolute() and config_path is not None:
+            source_plan = (Path(config_path).parent / source_plan).resolve()
+        if not (source_plan / "plan.json").is_file():
+            raise ConfigError(
+                f"alchemical.plan = {block['plan']!r} does not hold a plan.json "
+                f"({source_plan}). `md-openmm combine-topology` writes the plan directory; the "
+                f"ladder runs between the two end states it records.")
+        plan_object = load_plan(source_plan)
+        settings = SoftcoreSettings.from_mapping(
+            {key: block[key] for key in ("sc", "softcore_function", "scalpha", "scbeta",
+                                         "sc_boundary_14") if key in block})
+        hamiltonian = from_plan(plan_object, settings)
+
+        # THE PLAN, COPIED IN, CONTENT-ADDRESSED -- the same treatment the cv and umbrella
+        # definitions get, for the same reason: a generated directory must not depend on a path
+        # outside itself, and a plan that changed must not quietly replace the one this run was
+        # generated from. The digest is the plan's own.
+        copied_plan = out_dir / f"plan.{plan_object.sha256[:12]}"
+        if not copied_plan.exists():
+            shutil.copytree(source_plan, copied_plan)
+        for path in sorted(copied_plan.rglob("*")):
+            if path.is_file():
+                note(path)
+        resolved["alchemical"] = dict(block, plan=copied_plan.name)
+
+        s_values = alchemical_lambda_values(resolved)
+        knot = block.get("staged_knot")
+        path_object = alchemical_path(
+            resolved, endpoint_a=plan_object.record["endpoints"]["A"]["reference"],
+            endpoint_b=plan_object.record["endpoints"]["B"]["reference"])
+        environment = plan_object.record["environment"]["solvation"]
+        prepare_leg(out_dir / "leg", plan=plan_object, hamiltonian=hamiltonian, path=path_object,
+                    s_values=s_values, temperature_k=float(resolved["dynamics"]["temperature_K"]),
+                    pressure_bar=(float(resolved["dynamics"]["pressure_bar"])
+                                  if environment == "explicit" else None),
+                    environment="solvent" if environment == "explicit" else "vacuum",
+                    endpoint_a=plan_object.record["endpoints"]["A"]["reference"],
+                    endpoint_b=plan_object.record["endpoints"]["B"]["reference"],
+                    scheme=f"amber18-{plan_object.mode}/{plan_object.record['junction_policy']}")
+        for name in ("leg.json", "plan.json", "system.xml", "topology.pdb"):
+            note(out_dir / "leg" / name)
+
+        # ONE ENTRY POINT PER WINDOW. Not one script taking an index: a generated script declares
+        # what it runs, and the window id is a literal in it for the same reason a stage script
+        # carries its own name.
+        for window, s_value in zip(window_ids(resolved), s_values):
+            path = out_dir / f"{window}.py"
+            path.write_text(_WINDOW_SCRIPT.format(window=window, s=s_value), encoding="utf-8")
+            note(path)
+
+        log.heading("alchemical")
+        log.field("plan", f"{copied_plan.name} ({plan_object.mode}, "
+                          f"{plan_object.record['junction_policy']})")
+        log.field("end states", f"{plan_object.record['endpoints']['A']['reference']} -> "
+                                f"{plan_object.record['endpoints']['B']['reference']}")
+        log.field("environment", environment)
+        log.field("windows", f"{len(s_values)} at s = "
+                             + ", ".join(f"{v:g}" for v in s_values))
+        log.field("path", f"{block.get('lambda_path') or 'linear'}"
+                          + (f", knot at s = {knot:g}" if knot is not None else ""))
+        log.field("softcore", f"sc {settings.sc}, {settings.softcore_function}, "
+                              f"scalpha {settings.scalpha:g}, scbeta {settings.scbeta:g} nm^2, "
+                              f"1-4 {settings.sc_boundary_14}")
+        window_steps = int(block["window_steps"])
+        if numeric:
+            log.field("per window", f"{window_steps} steps = "
+                                    f"{window_steps * numeric / 1000.0:g} ps production, after "
+                                    f"{int(block['equilibration_steps'])} steps equilibration")
+        else:
+            log.field("per window", f"{window_steps} steps production, after "
+                                    f"{int(block['equilibration_steps'])} steps equilibration")
 
     if protocol == "REST2":
         ladder = {
@@ -2892,6 +3104,21 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
             in_file_text(resolved, heading=f"AIS: {resolved['ais']['number_of_paths']} switching "
                                            f"paths"), overwrite=overwrite)
         note(dataset.stage_input("AIS"))
+    if protocol == "alchemical":
+        # A ladder reads neither `min.in` nor `eq_*.in`: every window minimises and equilibrates
+        # at its OWN lambda, because a chain prepared at one lambda and handed to another samples
+        # the second Hamiltonian from the first one's ensemble.
+        #
+        # SHARED, like every other input. `alchemical.plan` in it is the COPIED-IN name, which
+        # resolves against `-odir` rather than against the input's own directory -- so one input
+        # serves every repeat of this transformation, and a run generated from a DIFFERENT plan
+        # writes different bytes and is refused by name rather than quietly sharing this one.
+        _write_shared_input(
+            dataset.stage_input("alchemical"),
+            in_file_text(resolved,
+                         heading=f"alchemical: {len(alchemical_lambda_values(resolved))} windows, "
+                                 f"{resolved['alchemical']['plan']}"), overwrite=overwrite)
+        note(dataset.stage_input("alchemical"))
     if plan:
         for stage in plan:
             target = targets[stage["name"]]
