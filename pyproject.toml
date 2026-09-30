@@ -72,6 +72,14 @@ include = ["md_tools*"]
     "configs/md/cMD.config",
     "configs/md/REST2.config",
     "configs/md/AIS.config",
+    # umbrella is a PROTOCOL like the three above, and its example was missing here while the
+    # method page told a reader to copy it. `example_root()` falls back to the source tree, so a
+    # checkout could not see the gap and the wheel lane passed; only an installed wheel showed it.
+    "configs/md/umbrella.config",
+    # The two files `umbrella.config` REFERS to. An example that resolves to a missing file is not
+    # an example -- the umbrella protocol refuses without both.
+    "configs/md/umbrella.yaml",
+    "configs/md/cv.yaml",
 ]
 
 [tool.pytest.ini_options]
