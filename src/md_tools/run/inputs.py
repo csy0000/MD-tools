@@ -152,6 +152,12 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
     # `&remd` and `&AIS` are: the settings here are read by one protocol, and an input that
     # reads as one block per idea is one a person can check against the method they meant to run.
     "alchemical": {
+        # WHICH LEG OF WHICH CYCLE, and they belong in the input because the input must resolve
+        # back to exactly the `resolved.config` beside it. They also name the file itself --
+        # `input/<cycle>-leg<i>.in` -- so an input that did not carry them could be read into a run
+        # that thinks it is a different leg.
+        "cycle": "alchemical.cycle",
+        "leg": "alchemical.leg",
         # The topology plan DIRECTORY `combine-topology` wrote. A path and not the plan's
         # contents, for the reason `cv_file` and `umbrella_file` are paths: the record holds two
         # serialised Systems, an atom map and a combined topology, and none of that fits a

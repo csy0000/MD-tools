@@ -31,6 +31,8 @@ COMPLETE = """
     protocol: alchemical
     solvent: explicit
     alchemical:
+      cycle: RBFE
+      leg: 1
       plan: transform/
       number_of_windows: 11
       window_steps: 100000
@@ -47,7 +49,11 @@ def _config(tmp_path, body):
 
 def _block(**changes):
     """The resolved `alchemical` block of COMPLETE, with `changes` applied."""
-    block = {"plan": "transform/", "number_of_windows": 11, "window_steps": 100000,
+    # `cycle` and `leg` are part of every valid alchemical block since 0.6.4: they name the run
+    # directory `<cycle>-leg<i>-run<N>` and the shared input beside it, and a block without them
+    # is refused. A test that omitted them would be testing a configuration nobody can run.
+    block = {"cycle": "RBFE", "leg": 1,
+             "plan": "transform/", "number_of_windows": 11, "window_steps": 100000,
              "report_interval_steps": 1000, "checkpoint_interval_steps": 10000}
     block.update(changes)
     return {key: value for key, value in block.items() if value is not None}
@@ -109,10 +115,30 @@ def test_the_section_left_at_its_defaults_does_not_make_a_cmd_run_alchemical(tmp
 
 
 def test_the_protocol_without_a_plan_is_refused(tmp_path):
+    """`cycle` and `leg` are supplied so the MISSING PLAN is what this refuses on.
+
+    Omitting all three tests only whichever check happens to run first, which is a statement about
+    the order of the code rather than about the configuration. The cycle/leg refusal has its own
+    test below.
+    """
     with pytest.raises(ConfigError, match=r"alchemical\.plan is not set"):
         resolve_md_config(_config(tmp_path, """
             protocol: alchemical
-            alchemical: {number_of_windows: 11}
+            alchemical: {cycle: RBFE, leg: 1, number_of_windows: 11}
+        """))
+
+
+def test_the_protocol_without_a_cycle_and_leg_is_refused(tmp_path):
+    """They name the run directory and the shared input; half of the name names nothing."""
+    with pytest.raises(ConfigError, match=r"alchemical\.cycle and alchemical\.leg are not set"):
+        resolve_md_config(_config(tmp_path, """
+            protocol: alchemical
+            alchemical: {plan: transform/, number_of_windows: 11}
+        """))
+    with pytest.raises(ConfigError, match=r"given together or not at all"):
+        resolve_md_config(_config(tmp_path, """
+            protocol: alchemical
+            alchemical: {cycle: RBFE, plan: transform/, number_of_windows: 11}
         """))
 
 

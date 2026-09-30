@@ -1,7 +1,7 @@
 """S4/X1: a generated alchemical directory, and the two surfaces that run a window from it.
 
 `md-openmm build-md` writes the directory; `python w000.py` and `md-openmm md-run -i
-../input/alchemical.in -odir . --window w000` both reach `window_main`, which is the only place a
+../input/RBFE-leg1.in -odir . --window w000` both reach `window_main`, which is the only place a
 window is dispatched. What is asserted here is that they reach the SAME dispatch with the same
 settings, and that what each refuses it refuses BY NAME before anything exists.
 
@@ -47,6 +47,8 @@ from md_tools.alchemy.hamiltonian import PUBLIC_PARAMETERS as NAMES  # noqa: E40
 CONFIG = """
     protocol: alchemical
     alchemical:
+      cycle: RBFE
+      leg: 1
       plan: plan
       lambda_path: linear
       number_of_windows: 4
@@ -76,12 +78,17 @@ def plan_directory(tmp_path_factory):
 
 
 def _generate(tmp_path, plan_directory, body=CONFIG):
-    """`build-md` into `<system>/alchemical-run1`, from a config beside the plan."""
+    """`build-md` into `<system>/RBFE-leg1-run1`, from a config beside the plan.
+
+    The directory name is not a choice here: `build-md` checks `-odir` against
+    `<cycle>-leg<i>-run<N>` built from the configuration's own `cycle` and `leg`, so a run named
+    anything else is refused before it is written.
+    """
     directory, plan = plan_directory
     config = tmp_path / "alchemical.config"
     config.write_text(textwrap.dedent(body).replace("plan: plan", f"plan: {directory}"),
                       encoding="utf-8")
-    run = tmp_path / "ethane-chloroethane" / "alchemical-run1"
+    run = tmp_path / "ethane-chloroethane" / "RBFE-leg1-run1"
     build_scripts(config_path=config, out_dir=run, echo=False)
     return run, plan
 
@@ -91,7 +98,7 @@ def _run_md_run(run, *args):
     previous = os.getcwd()
     os.chdir(run)
     try:
-        return md_run_main(["-i", "../input/alchemical.in", "-odir", ".", *args])
+        return md_run_main(["-i", "../input/RBFE-leg1.in", "-odir", ".", *args])
     finally:
         os.chdir(previous)
 
@@ -134,7 +141,7 @@ def test_the_input_resolves_back_to_the_resolved_config_beside_it(tmp_path, plan
     """
     run, _ = _generate(tmp_path, plan_directory)
     generated = yaml.safe_load((run / "resolved.config").read_text())
-    from_input = parse_run_input(run / ".." / "input" / "alchemical.in",
+    from_input = parse_run_input(run / ".." / "input" / "RBFE-leg1.in",
                                  run_config=run / "run.config").resolved
     assert from_input == generated
 
@@ -148,7 +155,7 @@ def test_run_sh_names_every_window_and_no_system(tmp_path, plan_directory):
     # comments above it name `-p` and `-s` precisely to say that they are not passed.
     command = [line.strip() for line in text.splitlines()
                if line.strip().startswith("md-openmm md-run")]
-    assert command == ['md-openmm md-run -i ../input/alchemical.in -odir . '
+    assert command == ['md-openmm md-run -i ../input/RBFE-leg1.in -odir . '
                        '--window "${window}" "$@"']
     assert "built.xml" not in text and "built.pdb" not in text
 

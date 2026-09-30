@@ -80,6 +80,8 @@ output directory.
 protocol: alchemical
 
 alchemical:
+  cycle: AHFE                     # absolute hydration; names the run directory
+  leg: 1                          # -> AHFE-leg1-run<N>/ and input/AHFE-leg1.in
   plan: ./plan
   lambda_path: linear
   number_of_windows: 12
@@ -104,8 +106,13 @@ was equilibrated at some *other* λ, so its first frames are not from its own en
 are thrown away before a single sample is taken.
 
 ```bash
-md-openmm build-md --config hydration.config -odir ./md_script
+md-openmm build-md --config hydration.config -odir ./AHFE-leg1-run1
 ```
+
+An alchemical run directory is `<cycle>-leg<i>-run<N>`, and the name is checked rather than
+suggested. **An absolute hydration has ONE leg** — the vacuum leg of this construction is
+identically zero and is not run — so there is only ever `AHFE-leg1`, and a second repeat is
+`AHFE-leg1-run2`.
 
 ```text
 alchemical
@@ -122,7 +129,7 @@ alchemical
 ## 3. Run the windows, in any order, on any number of cards
 
 ```bash
-cd md_script
+cd AHFE-leg1-run1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 CUDA_VISIBLE_DEVICES=<card> WINDOWS="w000 w001 w002" ./run.sh &
 CUDA_VISIBLE_DEVICES=<card> WINDOWS="w003 w004 w005" ./run.sh &
@@ -170,7 +177,7 @@ Analysis is deliberately not a `build-md` setting: the engine produces samples, 
 you trust over them is your decision. The script beside this page is ~70 lines.
 
 ```bash
-python ethanol_analysis.py md_script
+python ethanol_analysis.py AHFE-leg1-run1
 ```
 
 ```text
@@ -234,7 +241,7 @@ enough for ethanol.
 EOH/
   build/                        built.xml, built.pdb, built.log
   plan/                         plan.json, system_a.xml, system_b.xml, combined.pdb, positions.npy
-  md_script/
+  AHFE-leg1-run1/
     resolved.config             AUTHORITATIVE: the resolved declaration the windows re-read
     plan.b663f7bf42da/          the plan, COPIED IN and content-addressed
     leg/
@@ -247,7 +254,7 @@ EOH/
         w000.checkpoints/
     w000.py .. w011.py          two-line entry points, one per window
     run.sh
-  input/alchemical.in           the shared Amber-like input both run.sh and md-run read
+  input/AHFE-leg1.in            the shared input this leg's repeats read
 ```
 
 `w000.samples.csv` is where the free energy actually lives: each row is one configuration's energy

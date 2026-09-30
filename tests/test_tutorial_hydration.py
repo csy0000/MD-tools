@@ -29,13 +29,25 @@ pytestmark = pytest.mark.skipif(not PAGE.is_file(), reason="the hydration tutori
 
 
 def _yaml_blocks(page: Path) -> dict[str, dict]:
-    """Every ```yaml block on the page, keyed by the filename its first comment names."""
+    """Every COMPLETE ```yaml block on the page, keyed by the filename its first comment names.
+
+    A tutorial also shows FRAGMENTS -- one indented key to illustrate a change, a two-line
+    `dynamics:` snippet -- and those are not standalone documents. They are skipped rather than
+    parsed: a fragment that fails to load is a formatting choice on the page, not a defect in a
+    configuration, and treating it as one would make this test fail for the wrong reason.
+    """
     blocks = {}
     for body in re.findall(r"^```yaml\n(.*?)^```", page.read_text(encoding="utf-8"),
                            re.MULTILINE | re.DOTALL):
+        try:
+            document = yaml.safe_load(body)
+        except yaml.YAMLError:
+            continue                              # a fragment, shown to illustrate one key
+        if not isinstance(document, dict):
+            continue
         first = body.splitlines()[0]
         name = first.lstrip("# ").split()[0] if first.startswith("#") else f"block{len(blocks)}"
-        blocks[name] = yaml.safe_load(body)
+        blocks[name] = document
     return blocks
 
 
@@ -72,6 +84,8 @@ def test_the_ladder_configuration_resolves_and_keeps_the_numbers_the_page_quotes
 
     assert resolved["protocol"] == "alchemical"
     block = resolved["alchemical"]
+    # An absolute hydration has ONE leg: the vacuum leg is identically zero and is not run.
+    assert block["cycle"] == "AHFE" and block["leg"] == 1
     assert block["number_of_windows"] == 12
     assert block["lambda_path"] == "linear"
     # 500000 steps at 2 fs is the "1 ns per window" the page states in prose, twice. Derived here
@@ -127,3 +141,80 @@ def test_the_index_and_the_page_agree_on_the_experimental_value():
         text = path.read_text(encoding="utf-8")
         assert "−5.00" in text, path.name
     assert "mobley_2310185" in INDEX.read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------- the relative tutorial, ethane -> chloroethane
+REL = DOCS / "tutorial" / "ethane-chloroethane" / "relative.md"
+REL_INDEX = DOCS / "tutorial" / "ethane-chloroethane" / "index.md"
+REL_SCRIPT = DOCS / "tutorial" / "ethane-chloroethane" / "relative_analysis.py"
+
+
+@pytest.mark.skipif(not REL.is_file(), reason="the relative tutorial is not present")
+def test_the_relative_page_configurations_resolve(tmp_path):
+    from md_tools.build.combine import _load
+    from md_tools.build.md import resolve_md_config
+
+    blocks = _yaml_blocks(REL)
+    plan = blocks["mutate.config"]
+    path = tmp_path / "mutate.config"
+    path.write_text(yaml.safe_dump(plan), encoding="utf-8")
+    resolved = _load(path)
+    assert resolved["mode"] == "hybrid"
+    # A hybrid plan needs the second endpoint and a map; the page's whole first section is that
+    # `automatic` PROPOSES rather than decides.
+    assert resolved["endpoints"]["B"] is not None
+    assert resolved["map"]["automatic"] is True
+
+    ladder = tmp_path / "ladder.config"
+    ladder.write_text(yaml.safe_dump(blocks["mutate-md.config"]), encoding="utf-8")
+    md = resolve_md_config(ladder)
+    assert md["protocol"] == "alchemical"
+    # The page's layout section stands on these two: they name the run directory and the shared
+    # input, and a page that showed a configuration without them would show one that is refused.
+    assert md["alchemical"]["cycle"] == "RHFE"
+    assert md["alchemical"]["leg"] == 1
+    # 16 windows written out, NOT an even count: the page's point is that `lambda_values` exists
+    # so a ladder can be finer where the integrand is steep.
+    assert md["alchemical"]["number_of_windows"] == 0
+    assert md["alchemical"]["lambda_values"] is not None
+
+
+@pytest.mark.skipif(not REL.is_file(), reason="the relative tutorial is not present")
+def test_the_relative_page_quotes_both_routes_and_says_which_is_independent():
+    """The page's central claim is that one comparison is a check and the other is not.
+
+    -1.745 against M2's -1.743 shares the Hamiltonian, the grid and the lengths, so it establishes
+    only that the CLI path is faithful. -1.639 shares almost nothing and is the real check. A page
+    that quoted both as agreement would be overstating its evidence, which is the failure the
+    ethanol page already records against itself.
+    """
+    page = REL.read_text(encoding="utf-8")
+    assert "−1.746" in page and "−1.743" in page and "−1.639" in page
+    assert "is not an independent check" in page
+    assert "matched_legs" in page
+
+
+@pytest.mark.skipif(not REL_SCRIPT.is_file(), reason="the relative tutorial is not present")
+def test_the_relative_script_runs_and_refuses_a_directory_that_is_not_a_leg(tmp_path, capsys):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("relative_analysis", REL_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.main([str(REL_SCRIPT), str(tmp_path), str(tmp_path)]) == 2
+    assert "not a prepared leg" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(not REL.is_file(), reason="the relative tutorial is not present")
+def test_the_relative_page_uses_the_leg_directory_layout():
+    """`<cycle>-leg<i>-run<N>` under ONE system, which `build-md` enforces.
+
+    The page taught a two-systems workaround before the layout existed, and that advice is now
+    wrong: two legs share a system and are kept apart by `input/<cycle>-leg<i>.in`. A tutorial
+    still showing `-odir ./md_script` would be refused at the reader's third command.
+    """
+    page = REL.read_text(encoding="utf-8")
+    assert "RHFE-leg1-run1" in page and "RHFE-leg2-run1" in page
+    assert "input/RHFE-leg1.in" in page
+    # ... and it must not tell anyone to split the legs into separate systems any more.
+    assert "each with its own `build/` and `input/`" not in page

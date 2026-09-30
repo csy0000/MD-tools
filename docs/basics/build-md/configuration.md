@@ -590,6 +590,18 @@ Path to the restraint definition, resolved beside `resolved.config` -- the same 
 
 Alchemical free energy: fixed-lambda windows of one path between the two end states of a topology plan. WHAT IS HERE AND WHAT IS NOT. The two end states, the atom map, the environment and the combined numbering are in the PLAN, which `md-openmm combine-topology` wrote and which carries its own digests; this section says which path is walked across it, where the windows sit on that path, how the pair potential is softened, and how long each window samples. Nothing here restates a fact the plan already holds -- a second copy of it would be the one that drifts. The integrator, the temperature, the pressure and the timestep are in `dynamics`, and the preparation chain is in `stages`, because a window is ordinary dynamics at a fixed Hamiltonian and has no business owning a second set of them. Turning the windows' samples into a free energy is ANALYSIS and is deliberately not configured here, exactly as WHAM and MBAR are not configured under `umbrella`: the samples are what this engine produces.
 
+#### `alchemical.cycle`
+
+type: string or null · default: `null` · one of `RBFE`, `RHFE`, `ABFE`, `AHFE`
+
+Which thermodynamic cycle this leg belongs to, and the first half of the run directory's name: RBFE  relative binding     -- ligand A -> B, in a site and in water RHFE  relative hydration   -- ligand A -> B, in water and in vacuum ABFE  absolute binding     -- one ligand decoupled, in a site and in water, with a standard-state restraint AHFE  absolute hydration   -- one ligand decoupled from water It is DECLARED and not derived, because a leg cannot know its own cycle: an RBFE's solvent leg and an RHFE's solvent leg are the same calculation on the same box, and what distinguishes them is the OTHER leg. Deriving it from this one would be guessing from evidence that does not contain the answer. A relative cycle needs a plan that transforms one ligand into another (`single`, `hybrid`, `dual`) and an absolute one needs `decoupling`; a mismatch is refused by name.
+
+#### `alchemical.leg`
+
+type: integer or null · default: `null` · minimum 1
+
+Which leg of that cycle this run is, and the second half of the directory name: `<cycle>-leg<i>-run<N>`. A cycle's legs differ in their ENVIRONMENT -- an RBFE has a complex leg and a solvent leg, an RHFE a solvent leg and a vacuum leg -- and the index is yours to assign, because only you know which is which. It is also what keeps the legs apart on disk. `input/<cycle>-leg<i>.in` is shared by every REPEAT of one leg and by nothing else, so two legs of one cycle live under one `<system>` without competing for a file they would each resolve differently.
+
 #### `alchemical.plan`
 
 type: string or null · default: `null`

@@ -23,6 +23,7 @@ validates every stage of the chain before it writes the first script.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import stat
 from pathlib import Path
@@ -89,6 +90,45 @@ def alchemical_path(resolved: dict[str, Any], *, endpoint_a: str = "A", endpoint
             "  Use `lambda_path: linear`, the Amber18 one-step diagonal on which every component "
             "moves together.")
     return linear_path(ALCHEMICAL_COMPONENTS, endpoint_a=endpoint_a, endpoint_b=endpoint_b)
+
+
+#: The modes a RELATIVE cycle can be built from. An absolute cycle decouples one ligand.
+_RELATIVE_MODES = ("single", "hybrid", "dual")
+
+
+def alchemical_method(resolved: dict[str, Any]) -> str:
+    """`<cycle>-leg<i>` -- the method label, and the ONE place it is spelled.
+
+    It names the run directory (`<cycle>-leg<i>-run<N>`, as every other protocol names one
+    `<method>-run<N>`) and the shared input beside it (`input/<cycle>-leg<i>.in`). Those two must
+    agree or a leg's repeats would read an input belonging to a different leg, so they are built
+    from the same string rather than formatted twice.
+    """
+    block = resolved.get("alchemical") or {}
+    return f"{block['cycle']}-leg{int(block['leg'])}"
+
+
+def _check_alchemical_cycle(resolved: dict[str, Any]) -> None:
+    """`cycle` and `leg` are given together, and the cycle must match the plan's mode.
+
+    The mode check is not bookkeeping. A relative cycle's ddG is a difference of two mutations and
+    an absolute cycle's dG is one decoupling; a run labelled RBFE that actually decoupled a ligand
+    would be filed with the edges, combined by `relative_binding`, and produce a number that is
+    not a binding free energy of anything.
+    """
+    block = dict(resolved.get("alchemical") or {})
+    cycle, leg = block.get("cycle"), block.get("leg")
+    if (cycle is None) != (leg is None):
+        raise ConfigError(
+            f"alchemical.cycle and alchemical.leg are given together or not at all; got "
+            f"cycle={cycle!r}, leg={leg!r}. They are one name: `<cycle>-leg<i>` is the run "
+            f"directory and the shared input, and half of it names nothing.")
+    if cycle is None:
+        raise ConfigError(
+            "protocol is alchemical but alchemical.cycle and alchemical.leg are not set. They "
+            "name the run: `<cycle>-leg<i>-run<N>`, one of RBFE, RHFE, ABFE or AHFE. A leg with "
+            "no cycle cannot be combined with anything, and a run directory that does not say "
+            "which leg it is cannot be told from its own repeats.")
 
 
 def _alchemical_endpoint_names(plan_object) -> tuple[str, str]:
@@ -446,6 +486,33 @@ MD_SCHEMA = Schema(
                "biased and the quantity that is reported are the same object by construction -- "
                "a run cannot restrain one torsion and report another."),
         Section("alchemical", [
+            Field("cycle", str, default=None, nullable=True,
+                  enum=("RBFE", "RHFE", "ABFE", "AHFE"),
+                  doc="Which thermodynamic cycle this leg belongs to, and the first half of the "
+                      "run directory's name:\n"
+                      "  RBFE  relative binding     -- ligand A -> B, in a site and in water\n"
+                      "  RHFE  relative hydration   -- ligand A -> B, in water and in vacuum\n"
+                      "  ABFE  absolute binding     -- one ligand decoupled, in a site and in "
+                      "water, with a standard-state restraint\n"
+                      "  AHFE  absolute hydration   -- one ligand decoupled from water\n"
+                      "It is DECLARED and not derived, because a leg cannot know its own cycle: "
+                      "an RBFE's solvent leg and an RHFE's solvent leg are the same calculation "
+                      "on the same box, and what distinguishes them is the OTHER leg. Deriving it "
+                      "from this one would be guessing from evidence that does not contain the "
+                      "answer.\n"
+                      "A relative cycle needs a plan that transforms one ligand into another "
+                      "(`single`, `hybrid`, `dual`) and an absolute one needs `decoupling`; a "
+                      "mismatch is refused by name."),
+            Field("leg", int, default=None, nullable=True, minimum=1,
+                  doc="Which leg of that cycle this run is, and the second half of the directory "
+                      "name: `<cycle>-leg<i>-run<N>`. A cycle's legs differ in their ENVIRONMENT "
+                      "-- an RBFE has a complex leg and a solvent leg, an RHFE a solvent leg and "
+                      "a vacuum leg -- and the index is yours to assign, because only you know "
+                      "which is which.\n"
+                      "It is also what keeps the legs apart on disk. `input/<cycle>-leg<i>.in` is "
+                      "shared by every REPEAT of one leg and by nothing else, so two legs of one "
+                      "cycle live under one `<system>` without competing for a file they would "
+                      "each resolve differently."),
             Field("plan", str, default=None, nullable=True,
                   doc="The topology plan DIRECTORY `md-openmm combine-topology` wrote -- the one "
                       "holding `plan.json`, `system_a.xml`, `system_b.xml`, `combined.pdb` and "
@@ -1015,6 +1082,8 @@ def _check_alchemical(resolved: dict[str, Any]) -> None:
             + ". An alchemical ladder is a protocol, not a modifier: it samples fixed-lambda "
               "windows of a path between two end states, and no other protocol has a second end "
               "state to reach. Either run `protocol: alchemical` or remove the section.")
+
+    _check_alchemical_cycle(resolved)
 
     if not plan:
         raise ConfigError(
@@ -2179,7 +2248,8 @@ def _alchemical_run_sh(resolved: dict[str, Any]) -> str:
         '  echo "== ${window} =="',
         # The SHARED input, one level up, for the reason the AIS call says: an input states what a
         # method was asked to do, which is a property of the system rather than of one repeat.
-        '  md-openmm md-run -i ../input/alchemical.in -odir . --window "${window}" "$@"',
+        f'  md-openmm md-run -i ../input/{alchemical_method(resolved)}.in -odir . '
+        '--window "${window}" "$@"',
         'done',
         '',
         'echo "run.sh: all windows reported completion"',
@@ -2433,7 +2503,7 @@ the installed md_tools package, and the ladder is in `resolved.config` beside th
 
     python {window}.py                 # this window
     python {window}.py --cpu --check   # validate, create nothing
-    md-openmm md-run -i ../input/alchemical.in -odir . --window {window}
+    md-openmm md-run -i ../input/{method}.in -odir . --window {window}
 
 Windows are INDEPENDENT: no ordering, no restart handed from one to the next, and a window that
 already completed and verifies is skipped rather than rerun. Run them on as many devices as you
@@ -2697,6 +2767,75 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
                 f"alchemical.plan = {(resolved.get('alchemical') or {}).get('plan')!r} does not "
                 f"hold a plan.json ({stated_plan}). `md-openmm combine-topology` writes the plan "
                 f"directory; the ladder runs between the two end states it records.")
+        # THE RUN DIRECTORY IS NAMED BY THE LEG, checked before anything is written. Every other
+        # protocol puts its runs at `<system>/<method>-run<N>`; an alchemical method is
+        # `<cycle>-leg<i>`, so a leg's repeats sort together under the cycle they belong to and a
+        # directory says what it is without being opened. Enforced rather than suggested: the
+        # combination step takes one directory per repeat, and a name that does not say which leg
+        # it is turns assembling a cycle into guesswork over six directories.
+        _method = alchemical_method(resolved)
+        _expected = re.compile(rf"^{re.escape(_method)}-run\d+$")
+        if not _expected.match(Path(out_dir).name):
+            raise ConfigError(
+                f"-odir {Path(out_dir).name!r} does not name this leg. An alchemical run "
+                f"directory is `<cycle>-leg<i>-run<N>`, and this configuration declares "
+                f"cycle {resolved['alchemical']['cycle']!r} and leg "
+                f"{resolved['alchemical']['leg']}, so it is `{_method}-run<N>` -- "
+                f"`{_method}-run1` for the first repeat, `{_method}-run2` for the next.\n"
+                f"  The repeats of one leg share `input/{_method}.in` and differ only in "
+                f"`dynamics.seed`.")
+        # THE SHARED INPUT, CHECKED HERE TOO, for the same reason and against the same rule.
+        # `input/alchemical.in` belongs to the SYSTEM, not the run, so two ladders under one
+        # `<system>` must resolve to the same bytes -- and two legs of one relative calculation do
+        # NOT: a vacuum leg and a solvent leg have different plans and usually different window
+        # grids. That is a real disagreement and refusing it is right. Refusing it AFTER writing
+        # eighteen window scripts, a copied plan and a prepared leg is not: it leaves a directory
+        # that looks like a generated run missing only its `run.sh`, which a person can and will
+        # try to run. The text is derivable before anything is written -- the copied plan's name
+        # is its digest -- so the collision is found here, where the refusal costs nothing.
+        import json as _json
+
+        _digest = _json.loads((stated_plan / "plan.json").read_text(encoding="utf-8"))
+        # THE CYCLE AND THE PLAN MUST AGREE, and this is checked from the plan's own record here
+        # rather than from the loaded object further down -- where it would refuse after the run
+        # directory existed. A relative cycle's ddG is a difference of two mutations; an absolute
+        # cycle's dG is one decoupling. A run labelled RBFE that actually decoupled a ligand would
+        # be filed with the edges and combined by `relative_binding`, producing a number that is
+        # not a binding free energy of anything, and nothing downstream could tell: both are legs
+        # with windows and samples.
+        _relative = resolved["alchemical"]["cycle"].startswith("R")
+        _mode = _digest.get("mode")
+        if _relative and _mode not in _RELATIVE_MODES:
+            raise ConfigError(
+                f"alchemical.cycle = {resolved['alchemical']['cycle']!r} is a RELATIVE cycle, "
+                f"which transforms one ligand into another, but the plan's mode is {_mode!r}. A "
+                f"decoupling removes ONE ligand and belongs to an absolute cycle (ABFE, AHFE). "
+                f"Nothing was written.")
+        if not _relative and _mode != "decoupling":
+            raise ConfigError(
+                f"alchemical.cycle = {resolved['alchemical']['cycle']!r} is an ABSOLUTE cycle, "
+                f"which decouples one ligand, but the plan's mode is {_mode!r}. A mode that "
+                f"transforms one ligand into another belongs to a relative cycle (RBFE, RHFE). "
+                f"Nothing was written.")
+        _would_be = dict(resolved)
+        _would_be["alchemical"] = dict(resolved["alchemical"],
+                                       plan=f"plan.{_digest['plan_sha256'][:12]}")
+        _shared = dataset.stage_input(alchemical_method(resolved))
+        if _shared.is_file() and not overwrite:
+            _text = in_file_text(
+                _would_be, heading=f"{alchemical_method(_would_be)}: "
+                                   f"{len(alchemical_lambda_values(_would_be))} "
+                                   f"windows, {_would_be['alchemical']['plan']}")
+            if _shared.read_text(encoding="utf-8") != _text:
+                raise ConfigError(
+                    f"{_shared} already exists and is not what this configuration resolves to.\n"
+                    f"  That file is shared by every REPEAT of {_method}, so the repeats of one "
+                    f"leg must resolve to the same bytes. They may differ in `dynamics.seed`, "
+                    f"which is deliberately not written into an input, and in nothing else.\n"
+                    f"  A DIFFERENT leg of the same cycle is not a conflict: give it its own "
+                    f"`alchemical.leg`, and it gets its own `input/<cycle>-leg<i>.in` beside this "
+                    f"one. Two legs live under one `<system>` and are meant to.\n"
+                    f"  Nothing was written.")
     #
     # EXCEPT AN ALCHEMICAL LADDER, which has no `built.xml` to be validated against and must not
     # acquire one. Its System is the leg's, built here from `alchemical.plan` -- the plan carries
@@ -3059,7 +3198,9 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         # carries its own name.
         for window, s_value in zip(window_ids(resolved), s_values):
             path = out_dir / f"{window}.py"
-            path.write_text(_WINDOW_SCRIPT.format(window=window, s=s_value), encoding="utf-8")
+            path.write_text(
+                _WINDOW_SCRIPT.format(window=window, s=s_value,
+                                      method=alchemical_method(resolved)), encoding="utf-8")
             note(path)
 
         log.heading("alchemical")
@@ -3173,12 +3314,14 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         # resolves against `-odir` rather than against the input's own directory -- so one input
         # serves every repeat of this transformation, and a run generated from a DIFFERENT plan
         # writes different bytes and is refused by name rather than quietly sharing this one.
+        _shared_in = dataset.stage_input(alchemical_method(resolved))
         _write_shared_input(
-            dataset.stage_input("alchemical"),
+            _shared_in,
             in_file_text(resolved,
-                         heading=f"alchemical: {len(alchemical_lambda_values(resolved))} windows, "
+                         heading=f"{alchemical_method(resolved)}: "
+                                 f"{len(alchemical_lambda_values(resolved))} windows, "
                                  f"{resolved['alchemical']['plan']}"), overwrite=overwrite)
-        note(dataset.stage_input("alchemical"))
+        note(_shared_in)
     if plan:
         for stage in plan:
             target = targets[stage["name"]]

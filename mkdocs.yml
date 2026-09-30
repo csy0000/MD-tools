@@ -120,6 +120,9 @@ nav:
       - Ethanol:
           - The system: tutorial/ethanol/index.md
           - Hydration free energy: tutorial/ethanol/hydration.md
+      - Ethane + chloroethane:
+          - The system: tutorial/ethane-chloroethane/index.md
+          - Relative hydration free energy: tutorial/ethane-chloroethane/relative.md
       - Paracetamol:
           - The system: tutorial/paracetamol/index.md
           - cMD: tutorial/paracetamol/cMD.md
