@@ -930,6 +930,43 @@ The vocabulary and the schedule are adopted; the code is this repository's own.
 
 ---
 
+### A seeded alchemical run is not reproducible on a card, and the cost is measured
+
+**ID** — a fact about what the software does, measured here, not a result from the literature.
+
+`LocalEnergyMinimizer` takes no seed and does not reproduce on CUDA. Measured on the 0.7.0 softcore
+System (2026-09-30): single-point energies and forces are bit-identical across ten fresh Contexts,
+spread exactly `0.000e+00`, and five minimisations from that identical start scatter by **16 kJ/mol
+in mixed precision and 24 in double.** The fixture returns bit-identical positions across calls.
+The mechanism is not established; it is not the fixture, the seeds, or force or energy evaluation.
+
+What that costs a free energy was measured on ethanol's hydration, by running the same ladder twice
+with **everything** matched — same plan (digest `b663f7bf42daf492...`), same `WindowSettings` field
+for field, same seed:
+
+| | ΔG_hyd, kcal/mol |
+|---|---|
+| Python driver, seed 20260919 | −3.5150 |
+| command line, seed 20260919 | −3.6829 |
+
+**0.168 kcal/mol, with nothing a person can set differing.** MBAR's uncertainty for a single ladder
+on this system is about 0.10, so the run-to-run difference EXCEEDS the estimator's own error bar.
+
+Three consequences, and the first is the one that changes practice:
+
+1. **Error-bar an alchemical result by its repeats, never by its estimator.** An asymptotic
+   covariance is a statement about one set of samples; it cannot see a different starting
+   configuration. `campaign.combine_repeats` takes the larger of the two for this reason.
+2. **Two seeded runs differing by ~0.2 kcal/mol is not a bug.** Someone who does not know this will
+   go looking for one.
+3. **Two `--cpu` runs agreeing says nothing about a card**, and a CPU lane is evidence about wiring
+   — which dispatch is reached, what is refused, what is written — not about trajectories.
+
+A single matched pair bounds the effect and shows it exceeds the single-run σ. It does not
+establish a distribution, and nothing here claims the minimiser contributes exactly 0.168.
+
+---
+
 ## 14. Recommendation for method-development comparisons
 
 If you are comparing protocols — sampling methods, restraint schemes, REST2 ladders, timestep

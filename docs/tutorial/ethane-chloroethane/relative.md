@@ -216,21 +216,18 @@ corrupt both by the same amount in the same direction to survive that.
 **The 0.7 kcal/mol gap to experiment is force field**, not machinery, and both routes show it. It
 is reported, never gated on.
 
-### The vacuum leg is extraordinarily reproducible, and that is not a mistake
+### The vacuum leg prints ±0.000, and that is not a bug
 
-Three repeats gave **−1.6389, −1.6384, −1.6389** — a spread of 0.0005 kcal/mol, which prints as
-±0.000 at three decimals and is 0.0003 when you ask for more. That is real: eight atoms with no
-solvent, 18 windows and 1 ns each is a fully sampled phase space, and three different seeds have
-nothing left to disagree about.
+Three repeats gave **−1.6389, −1.6384, −1.6389** — 0.0005 apart, which rounds to ±0.000 at three
+decimals. Eight atoms with no solvent, 18 windows of 1 ns: there is very little left for three
+seeds to disagree about.
 
-Compare the solvent leg's repeats: **−3.3868, −3.4189, −3.3506**, a spread of 0.068. All of the
-run-to-run scatter in this calculation comes from the water.
+The solvent leg's repeats are **−3.3868, −3.4189, −3.3506**, a spread of 0.068. Expect essentially
+all of your run-to-run scatter to come from the water leg, and size your repeats accordingly —
+there is little point running the vacuum leg more times than the solvent one.
 
-That is also why `combine_repeats` takes the **larger** of the estimator's uncertainty and the
-repeat spread. On an earlier campaign three repeats of one leg differed by up to 0.80 kcal/mol
-while MBAR claimed 0.09: an asymptotic covariance computed where neighbouring states barely overlap
-is not a measurement of run-to-run scatter, and publishing it as one understates the error by an
-order of magnitude.
+`combine_repeats` reports the **larger** of the estimator's uncertainty and the repeat spread, so
+you get the honest error bar without choosing.
 
 ## What it wrote
 

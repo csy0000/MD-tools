@@ -113,9 +113,12 @@ def test_the_headline_number_matches_the_campaign_it_claims_agreement_with():
     the headline.
     """
     page = PAGE.read_text(encoding="utf-8")
-    assert "−3.648" in page                      # this run, MBAR
+    assert "−3.656" in page                      # these three ladders, MBAR
     assert "−3.523" in page                      # the campaign reference
     assert "−3.523" in VALIDATION.read_text(encoding="utf-8")
+    # The page must keep saying that a single ladder is not the result, because that is the
+    # mistake this very page was first written with: a one-repeat number published as a headline.
+    assert "one ladder is not a result" in page
 
 
 def test_the_analysis_script_imports_and_refuses_a_directory_that_is_not_a_leg(tmp_path, capsys):

@@ -181,32 +181,50 @@ python ethanol_analysis.py AHFE-leg1-run1
 ```
 
 ```text
-dG_hyd(MBAR)            -3.648 +/- 0.107 kcal/mol
+dG_hyd(MBAR)            -3.787 +/- 0.103 kcal/mol
 
 the same samples, four ways:
-  MBAR         dG_hyd   -3.648 kcal/mol
-  BAR          dG_hyd   -3.699 kcal/mol
-  TI           dG_hyd   -4.195 kcal/mol
-  EXP_forward  dG_hyd   -3.838 kcal/mol
-  EXP_reverse  dG_hyd   -3.622 kcal/mol
+  MBAR         dG_hyd   -3.787 kcal/mol
+  BAR          dG_hyd   -3.650 kcal/mol
+  TI           dG_hyd   -4.147 kcal/mol
+  EXP_forward  dG_hyd   -3.839 kcal/mol
+  EXP_reverse  dG_hyd   -3.659 kcal/mol
 
 smallest neighbour overlap  0.178   (a ladder is in trouble below ~0.03)
 poor overlap anywhere       False
-samples per window          247-430 after decorrelation
+samples per window          227-412 after decorrelation
 ```
+
+**That is ONE ladder, and one ladder is not a result.** Run it twice more, with
+`dynamics.seed: 202` and `303` into `AHFE-leg1-run2` and `AHFE-leg1-run3`, and the three give
+**−3.787, −3.655, −3.526** — a mean of **−3.656 ± 0.075**, error-barred by the spread. The section
+below compares that, not the single number above.
 
 ## 5. What the numbers mean
 
 | | ΔG_hyd, kcal/mol | what it is |
 |---|---|---|
-| **this run, MBAR** | **−3.648 ± 0.107** | one ladder, 12 windows × 1 ns |
-| **three repeats, MBAR — the reference** | **−3.523 ± 0.025** | the [validation campaign](../../openmm_methods/alchemy/validation.md), error-barred by the repeat spread |
+| **these three ladders, MBAR** | **−3.656 ± 0.075** | 12 windows × 1 ns each; −3.787, −3.655, −3.526, error-barred by the spread |
+| **the validation campaign** | **−3.523 ± 0.025** | −3.483, −3.515, −3.570, driven from Python — see [validation.md](../../openmm_methods/alchemy/validation.md) |
 | experiment (FreeSolv `mobley_2310185`) | −5.00 | measured |
 
-**−3.648 and −3.523 are the same number here.** They differ by 0.125, which is about one standard
-error of the single run, and the three campaign repeats themselves span 0.087 (−3.483, −3.515,
-−3.570). One ladder lands within the scatter of three; that is what agreement looks like at this
-sample size, and a tighter match would be luck rather than a better result.
+**These agree.** −3.656 against −3.523 is 0.133 apart, with the repeat spread on this run alone at
+0.075 — the two sets are the same calculation sampled twice, differing only in seed.
+
+Use that as the sanity check on your own run: if three repeats land within about 0.2 of each other
+and the overlap gate passes, the ladder did what it was asked to.
+
+!!! warning "Do not expect two runs to match, even with the same seed"
+
+    Run this ladder twice with `dynamics.seed: 20260919` both times and you get **−3.5150** and
+    **−3.6829** — 0.17 apart, with the same plan, the same settings and the same seed.
+
+    `LocalEnergyMinimizer` takes no seed and does not reproduce on CUDA, so `minimize_iterations:
+    500` makes every fresh start a new realisation whatever the seed says.
+
+    Practically: **error-bar by repeats, not by the estimator.** MBAR's uncertainty for one ladder
+    here is about 0.10 and the run-to-run difference is larger. Two of your runs differing by
+    ~0.2 kcal/mol is normal and not something to debug.
 
 **The 1.4 kcal/mol gap to experiment is force field, not machinery.** The campaign found the same
 offset in the same direction for a hydrocarbon, an alkyl halide and an alcohol — 0.65 to 1.48

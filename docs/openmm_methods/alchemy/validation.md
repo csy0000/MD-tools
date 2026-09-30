@@ -119,10 +119,17 @@ is reported, never gated on.
 
 * **These nine legs were driven from Python** (`md_tools.alchemy.campaign`), because they predate
   `build-md` generating an alchemical directory. The generated route has since been run on the same
-  calculation and lands on the same number: see the
-  [ethanol hydration tutorial](../../tutorial/ethanol/hydration.md), −3.648 ± 0.107 against the
-  −3.523 ± 0.025 below. The plan the CLI builds is bit-identical to the plan these legs used, which
-  is asserted by `tests/test_combine_decoupling.py` rather than assumed.
+  calculation — three repeats, **−3.656 ± 0.075** against the −3.523 ± 0.025 below, agreeing to
+  1.7 σ (see the [ethanol hydration tutorial](../../tutorial/ethanol/hydration.md)). The plan the
+  CLI builds is bit-identical to the plan these legs used, asserted by
+  `tests/test_combine_decoupling.py` rather than assumed, and the `WindowSettings` match field for
+  field.
+* **The two routes differ only in the seed, and that is not enough to make them reproduce.** A
+  fourth ladder run with the campaign's own seed gave **−3.6829** against its **−3.5150**: same
+  plan digest, same settings, same seed, **0.168 kcal/mol apart.** `LocalEnergyMinimizer` takes no
+  seed and does not reproduce on CUDA, so every fresh start is a new realisation. The practical
+  consequence for reading this page: MBAR's per-ladder σ is ~0.10 and the run-to-run difference is
+  larger, so **every number below is error-barred by its repeats and none by its estimator.**
 * **Nothing about protein–ligand binding.** A decoupling in water is not a decoupling in a binding
   site, where the sampling problem is the whole difficulty.
 * **Nothing about a mutation with a charge change**, an atom mapping across a ring, or softcore at
