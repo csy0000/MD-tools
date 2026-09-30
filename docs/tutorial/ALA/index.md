@@ -47,7 +47,7 @@ renamed accordingly rather than run at a pressure that means nothing.
 | [**REST2**](REST2.md) | solute tempering, four states over τ 0 → 0.5 | published |
 | [**AIS**](AIS.md) | annealed importance sampling between two Hamiltonians, with the torsion reweighting checked against the plain simulation | published |
 | **Umbrella sampling** | a potential of mean force along φ | planned, 0.6.3 |
-| **Alchemical (TI, FEP)** | free energies by transformation | planned, 0.7.0 |
+| **Alchemical — ligand to ligand** | free energies by transformation | planned, 0.6.5 |
 
 *Umbrella sampling arrives in 0.6.3 and the alchemical pages in 0.7.0. They are listed here so the
 shape of the set is visible; neither is written yet, and neither is linked to a page that does not

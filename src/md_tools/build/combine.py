@@ -1,13 +1,15 @@
-"""`md-openmm combine-topology`: two ligand parameter packages and one environment -> a topology plan.
+"""`md-openmm combine-topology`: ligand packages and one environment -> a topology plan.
 
-UNDER CONSTRUCTION (0.7.0). This is the command surface only. Everything it does is done by the
-callable layer in `md_tools.alchemy.topology` and `md_tools.alchemy.topology_mapping`, and every
-refusal there happens before anything is written:
+This is the command surface only. Everything it does is done by the callable layer in
+`md_tools.alchemy.topology` and `md_tools.alchemy.topology_mapping`, and every refusal there
+happens before anything is written:
 
-    resolve both packages      ligands.catalog.resolve_package (the one package resolver)
+    resolve the package(s)     ligands.catalog.resolve_package (the one package resolver)
     read the environment       alchemy.topology.Environment.from_files
     the atom map               AtomMap.from_pairs / AtomMap.from_record, or propose_map
-    build and check the plan   alchemy.topology.build_topology_plan
+                               -- a TRANSFORMATION only; `decoupling` has no second endpoint
+    build and check the plan   alchemy.topology.build_topology_plan, or
+                               build_decoupling_plan, which is where the net-charge refusal lives
     write it                   TopologyPlan.write (a NEW directory, staged and renamed)
 
 The configuration says WHAT to combine; `-odir` on the command line says where the plan goes, as
@@ -31,11 +33,27 @@ from .strict import ConfigError, Field, Schema, Section
 __all__ = ["COMBINE_FORMAT", "COMBINE_SCHEMA", "MODES", "combine_topology"]
 
 COMBINE_FORMAT = "md-tools-combine-topology/1"
-MODES = ("single", "hybrid", "dual")
+#: `decoupling` is the only mode with ONE endpoint. Endpoint B is the ligand ABSENT -- not another
+#: molecule -- so it takes no `endpoints.B`, no atom map and no `b_pose`, and each of those is
+#: refused BY NAME rather than ignored. `md_tools.alchemy.topology.build_decoupling_plan` has
+#: supported it since the plan builder existed; until 0.6.4 it was reachable only from Python, so
+#: absolute hydration -- the simplest alchemical calculation there is -- could not be run from the
+#: command line at all.
+MODES = ("single", "hybrid", "dual", "decoupling")
+
+#: The modes that transform one ligand into another, and so need a second package and a map.
+PAIRED_MODES = ("single", "hybrid", "dual")
 
 
 def _check(document: dict[str, Any]) -> None:
     mode = document["mode"]
+    if mode == "decoupling":
+        _check_decoupling(document)
+        return
+    if document["endpoints"].get("B") is None:
+        raise ConfigError(
+            f"endpoints.B is not set and mode is {mode}, which transforms one ligand into "
+            f"another and so needs the ligand it becomes. Only mode: decoupling has one endpoint.")
     chosen = [key for key in ("file", "automatic")
               if document["map"][key] not in (None, False)]
     if len(chosen) != 1:
@@ -53,25 +71,53 @@ def _check(document: dict[str, Any]) -> None:
             f"keeps the two dual-topology ligands together, and no other mode has one.")
 
 
+def _check_decoupling(document: dict[str, Any]) -> None:
+    """Every key that presupposes a second ligand is refused BY NAME, not ignored.
+
+    Endpoint B here is the ligand ABSENT. A configuration that names a second package, an atom
+    map or a B pose is not a decoupling with harmless extras: it is a mutation someone wrote and
+    then set the wrong mode on, or a decoupling someone believes will transform something. Both
+    are answered by saying which key does not belong, because a setting that is accepted and inert
+    is worse than one refused.
+    """
+    for key, what in (("endpoints.B", "a second ligand package"),
+                      ("b_pose", "a pose for a second ligand"),
+                      ("map.file", "an atom map"),
+                      ("map.automatic", "a proposed atom map"),
+                      ("dual.restraint_k_kj_mol_nm2", "the dual-topology restraint")):
+        section, _, field = key.partition(".")
+        value = document[section].get(field) if field else document[section]
+        if value not in (None, False):
+            raise ConfigError(
+                f"{key} is set but mode is decoupling, which names {what} nowhere: endpoint B is "
+                f"the ligand ABSENT, not another molecule. Its own bonded terms, internal "
+                f"exceptions and internal pairs stay physical at both ends, and the whole ligand "
+                f"is the unique region. Remove {key}, or choose a mode that transforms one ligand "
+                f"into another ({', '.join(PAIRED_MODES)}).")
+
+
 def _refuse_separated(document: Any) -> None:
     if isinstance(document, dict) and document.get("mode") == "separated":
         raise ConfigError(
             "mode: separated is not implemented. Separated topology is deferred beyond 0.7.0 "
-            "and is not partially supported; use single, hybrid or dual.")
+            "and is not partially supported; use single, hybrid, dual or decoupling.")
 
 
 COMBINE_SCHEMA = Schema(
     "combine-topology.config",
-    doc="Two registered ligand parameter packages, one environment and an atom map, combined into "
-        "an alchemical topology plan by `md-openmm combine-topology`. UNDER CONSTRUCTION (0.7.0).",
+    doc="A ligand parameter package and the environment holding it -- plus, for a transformation, a "
+        "second package and an atom map -- combined into an alchemical topology plan by "
+        "`md-openmm combine-topology`. Under `mode: decoupling` the second endpoint is the same "
+        "ligand ABSENT, and there is no second package and no map.",
     fields=[
         Field("format", str, enum=(COMBINE_FORMAT,),
               doc=f"Must be `{COMBINE_FORMAT}`."),
         Field("mode", str, enum=MODES,
               doc="How the two endpoints are represented: `single` (one evolving atom set), "
-                  "`hybrid` (a mapped core plus endpoint-unique atoms) or `dual` (both ligands "
-                  "whole, mutually excluded, held together by a restraint). `separated` is "
-                  "deferred and refused by name."),
+                  "`hybrid` (a mapped core plus endpoint-unique atoms), `dual` (both ligands "
+                  "whole, mutually excluded, held together by a restraint) or `decoupling` "
+                  "(endpoint B is the ligand ABSENT -- no second package, no map, no pose). "
+                  "`separated` is deferred and refused by name."),
         Field("b_pose", str, default=None, nullable=True,
               doc="An .sdf holding endpoint B's pose. It must be B's chemical state; its atoms "
                   "are put into package order by the ligand module's own matcher, which refuses "
@@ -82,8 +128,11 @@ COMBINE_SCHEMA = Schema(
         Section("endpoints", [
             Field("A", dict, doc="`{parameters: <compound>/param_<id> or a package path}`: the "
                                  "endpoint the environment already holds."),
-            Field("B", dict, doc="`{parameters: ...}`: the endpoint it becomes."),
-        ], required=True, doc="The two ligand parameter packages. Parameters are used exactly as "
+            Field("B", dict, default=None, nullable=True,
+                  doc="`{parameters: ...}`: the endpoint it becomes. Required by every mode that "
+                      "transforms one ligand into another, and REFUSED by `decoupling`, whose "
+                      "endpoint B is the ligand absent."),
+        ], required=True, doc="The ligand parameter packages. Parameters are used exactly as "
                               "the packages record them; nothing is reparameterised."),
         Section("environment", [
             Field("system", str, doc="The built System holding endpoint A, e.g. build/built.xml."),
@@ -162,7 +211,8 @@ def combine_topology(*, config_path: Path, out_dir: Path, check: bool = False,
     Nothing is written until the plan has been built and every check in the callable layer has
     passed; `check=True` stops there and creates nothing, not even the output's parent.
     """
-    from ..alchemy.topology import Environment, TopologyError, build_topology_plan
+    from ..alchemy.topology import (Environment, TopologyError, build_decoupling_plan,
+                                    build_topology_plan)
     from ..alchemy.topology_mapping import AtomMap, MapError, propose_map
     from ..ligands.catalog import resolve_package
     from ..ligands.mapping import LigandSelector, MappingError
@@ -184,8 +234,9 @@ def combine_topology(*, config_path: Path, out_dir: Path, check: bool = False,
 
     roots = catalog_roots(resolved, config_path)
     try:
-        packages = {}
-        for side in ("A", "B"):
+        decoupling = resolved["mode"] == "decoupling"
+        packages: dict[str, Any] = {"B": None}
+        for side in ("A",) if decoupling else ("A", "B"):
             block = resolved["endpoints"][side]
             unknown = sorted(set(block) - {"parameters"})
             if unknown or "parameters" not in block:
@@ -200,7 +251,13 @@ def combine_topology(*, config_path: Path, out_dir: Path, check: bool = False,
             record=_relative(base, resolved["environment"]["record"]))
         mode = resolved["mode"]
         report = None
-        if resolved["map"]["automatic"]:
+        atom_map = None
+        if decoupling:
+            # ONE call, and it is the library's own entry point rather than build_topology_plan
+            # with mode="decoupling" spelled out here: `build_decoupling_plan` is where the net
+            # formal charge refusal lives, and reaching past it would lose that check.
+            plan = build_decoupling_plan(packages["A"], environment)
+        elif resolved["map"]["automatic"]:
             atom_map, report = propose_map(packages["A"], packages["B"], mode)
         else:
             map_path = _relative(base, resolved["map"]["file"])
@@ -215,26 +272,36 @@ def combine_topology(*, config_path: Path, out_dir: Path, check: bool = False,
                 atom_map = AtomMap.from_record(document["map"], packages["A"], packages["B"])
             else:
                 atom_map = AtomMap.from_record(document, packages["A"], packages["B"])
-        b_positions = None
-        if resolved["b_pose"] is not None:
-            b_positions = _b_pose_nm(_relative(base, resolved["b_pose"]), packages["B"])
-        extra = ({"dual_restraint_k": float(resolved["dual"]["restraint_k_kj_mol_nm2"])}
-                 if resolved["dual"]["restraint_k_kj_mol_nm2"] is not None else {})
-        plan = build_topology_plan(packages["A"], packages["B"], atom_map, environment,
-                                   mode=mode, b_positions_nm=b_positions, **extra)
+        if not decoupling:
+            b_positions = None
+            if resolved["b_pose"] is not None:
+                b_positions = _b_pose_nm(_relative(base, resolved["b_pose"]), packages["B"])
+            extra = ({"dual_restraint_k": float(resolved["dual"]["restraint_k_kj_mol_nm2"])}
+                     if resolved["dual"]["restraint_k_kj_mol_nm2"] is not None else {})
+            plan = build_topology_plan(packages["A"], packages["B"], atom_map, environment,
+                                       mode=mode, b_positions_nm=b_positions, **extra)
     except (PackageError, MappingError, MapError, TopologyError, FileNotFoundError,
             ValueError) as refusal:
         if isinstance(refusal, ConfigError):
             raise
         raise ConfigError(f"combine-topology: {refusal}") from None
 
+    # `package_b` and `n_pairs` are None for a decoupling, not "" and not 0. Zero mapped pairs is
+    # a true statement about a mutation that shares nothing; a decoupling has no map to count, and
+    # writing 0 would let a reader compare the two as though they were the same measurement.
     summary = {"mode": mode, "package_a": packages["A"].reference,
-               "package_b": packages["B"].reference, "plan_sha256": plan.sha256,
-               "n_pairs": len(atom_map.pairs), "check": check, "out_dir": str(out_dir),
+               "package_b": packages["B"].reference if packages["B"] is not None else None,
+               "plan_sha256": plan.sha256,
+               "n_pairs": len(atom_map.pairs) if atom_map is not None else None,
+               "check": check, "out_dir": str(out_dir),
                "proposed_map": str(sidecar) if report is not None else None}
-    echo(f"combine-topology: {mode} plan {packages['A'].reference} -> "
-         f"{packages['B'].reference}, {len(atom_map.pairs)} mapped atom pairs, "
-         f"plan_sha256 {plan.sha256[:16]}...")
+    if decoupling:
+        echo(f"combine-topology: decoupling plan for {packages['A'].reference} -- endpoint B is "
+             f"the ligand absent, plan_sha256 {plan.sha256[:16]}...")
+    else:
+        echo(f"combine-topology: {mode} plan {packages['A'].reference} -> "
+             f"{packages['B'].reference}, {len(atom_map.pairs)} mapped atom pairs, "
+             f"plan_sha256 {plan.sha256[:16]}...")
     if check:
         echo("combine-topology: --check -- the plan builds and passes every check; nothing was "
              "written.")

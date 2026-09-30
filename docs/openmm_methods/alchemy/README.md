@@ -1,8 +1,9 @@
 # Alchemical topology
 
-Two registered ligand parameter packages, one built environment holding the first of them, and an
-atom map between them, combined into **one topology plan**: two endpoint Systems over a single
-particle index space, plus the record that says exactly how they were built.
+A ligand parameter package and the built environment holding it — plus, for a transformation, a
+second package and an atom map between them — combined into **one topology plan**: two endpoint
+Systems over a single particle index space, plus the record that says exactly how they were built.
+The second endpoint is either another molecule or the same molecule ABSENT.
 
 ```bash
 md-openmm combine-topology --config example.config -odir ./plan
@@ -10,27 +11,22 @@ md-openmm combine-topology --config example.config -odir ./plan
 
 ## What this is today, and what it is not
 
-`combine-topology` is under construction for 0.7.0. The honest statement, stated precisely because
-the halfway point is where a reader is most likely to assume the rest:
+The chain runs end to end, and what is and is not implemented is worth stating exactly:
 
-* **A plan is a finished artefact.** The command writes one, and
+* **A plan is a finished artefact.** `combine-topology` writes one, and
   `md_tools.alchemy.topology.load_plan` reads it back with every digest re-verified.
-* **`protocol: alchemical` resolves.** `build-md` accepts an `alchemical` section naming a plan, a
-  λ path, a window placement, the Amber18 softcore settings and the per-window lengths, and
-  `md-run` parses the matching `&alchemical` block. Every refusal that belongs to one of those
-  values fires where it is written.
-* **Neither surface runs a window yet.** `build-md` refuses to generate the run directory and
-  `md-run` refuses to dispatch, each by name. Left to fall through, the first would write scripts
-  that minimise, equilibrate and stop — a complete-looking run that sampled nothing — and the
-  second would report the success of a campaign it never ran.
-* **The window runtime itself works**, through the Python API
-  (`md_tools.alchemy.windows.run_window`, `md_tools.alchemy.campaign`), and has produced absolute
-  hydration free energies that agree with an independent alchemical route — see
-  [validation.md](validation.md).
+* **`build-md` generates a runnable ladder from it** — `protocol: alchemical`, one two-line entry
+  point per window, a `run.sh`, and `leg/` whose System is built once at generation. `md-run`
+  dispatches into the same directory through the same function the generated scripts call.
+* **Four modes.** `single`, `hybrid` and `dual` turn one ligand into another; `decoupling` removes
+  one, which is what an absolute hydration or binding free energy needs.
+* **The answer has been checked twice**, against experiment and against a different alchemical
+  route through the same thermodynamics — see [validation.md](validation.md) and the
+  [ethanol hydration tutorial](../../tutorial/ethanol/hydration.md).
 
-So a campaign today is driven from Python, not from a generated directory. What is missing is the
-step between the configuration and the runtime, and both surfaces say so rather than approximating
-it.
+Not implemented, and refused by name rather than approximated: `lambda_path: staged` (a scientific
+decision about `lambda_bonded` is missing, not code), `mode: separated`, a decoupling of a ligand
+with a net formal charge (no finite-size correction), and atom mapping across a ring.
 
 ## The example file beside this README
 
@@ -38,8 +34,9 @@ it.
 |---|---|
 | [`example.config`](example.config) | what you hand to `md-openmm combine-topology` |
 
-There is no `example.in` here: `build-md` does not yet write one for an alchemical ladder, and a
-hand-written example of a file no command produces is a file nothing checks.
+There is no `example.in` here, and that is deliberate: `build-md` writes one into `input/` for every
+ladder it generates, and a hand-written copy beside this page would be a second version of a file a
+command produces — the one that drifts.
 
 ## The command
 
@@ -80,10 +77,10 @@ Every file is YAML despite the `.config` suffix, and an unknown key is refused b
 | key | type | default | meaning |
 |---|---|---|---|
 | `format` | string | required | must be `md-tools-combine-topology/1` |
-| `mode` | string | required | `single`, `hybrid` or `dual`. `separated` is refused by name |
+| `mode` | string | required | `single`, `hybrid`, `dual` or `decoupling`. `separated` is refused by name |
 | `b_pose` | path | `null` | an `.sdf` holding endpoint B's pose, relative to the configuration |
 | `endpoints.A` | mapping | required | `{parameters: <compound>/param_<id>}` — the endpoint the environment already holds |
-| `endpoints.B` | mapping | required | `{parameters: ...}` — the endpoint it becomes |
+| `endpoints.B` | mapping | required, except `decoupling` | `{parameters: ...}` — the endpoint it becomes. REFUSED under `decoupling`, whose endpoint B is the ligand absent |
 | `environment.system` | path | required | the built System holding endpoint A, e.g. `build/built.xml` |
 | `environment.topology` | path | required | its topology, e.g. `build/built.pdb` |
 | `environment.record` | path | required | the `build-top` record of that build, e.g. `build/built.log` |
@@ -106,20 +103,32 @@ module's own matcher, which refuses a different molecule rather than guessing a 
 Left unset, package B's reference conformer is superposed on the mapped A atoms (Kabsch), and the
 core RMSD of that fit is recorded in the plan.
 
-## The three modes
+## The four modes
 
 ```text
-single   ONE evolving atom representation: every atom of one endpoint is mapped, and a mapped
-         atom may change element -- a hydrogen may become a heavy atom where no constraint
-         forbids it.
-hybrid   a mapped core plus endpoint-unique atoms on BOTH sides, as separate particles. A
-         hydrogen is never mapped to a heavy atom.
-dual     the two ligands share no particle. Each is a complete molecule, B appended whole; every
-         A-B pair is an explicit zero exception; a harmonic restraint between the centroids of
-         the mapped atom groups keeps the dummy ligand with the physical one.
+single      ONE evolving atom representation: every atom of one endpoint is mapped, and a mapped
+            atom may change element -- a hydrogen may become a heavy atom where no constraint
+            forbids it.
+hybrid      a mapped core plus endpoint-unique atoms on BOTH sides, as separate particles. A
+            hydrogen is never mapped to a heavy atom.
+dual        the two ligands share no particle. Each is a complete molecule, B appended whole;
+            every A-B pair is an explicit zero exception; a harmonic restraint between the
+            centroids of the mapped atom groups keeps the dummy ligand with the physical one.
+decoupling  ONE ligand. Endpoint B is that ligand ABSENT: every interaction with the environment
+            removed, its OWN Hamiltonian retained unchanged at both ends. No second package, no
+            map, no pose -- each refused by name.
 ```
 
-The mode is not a preference, it is a claim about the map, and each mode checks the claim:
+`decoupling` is the odd one out and is the simplest: it is what an absolute free energy needs —
+hydration, or binding once a standard-state restraint is attached. Because the ligand's own bonded
+terms, internal exceptions and internal pairs stay physical at both ends, its intramolecular
+Hamiltonian is λ-independent, which is what the standard-state correction assumes and what makes the
+vacuum leg of a hydration cycle identically zero. A ligand with a non-zero net formal charge is
+refused: decoupling it changes the box's net charge, and PME's neutralising background then
+contributes a free energy needing a finite-size correction this release does not implement.
+
+For the other three, the mode is not a preference, it is a claim about the map, and each checks the
+claim:
 
 * `single` with any unmapped atom on both sides is refused — that is a hybrid topology, and the
   refusal says so with the counts.

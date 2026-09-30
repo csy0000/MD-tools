@@ -73,8 +73,15 @@ class LogWriter:
         self(title)
         self("-" * len(title))
 
+    #: The width the value column starts at. A key at least this long gets ONE space instead of
+    #: being allowed to run into its value: `{key:<28}` silently concatenates when the key is
+    #: longer, and the alchemical Outputs section produced
+    #: `plan.b663f7bf42da/combined.pdbmd_script/plan.b663f7bf42da/combined.pdb` -- two paths read
+    #: as one, in the log a person checks a generated run against.
+    FIELD_WIDTH = 28
+
     def field(self, key: str, value: Any) -> None:
-        self(f"  {key:<28}{value}")
+        self(f"  {key}{' ' * max(1, self.FIELD_WIDTH - len(key))}{value}")
 
     # -- the machine half -------------------------------------------------------------------
 

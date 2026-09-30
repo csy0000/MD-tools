@@ -177,7 +177,7 @@ starts from exactly these files.
 | [**cMD**](cMD.md) | a long unbiased simulation of the same complex, as the reference every enhanced method is compared against | published, `0.6.1` — 1 µs |
 | [**AIS**](AIS.md) | annealing a weakened pocket back to full strength | published, `0.6.1` — usable for the ligand alone, not for the ligand plus its shell |
 | **Umbrella sampling** | a potential of mean force along the ligand–protein centre-of-mass distance | planned, 0.6.3 |
-| **Alchemical (TI, FEP)** | absolute and relative binding free energies on this complex | planned, 0.7.0 |
+| **Alchemical — ligand to ligand** | absolute and relative binding free energies on this complex | planned, 0.6.5 |
 
 *Umbrella sampling arrives in 0.6.3 and the alchemical pages in 0.7.0. They are listed here so the
 shape of the set is visible; neither is written yet, and neither is linked to a page that does not

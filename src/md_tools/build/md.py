@@ -80,6 +80,30 @@ def alchemical_path(resolved: dict[str, Any], *, endpoint_a: str = "A", endpoint
             "components move together, until that decision is recorded.")
     return linear_path(ALCHEMICAL_COMPONENTS, endpoint_a=endpoint_a, endpoint_b=endpoint_b)
 
+
+def _alchemical_endpoint_names(plan_object) -> tuple[str, str]:
+    """What to CALL the two ends of the path, taken from the plan.
+
+    A mutation's ends are the two packages, so their references name them. A DECOUPLING has one
+    package: `endpoints.B.reference` in its record is None, because endpoint B is the ligand absent
+    rather than another molecule. Passing that None straight through produced
+    `PathError: a path names both endpoints`, from `build-md`, after the plan had already been
+    copied into the run directory -- a refusal that named neither the plan nor the mode, for a
+    configuration that was entirely correct.
+
+    So a decoupling's ends are named by what they ARE, and with the names the cycle module already
+    uses (`coupled` / `decoupled`) rather than a second spelling invented here: the hydration
+    campaign in `docs/openmm_methods/alchemy/validation.md` labelled its legs through
+    `md_tools.alchemy.cycles`, and a generated leg must be comparable with those records.
+    """
+    from ..alchemy.cycles import COUPLED, DECOUPLED
+
+    endpoints = plan_object.record["endpoints"]
+    if endpoints["B"].get("absent"):
+        return COUPLED, DECOUPLED
+    return endpoints["A"]["reference"], endpoints["B"]["reference"]
+
+
 #: rREST2 -- REST2 plus a Boltzmann reservoir refresh of the top rung -- is ARCHIVED for 0.5.4
 #: (user, 2026-09-17). Its protocol name and its `reservoir` section are refused BY NAME, before
 #: the schema's generic unknown-value message could suggest a near miss, because the value has not
@@ -3007,17 +3031,15 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
 
         s_values = alchemical_lambda_values(resolved)
         knot = block.get("staged_knot")
-        path_object = alchemical_path(
-            resolved, endpoint_a=plan_object.record["endpoints"]["A"]["reference"],
-            endpoint_b=plan_object.record["endpoints"]["B"]["reference"])
+        endpoint_a, endpoint_b = _alchemical_endpoint_names(plan_object)
+        path_object = alchemical_path(resolved, endpoint_a=endpoint_a, endpoint_b=endpoint_b)
         environment = plan_object.record["environment"]["solvation"]
         prepare_leg(out_dir / "leg", plan=plan_object, hamiltonian=hamiltonian, path=path_object,
                     s_values=s_values, temperature_k=float(resolved["dynamics"]["temperature_K"]),
                     pressure_bar=(float(resolved["dynamics"]["pressure_bar"])
                                   if environment == "explicit" else None),
                     environment="solvent" if environment == "explicit" else "vacuum",
-                    endpoint_a=plan_object.record["endpoints"]["A"]["reference"],
-                    endpoint_b=plan_object.record["endpoints"]["B"]["reference"],
+                    endpoint_a=endpoint_a, endpoint_b=endpoint_b,
                     scheme=f"amber18-{plan_object.mode}/{plan_object.record['junction_policy']}")
         for name in ("leg.json", "plan.json", "system.xml", "topology.pdb"):
             note(out_dir / "leg" / name)
@@ -3033,8 +3055,13 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         log.heading("alchemical")
         log.field("plan", f"{copied_plan.name} ({plan_object.mode}, "
                           f"{plan_object.record['junction_policy']})")
-        log.field("end states", f"{plan_object.record['endpoints']['A']['reference']} -> "
-                                f"{plan_object.record['endpoints']['B']['reference']}")
+        # NOT the raw references: a decoupling's endpoint B has none, and this line printed
+        # `... -> None` where a reader needs to be told what the far end of the path IS.
+        log.field("end states",
+                  f"{plan_object.record['endpoints']['A']['reference']} -> "
+                  + ("the ligand ABSENT (decoupled)"
+                     if plan_object.record["endpoints"]["B"].get("absent")
+                     else str(plan_object.record["endpoints"]["B"]["reference"])))
         log.field("environment", environment)
         log.field("windows", f"{len(s_values)} at s = "
                              + ", ".join(f"{v:g}" for v in s_values))

@@ -507,10 +507,14 @@ def build_parser() -> argparse.ArgumentParser:
     # -- combine-topology ---------------------------------------------------------------------
     combine = sub.add_parser(
         "combine-topology",
-        help="combine two ligand packages into an alchemical topology plan (0.7.0, in progress)",
-        description="Build an alchemical topology plan -- single, hybrid or dual topology -- from "
-                    "two ligand parameter packages, one environment holding the first, and an "
-                    "atom map. The packages' parameters are used exactly as recorded. The plan "
+        help="build an alchemical topology plan from ligand packages and an environment",
+        description="Build an alchemical topology plan -- single, hybrid, dual or decoupling -- "
+                    "from a ligand parameter package and the environment holding it, plus (for a "
+                    "transformation) a second package and an atom map. `decoupling` has ONE "
+                    "endpoint: endpoint B is the same ligand ABSENT, which is what an absolute "
+                    "hydration or binding free energy needs, and it takes no second package, no "
+                    "map and no pose. The packages' parameters are used exactly as recorded. The "
+                    "plan "
                     "is written into a NEW directory; a map proposed with `map: {automatic: "
                     "true}` is written beside it, as <odir>.map.yaml, for review. Under "
                     "construction for 0.7.0: nothing downstream consumes a plan yet.")

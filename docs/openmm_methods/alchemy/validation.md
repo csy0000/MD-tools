@@ -117,9 +117,12 @@ is reported, never gated on.
 
 ## What this does not show
 
-* **Nothing about a generated run directory.** These campaigns were driven from Python
-  (`md_tools.alchemy.campaign`). `build-md` and `md-run` accept `protocol: alchemical` but refuse to
-  run one; see [README.md](README.md).
+* **These nine legs were driven from Python** (`md_tools.alchemy.campaign`), because they predate
+  `build-md` generating an alchemical directory. The generated route has since been run on the same
+  calculation and lands on the same number: see the
+  [ethanol hydration tutorial](../../tutorial/ethanol/hydration.md), −3.648 ± 0.107 against the
+  −3.523 ± 0.025 below. The plan the CLI builds is bit-identical to the plan these legs used, which
+  is asserted by `tests/test_combine_decoupling.py` rather than assumed.
 * **Nothing about protein–ligand binding.** A decoupling in water is not a decoupling in a binding
   site, where the sampling problem is the whole difficulty.
 * **Nothing about a mutation with a charge change**, an atom mapping across a ring, or softcore at
