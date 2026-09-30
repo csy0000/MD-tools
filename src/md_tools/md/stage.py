@@ -900,7 +900,11 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             Path(args.out_dir) if getattr(args, "out_dir", None) else log_path.parent,
             stage=stage, definition=getattr(checked, "cv_definition", None) or _stage_definition(
                 stage, checked),
-            overwrite=bool(getattr(args, "overwrite", False)))
+            overwrite=bool(getattr(args, "overwrite", False)),
+            # THIS stage's tree. The equilibration stages share one `-odir`, so anything asked
+            # of a checkpoint's own step convention must be asked of the tree this invocation
+            # would resume rather than of whichever trees happen to sit beside it.
+            own_checkpoints=chk_path.parent / f"{chk_path.stem}.checkpoints")
     except ContinuationError as refusal:
         print(f"{name}: {refusal}", file=sys.stderr)
         return 2
@@ -1311,10 +1315,20 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             # It REFUSES rather than defaulting the offset to zero. Zero is right only for a
             # stage that began at step 0, and where it is wrong it is wrong silently -- which is
             # the whole failure this record now exists to prevent.
+            #
+            # Unreachable in practice, and kept as the backstop it is: `validate_stage_continuation`
+            # refuses this record in the READ-ONLY phase above, before `LogWriter` has touched the
+            # prior run's `.out` or its machine record. A refusal here would replace that account
+            # with a `status: failed` one for a run that never started -- the same mistake the
+            # committed CV prefix check was moved out of, measured happening again.
             if "absolute_step" not in meta:
                 raise SystemExit(
-                    f"the committed checkpoint under {checkpoints} records `steps_done` without "
-                    f"the absolute step that says what it counts from.\n"
+                    f"the committed checkpoint under {checkpoints} was written by md-tools "
+                    f"0.6.3 or earlier, and cannot be resumed by this version.\n"
+                    f"  It records `steps_done` without the `absolute_step` that says what that "
+                    f"count is measured from. The pairing arrived in 0.6.4, so a record without "
+                    f"it predates the fix -- which is all the record can prove, and is why the "
+                    f"version above is a bound rather than an exact one.\n"
                     f"  It was written by a build that stored the ABSOLUTE step under that key, "
                     f"while this one stores the stage's own progress. For a stage that began at "
                     f"step 0 the two agree; for any later stage -- this one continues from a "
@@ -1688,6 +1702,13 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             checkpoints,
             write_checkpoint=lambda path: simulation.saveCheckpoint(str(path)),
             state={"fingerprint": fingerprint, "steps_done": steps,
+                   # ON THE FINAL GENERATION TOO, and for the same reason the CV prefix below
+                   # had to be added here: this commit claims to go through the same transaction
+                   # as every periodic one, so a field only the periodic path supplies makes the
+                   # last generation of every stage look like a record from an older build. It
+                   # did -- a freshly completed `eq_1` was refused as pre-0.6.4 until this line
+                   # existed. `steps_done` is already the stage's own progress here.
+                   "absolute_step": int(simulation.currentStep),
                    **_checkpoint_identity(stage, name, seed, acceleration, timestep_fs),
                    "streams": _stream_counts(
                        trajectory=traj_path, state_csv=info_path,

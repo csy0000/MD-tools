@@ -80,6 +80,18 @@ def _run(project: Path, destination: Path, *extra, environment=None):
     return subprocess.run(
         # The production stage: the retired `--all-in-one` md.py ran the whole chain, and every
         # equilibration length above is 0, so this is the same dynamics.
+        #
+        # WHAT THIS FIXTURE CANNOT SEE. Because those lengths are 0 and this runs the production
+        # script on its own, `simulation.currentStep` begins at 0 and the absolute step EQUALS
+        # the stage-relative one. Every alignment asserted below is an identity here -- the
+        # MDTraj recomputation included -- so an offset between the two conventions cannot show
+        # up, whatever its value. One did: a real chain wrote `0 600 700 ... 1000` where this
+        # fixture writes `0 5 10 ... 40`, and handed a 10-frame trajectory the indices 3..12.
+        #
+        # The fixture is deliberately left as it is: zero-equilibration production is a real
+        # configuration and this file checks it thoroughly. The case it cannot express lives in
+        # tests/test_cv_alignment_across_stages.py, which runs the whole generated chain with
+        # NON-ZERO equilibration. Anything about step axes or frame alignment belongs there.
         [sys.executable, str(project / "cMD-run1" / "cMD.py"),
          "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-odir", str(destination), "--cpu", *extra],

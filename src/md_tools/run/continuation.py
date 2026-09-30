@@ -146,17 +146,30 @@ def validate_ais_continuation(out_dir, *, definition, schedule, chosen, selected
             + "\n  - ".join(problems))
 
 
-def validate_stage_continuation(destination, *, stage, definition, overwrite=False) -> None:
-    """A cMD stage's committed prefix, before the stage opens its own records.
+def validate_stage_continuation(destination, *, stage, definition, overwrite=False,
+                                own_checkpoints=None, stage_name=None) -> None:
+    """A cMD stage's committed records, before the stage opens its own.
 
     The stage continues automatically from its committed generation, so this is the ordinary
     resume path and the point at which it would truncate its appendable streams.
+
+    WHICH TREE IS THIS STAGE'S. The equilibration stages of a chain share one `-odir`, so
+    judging a stage on every `*.checkpoints` beneath it judges it on its NEIGHBOURS' records --
+    measured: `eq_2` refused over `eq_1`'s completed checkpoint, which it never reads. So the
+    step-convention check is asked only of the tree this invocation would actually resume,
+    identified either by `own_checkpoints` (the runtime knows its own path) or by the stage name
+    the generation itself records (`state["stage"]`, which `verify_completed_stage` matches on
+    too). Given neither, nothing is assumed and the check is skipped rather than applied to
+    somebody else's record.
+
+    The CV prefixes stay directory-wide: each is matched to its own stage's series by stem, and a
+    damaged one anywhere in the tree is worth refusing before a run appends to it.
 
     `--overwrite` is not a continuation. It starts CLEAN and deliberately does not load the
     generations it was asked to replace, so validating them would refuse a run precisely because
     the data it is about to discard is unusable -- which is the reason the flag exists.
     """
-    if definition is None or overwrite:
+    if overwrite:
         return
     destination = Path(destination)
     if not destination.is_dir():
@@ -166,14 +179,49 @@ def validate_stage_continuation(destination, *, stage, definition, overwrite=Fal
     from ..openmm.checkpoint import POINTER_NAME, CheckpointError, read_committed
 
     problems: list[str] = []
-    for checkpoints in sorted(destination.rglob("*.checkpoints")):
-        if not (checkpoints / POINTER_NAME).is_file():
+    #: Checkpoint trees written under the old `steps_done` convention. Collected rather than
+    #: reported one by one: the explanation is the same for every one of them, and a chain has a
+    #: tree per stage, so repeating it four times buries the list of what is affected.
+    legacy: list[Path] = []
+    own = Path(own_checkpoints).resolve() if own_checkpoints else None
+    for tree in sorted(destination.rglob("*.checkpoints")):
+        if not (tree / POINTER_NAME).is_file():
             continue
         try:
-            committed = read_committed(checkpoints)
+            committed = read_committed(tree)
         except CheckpointError:
             continue
         state = (committed or {}).get("state") or {}
+
+        # WHICH STEP CONVENTION THIS RECORD USES, checked whether or not collective variables
+        # are enabled: it is a property of the checkpoint, not of the reporting.
+        #
+        # `steps_done` is the stage's OWN progress, and a generation says so by carrying
+        # `absolute_step` beside it. A record without that key was written by a build that stored
+        # the ABSOLUTE step under `steps_done`, and once the stage's origin is unknown the two
+        # are indistinguishable -- both are plain, plausible step counts. Reading the absolute
+        # one as relative makes `remaining = steps - done` too small, so the stage integrates
+        # less than it was asked for and reports completion anyway.
+        #
+        # It is refused HERE, in the read-only phase, rather than in the stage's resume branch.
+        # A refusal there replaces the prior run's `.out` and machine record with a `status:
+        # failed` account of a run that never started -- which is the same mistake the committed
+        # CV prefix check was moved out of, and it was measured happening again.
+        #
+        # ONLY THE TREE THIS INVOCATION WOULD RESUME. The equilibration stages of a chain share
+        # one `-odir`, so scanning every `*.checkpoints` beneath it judges a stage on its
+        # NEIGHBOURS' records: `eq_2` was refused over `eq_1`'s completed checkpoint, which it
+        # never reads. When the caller names its own tree, that is the only one considered.
+        mine = (tree.resolve() == own if own is not None
+                else (str(state.get("stage")) == str(stage_name) if stage_name else False))
+        if mine and "absolute_step" not in state:
+            legacy.append(tree)
+            continue
+
+        if definition is None:
+            # Nothing else to check here: the remainder of this loop is about the CV series, and
+            # this run has no definition to check one against.
+            continue
         entry = state.get("cv_prefix")
         if entry is None:
             continue
@@ -181,8 +229,8 @@ def validate_stage_continuation(destination, *, stage, definition, overwrite=Fal
         # `<stem>.checkpoints` beside `<stem>.cv.csv` -- and taking the first `*.cv.csv` in the
         # directory paired stage `min`'s checkpoint with the production stage's series, then
         # refused the run over a disagreement between two different stages' files.
-        stem = checkpoints.name[: -len(".checkpoints")]
-        candidate = checkpoints.parent / f"{stem}.cv.csv"
+        stem = tree.name[: -len(".checkpoints")]
+        candidate = tree.parent / f"{stem}.cv.csv"
         if not candidate.is_file():
             continue
         series = [candidate]
@@ -198,6 +246,22 @@ def validate_stage_continuation(destination, *, stage, definition, overwrite=Fal
         except CVPrefixError as refusal:
             problems.append(str(refusal))
 
+    if legacy:
+        raise ContinuationError(
+            "the committed checkpoint(s) here were written by md-tools 0.6.3 or earlier and "
+            "cannot be resumed by this version:\n  - "
+            + "\n  - ".join(str(path) for path in legacy)
+            + "\n  Each records `steps_done` without the `absolute_step` that says what that "
+              "count is measured from. The pairing arrived in 0.6.4, so a record without it "
+              "predates the fix -- which is all the record can prove, and is why that version "
+              "is a bound rather than an exact one.\n"
+              "  For a stage that began at step 0 the old and new meanings of `steps_done` "
+              "agree. For a stage continued from a restart the old value is larger by however "
+              "many steps came before, so resuming from it would integrate that many steps too "
+              "few and report completion anyway. The stage's origin cannot be recovered from "
+              "the record, so this is refused rather than guessed.\n"
+              "  Pass --overwrite to run the stage again from the beginning, or continue it "
+              "with the version of md-tools that wrote it.")
     if problems:
         raise ContinuationError(
             "the existing collective-variable output cannot be continued:\n  - "
@@ -350,5 +414,9 @@ def validate_public_entry(resolved, out_dir, *, protocol, stage=None,
 
     # `stage` here is the stage NAME the input selected, not a mapping; the resolved document is
     # what carries the collective-variable block a stage check needs.
+    # `stage_name` so the step-convention check can tell THIS stage's committed generation from
+    # its neighbours' in a shared `-odir`: `md-run` creates the directory and rewrites
+    # `resolved.config` before it dispatches, so a refusal the runtime was always going to make
+    # must also be reachable here, before that happens.
     validate_stage_continuation(out_dir, stage=resolved, definition=definition,
-                                overwrite=overwrite)
+                                overwrite=overwrite, stage_name=stage)
