@@ -249,6 +249,82 @@ def test_no_commit_claims_more_steps_than_the_stage_has(completed, key):
         f"{key} is {STAGE_STEPS[key]} steps long, but " + ", ".join(overrun))
 
 
+def test_a_checkpoint_without_the_step_convention_refuses_and_touches_nothing(completed, tmp_path):
+    """An old-convention record is refused, in the READ-ONLY phase, before any log is opened.
+
+    `steps_done` alone cannot say what it counts from, so a record lacking `absolute_step` is
+    ambiguous and is refused rather than guessed. Two things are asserted, and the second is the
+    one that is easy to get wrong: the refusal must not replace the prior run's `.out` or its
+    machine record with a `status: failed` account of a run that never started. Completion is
+    read from a machine record, which is exactly why a rejected attempt may not become one.
+    """
+    import json
+    import shutil
+
+    from md_tools.run.continuation import ContinuationError, validate_stage_continuation
+
+    tree = tmp_path / "run"
+    shutil.copytree(completed, tree, symlinks=True)
+    checkpoints = tree / "cMD.checkpoints"
+    if not (checkpoints / "current_checkpoint.json").is_file():
+        pytest.skip("the stage kept no committed checkpoint to age")
+
+    # Age every generation to the old convention by dropping the key, exactly as a record from
+    # before it existed would look.
+    aged = 0
+    for generation in (checkpoints / "checkpoints").glob("generation_*.json"):
+        document = json.loads(generation.read_text(encoding="utf-8"))
+        if document["state"].pop("absolute_step", None) is not None:
+            generation.write_text(json.dumps(document), encoding="utf-8")
+            aged += 1
+    assert aged, "no generation carried `absolute_step`, so there was nothing to age"
+
+    guarded = {path: path.read_bytes() for path in sorted(tree.glob("cMD.*"))
+               if path.is_file() and path.suffix in {".out", ".log", ".csv"}}
+    assert guarded, "nothing to protect: the run wrote no .out, .log or .csv"
+
+    # THE RUNTIME'S ROUTE: it knows its own checkpoint path.
+    with pytest.raises(ContinuationError) as refusal:
+        validate_stage_continuation(tree, stage={}, definition=None, own_checkpoints=checkpoints)
+    assert "0.6.3 or earlier" in str(refusal.value), str(refusal.value)
+    assert "--overwrite" in str(refusal.value)
+
+    # THE PUBLIC SURFACE'S ROUTE: it has the stage name, and the generation records one.
+    import json as _json
+
+    recorded = _json.loads(
+        sorted((checkpoints / "checkpoints").glob("generation_*.json"))[-1]
+        .read_text(encoding="utf-8"))["state"].get("stage")
+    if recorded:
+        with pytest.raises(ContinuationError):
+            validate_stage_continuation(tree, stage={}, definition=None, stage_name=recorded)
+
+    # AND A NEIGHBOUR'S RECORD IS NOT THIS STAGE'S BUSINESS: the equilibration stages share one
+    # `-odir`, so an aged tree must not refuse a stage that never reads it.
+    validate_stage_continuation(tree, stage={}, definition=None,
+                                own_checkpoints=tree / "nothing-of-mine.checkpoints")
+
+    for path, before in guarded.items():
+        assert path.read_bytes() == before, f"the refusal modified {path.name}"
+
+
+def test_overwrite_does_not_validate_the_generations_it_replaces(completed, tmp_path):
+    """`--overwrite` starts CLEAN, so it must not refuse over data it is about to discard."""
+    import json
+    import shutil
+
+    from md_tools.run.continuation import validate_stage_continuation
+
+    tree = tmp_path / "run"
+    shutil.copytree(completed, tree, symlinks=True)
+    for generation in (tree / "cMD.checkpoints" / "checkpoints").glob("generation_*.json"):
+        document = json.loads(generation.read_text(encoding="utf-8"))
+        document["state"].pop("absolute_step", None)
+        generation.write_text(json.dumps(document), encoding="utf-8")
+
+    validate_stage_continuation(tree, stage={}, definition=None, overwrite=True)
+
+
 def test_the_reported_torsion_is_the_claimed_frames_torsion(completed):
     """THE test: recompute each aligned row's torsions from the frame it names, independently.
 
