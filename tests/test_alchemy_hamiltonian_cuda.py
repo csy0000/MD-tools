@@ -38,7 +38,19 @@ from md_tools.alchemy.hamiltonian import PUBLIC_PARAMETERS as NAMES  # noqa: E40
 #: Taken from the Hamiltonian, not restated. 0.6.4 split the single bonded component
 #: into `lambda_bonds`, `lambda_angles`, `lambda_torsions` (OpenFE's names); a test
 #: carrying its own copy of the list would have kept passing against a stale one.
+#: (electrostatics, sterics, bonded) -- the three bonded components move together here, which is
+#: what the single `lambda_bonded` these cases were written against meant. Expanded by `_state`.
 STATES = [(v, v, v) for v in (0.0, 0.25, 0.5, 0.75, 1.0)] + [(1.0, 0.5, 0.3), (0.4, 1.0, 0.0)]
+
+
+def _state(t):
+    """A triple -> the five public parameters. NEVER `zip`: NAMES is longer than the triple, so
+    zip would silently drop `lambda_angles` and `lambda_torsions` and set_state would refuse --
+    and a shim that filled them from t[0] instead would turn the two OFF-DIAGONAL cases above
+    into diagonal ones and keep passing, which is worse."""
+    elec, sterics, bonded = t
+    return {"lambda_electrostatics": elec, "lambda_sterics": sterics,
+            "lambda_bonds": bonded, "lambda_angles": bonded, "lambda_torsions": bonded}
 FLOOR = {"mixed": 1e-6, "double": 1e-10}
 
 
@@ -70,7 +82,7 @@ def test_cuda_matches_reference_per_force_group(precision, tail):
     assert platform_name == "CUDA", platform_name
     report = []
     for t in STATES:
-        state = dict(zip(NAMES, t)) if len(t) == len(NAMES) else {n: t[0] for n in NAMES}
+        state = _state(t)
         h.set_state(cuda, state)
         h.set_state(ref, state)
         for name, g in FORCE_GROUPS.items():
@@ -148,7 +160,7 @@ def test_cuda_forces_are_the_gradient_of_the_energy(precision):
     report = {}
     cuda = _context(h.system, x, "CUDA", precision)
     for v in (0.0, 0.25, 0.5, 0.75, 1.0):
-        h.set_state(cuda, {n: v for n in NAMES})
+        h.set_state(cuda, _state((v, v, v)))
         rows = fx.fd_force_check(cuda, FD_ATOMS, steps)
         report[v] = _worst(rows)
         worst = max(rows, key=lambda r: r["richardson_error"])
@@ -156,7 +168,7 @@ def test_cuda_forces_are_the_gradient_of_the_energy(precision):
     r0 = float(np.linalg.norm(x[12] - x[9])) + steps[-1] / 4
     for kind, size in (("step", 0.2), ("kink", 50.0)):
         broken = _context(fx.defective_system(h, "softcore_b_lj", r0, kind, size), x, "CUDA", precision)
-        h.set_state(broken, dict(zip(NAMES, (1.0, 1.0, 1.0))))
+        h.set_state(broken, _state((1.0, 1.0, 1.0)))
         report[kind] = _worst(fx.fd_force_check(broken, [9, 12], steps))
         assert report[kind] > bound, (precision, kind, report[kind], bound)
     print(f"\n{precision}: bound {bound:.2e} kJ/mol/nm; " +

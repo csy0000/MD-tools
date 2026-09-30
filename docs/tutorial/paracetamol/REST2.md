@@ -337,11 +337,86 @@ barrier twice in 10 ns against the ladder's 282.
     the rotation — a neighbouring group, a binding pose — because then the two orientations stop
     being equivalent and the failure to interconvert becomes a real one.
 
+## 8. Extending it: four more chunks of 10 ns
+
+The run above is 10 ns per state. To take it to 50 ns, add four more 10 ns segments — **not one
+40 ns segment**, for a reason given below.
+
+**Extension is out of place.** `--extend-from` reads a COMPLETED run, leaves it byte-for-byte
+unchanged, and writes a new directory holding only the new dynamics. A 50 ns chain is therefore
+five immutable directories, not one that grew:
+
+```text
+paracetamol/
+  REST2-run1/          10 ns   the original
+  REST2-run1-ext1/     10 ns   extends REST2-run1
+  REST2-run1-ext2/     10 ns   extends REST2-run1-ext1
+  REST2-run1-ext3/     10 ns   extends REST2-run1-ext2
+  REST2-run1-ext4/     10 ns   extends REST2-run1-ext3
+```
+
+Each segment extends the **previous completed one**, not the original. `--extend N` is in
+EXCHANGE ATTEMPTS, and this ladder attempts one every 1000 steps, so 10 ns is
+
+```text
+10 ns / 2 fs  =  5,000,000 steps  =  5000 exchanges at 1000 steps each
+```
+
+— the same `number_of_exchanges: 5000` the configuration already names. One chunk:
+
+```bash
+mkdir -p REST2-run1-ext1 && cd REST2-run1-ext1
+
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1,2,3,4 \
+mpirun -n 4 md-openmm md-run -ng 4 -i ../input/REST2.in -p ../build/built.pdb \
+  --groupfile ../REST2-run1/remd_groupfile.1 -odir . \
+  --extend-from ../REST2-run1 --extend 5000 \
+  -o remd_records/REST2_prod1.out -log remd_records/REST2_prod1.log \
+  -r remd_records/restart_prod1.json
+```
+
+and the next chunk is the same command with `ext1 → ext2` and `--extend-from ../REST2-run1-ext1`.
+
+**The group file is still the parent's**, and still names the same `build/REST2/system_state<i>.xml`
+saved states. An extension integrates the same Hamiltonians as the run it continues; a ladder that
+changed states mid-chain would not be one experiment.
+
+### Why four chunks and not one
+
+!!! warning "An extension segment is atomic: an interrupted one is REDONE, not resumed"
+
+    There is no mid-extension restart. `--resume` with `--extend-from` is refused as two different
+    operations. Worse, `--resume` alone on a partial segment's directory is **not** refused — it
+    would continue the run and write a `restart.json` with no `extends` block, so the segment would
+    finish looking like an ordinary run, with its parent pinning and chain accounting silently
+    gone.
+
+    So an interruption costs you the whole segment. **Four 10 ns chunks lose at most 10 ns; one
+    40 ns segment loses 40.** That is the entire reason to chunk.
+
+    Re-running into a partial directory is refused three ways (`--force` is refused with
+    `--extend-from`, `--overwrite` does not apply, and the existing `-x`/`-r`/checkpoint collide).
+    The answer is a **fresh** directory and the whole segment again.
+
+### What the chain records
+
+Each segment's `restart.json` carries an `extends` block pinning its parent by content, plus the
+parent's final exchange index as its own starting point. That is what makes the chain checkable
+rather than a naming convention: a segment cannot be re-parented by renaming a directory, and a
+gap or an overlap between two segments is visible in the records rather than inferred from
+filenames.
+
+For analysis, treat the five segments as one trajectory in order. Each carries its own
+`solute_state<i>_prod1.nc` per state, and the state index means the same thing in all of them —
+state 0 is the physical ensemble in every segment, as it is in the original run.
+
 ## Next
 
 * where the parameters came from: [cMD: paracetamol](../paracetamol/cMD.md)
 * the same parameters in a protein pocket:
   [the TYK2 complex](../tyk2-ejm31/index.md)
 * a ladder over a peptide: [REST2: chignolin](../chignolin/REST2.md)
+* the method page's full account of extension, including what each record holds:
+  [REST2 — storage, restart and validation](../../openmm_methods/REST2/README.md)
 * register the finished directory as a dataset:
   [Registering a finished run](../../basics/data-register/index.md)

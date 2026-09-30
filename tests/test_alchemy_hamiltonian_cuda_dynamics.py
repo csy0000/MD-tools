@@ -34,6 +34,17 @@ def _cuda_context(system, x, integrator, precision="double"):
     return c
 
 
+def _state(t):
+    """(electrostatics, sterics, bonded) -> the five public parameters, the three bonded ones
+    together. NEVER `zip`: NAMES is longer than the triple since 0.6.4 split the bonded component
+    three ways, so zip drops two and `set_state` refuses. The shim that filled them from t[0]
+    instead was worse -- it turned the OFF-DIAGONAL cases below, (0.8, 0.3, 0.6) and
+    (0.25, 0.5, 0.75), into diagonal ones, and they kept passing."""
+    elec, sterics, bonded = t
+    return {"lambda_electrostatics": elec, "lambda_sterics": sterics,
+            "lambda_bonds": bonded, "lambda_angles": bonded, "lambda_torsions": bonded}
+
+
 def _nve_excursion(system, x, set_state):
     """Max |E_total - E_total(0)| over 2000 x 0.2 fs of velocity Verlet, double precision, after
     the same minimisation and the same seeded velocities."""
@@ -93,7 +104,7 @@ def test_set_state_reaches_a_live_cuda_context():
     positions = live.getState(getPositions=True).getPositions(asNumpy=True)._value
     assert np.all(np.isfinite(positions))
     for t in ((0.0, 0.0, 0.0), (0.8, 0.3, 0.6), (1.0, 1.0, 1.0)):
-        state = dict(zip(NAMES, t)) if len(t) == len(NAMES) else {n: t[0] for n in NAMES}
+        state = _state(t)
         moved = h.energy(live, state)
         fresh = _cuda_context(h.system, positions, openmm.VerletIntegrator(0.001), "mixed")
         assert moved == pytest.approx(h.energy(fresh, state), rel=1e-6, abs=1e-3), t
@@ -139,10 +150,10 @@ def test_npt_on_cuda_leaves_nothing_stale(precision):
     def fresh_energy(t, vectors):
         fresh = _cuda_context(h.system, pos, openmm.VerletIntegrator(0.001), precision)
         fresh.setPeriodicBoxVectors(*vectors)
-        return h.energy(fresh, dict(zip(NAMES, t)) if len(t) == len(NAMES) else {n: t[0] for n in NAMES})
+        return h.energy(fresh, _state(t))
     stale = [v._value for v in sa.getDefaultPeriodicBoxVectors()]
     for t in ((0.0, 0.0, 0.0), (0.25, 0.5, 0.75), (1.0, 1.0, 1.0)):
-        moved = h.energy(live, dict(zip(NAMES, t)) if len(t) == len(NAMES) else {n: t[0] for n in NAMES})
+        moved = h.energy(live, _state(t))
         again = fresh_energy(t, box)
         tol = rel * max(1.0, abs(again)) + 1e-6
         assert moved == pytest.approx(again, abs=tol), (precision, t, moved, again, tol)
