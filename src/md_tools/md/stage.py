@@ -1304,7 +1304,44 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                     f"  An OpenMM checkpoint is binary and platform-specific. Continue this "
                     f"stage on the platform it was written on, or delete {checkpoints} to start "
                     f"the stage over.") from None
+            # `steps_done` IS THIS STAGE'S PROGRESS, and a generation says so by carrying the
+            # absolute step alongside it. A generation without `absolute_step` was written by a
+            # build that stored the absolute step under `steps_done`, and the two are
+            # indistinguishable once the stage's origin is unknown: both are plain step counts,
+            # both are plausible, and reading the absolute one as relative makes
+            # `remaining = steps - done` too small, so the stage integrates less than it was
+            # asked for and still reports completion.
+            #
+            # It REFUSES rather than defaulting the offset to zero. Zero is right only for a
+            # stage that began at step 0, and where it is wrong it is wrong silently -- which is
+            # the whole failure this record now exists to prevent.
+            if "absolute_step" not in meta:
+                raise SystemExit(
+                    f"the committed checkpoint under {checkpoints} records `steps_done` without "
+                    f"the absolute step that says what it counts from.\n"
+                    f"  It was written by a build that stored the ABSOLUTE step under that key, "
+                    f"while this one stores the stage's own progress. For a stage that began at "
+                    f"step 0 the two agree; for any later stage -- this one continues from a "
+                    f"restart -- the older value is larger by however many steps came before, "
+                    f"and resuming from it would integrate that many steps too few and still "
+                    f"report completion.\n"
+                    f"  The stage's origin cannot be recovered from the record, so this is "
+                    f"refused rather than guessed. Pass --overwrite to run this stage again from "
+                    f"the beginning, or continue it with the version of md-tools that wrote it.")
             done = int(meta.get("steps_done", 0))
+            recorded_absolute = int(meta["absolute_step"])
+            restored_absolute = int(simulation.currentStep)
+            if recorded_absolute != restored_absolute:
+                # The Context and its sidecar are committed in one transaction precisely so that
+                # they cannot describe different instants. If they do, something replaced one
+                # without the other and the pair is not a checkpoint of anything.
+                raise SystemExit(
+                    f"the committed checkpoint under {checkpoints} does not describe the state "
+                    f"it restored: the record says absolute step {recorded_absolute}, the "
+                    f"restored Context is at step {restored_absolute}.\n"
+                    f"  These are written in one generation transaction and cannot disagree "
+                    f"unless a checkpoint or a sidecar was replaced on its own. Delete "
+                    f"{checkpoints} to start this stage over.")
             # Cut every appendable stream back to what the checkpoint VOUCHES for. A trajectory
             # is flushed as it is written, so after a crash it is routinely longer than the
             # checkpoint describing it; keeping those extra frames would put the coordinates
@@ -1401,6 +1438,27 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         # a minimisation (`remaining == 0`) never enters that block at all. They stay None there,
         # which is the truthful answer: a stage with no dynamics writes no CV series.
         cv_series = cv_reporter = None
+
+        # THE STAGE'S OWN ORIGIN, on the absolute step axis.
+        #
+        # A stage continued from the previous stage's restart inherits that stage's step count:
+        # the restart carries it, so the production stage of a run with 1500 steps of
+        # equilibration begins at `currentStep == 1500` rather than at 0. Both conventions are
+        # needed -- the absolute step is what an observation is LABELLED with, and the
+        # stage-relative one is what "how much of THIS stage is done" means -- so the offset
+        # between them is computed once, here, and named.
+        #
+        # Deriving it separately at each use is how they came apart. Three defects, one cause:
+        # the CV series labelled its initial row 0 while every propagated row was absolute, so
+        # the first gap was the equilibration total instead of the cadence; the trajectory frame
+        # index was derived from an absolute step as though the file began at step 0, naming
+        # frames that do not exist; and the checkpoint committed an ABSOLUTE `steps_done` that
+        # the resume read as relative, so a resumed stage integrated fewer steps than it was
+        # asked for and reported completion.
+        #
+        # `done` is this stage's own progress, so subtracting it from the restored absolute step
+        # gives the step this stage started at -- on a fresh start and on a resume alike.
+        stage_start_step = int(simulation.currentStep) - int(done)
 
         remaining = steps - done
         if remaining > 0:
@@ -1525,24 +1583,43 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
 
                 trajectory_interval = int(stage.get("trajectory_interval_steps") or 0)
 
-                def _frame_for(step, _interval=trajectory_interval):
-                    # DCD frames are written every `_interval` steps and the first lands at the
-                    # first such step, not at 0. Empty (None) whenever no frame exists here --
-                    # never 0 or -1, both of which are real frame indices.
-                    if _interval <= 0 or step <= 0 or step % _interval:
+                def _frame_for(step, _interval=trajectory_interval, _start=stage_start_step):
+                    # Empty (None) whenever no frame exists at this step -- never 0 or -1, both
+                    # of which are real frame indices.
+                    #
+                    # The index is into THIS STAGE'S trajectory file, which begins where the
+                    # stage began, while the trajectory reporter -- like every OpenMM reporter,
+                    # including this one -- fires on the ABSOLUTE grid: `_interval -
+                    # currentStep % _interval`. So a frame exists at each absolute multiple of
+                    # `_interval` after the stage's first step, and the count of those is the
+                    # index.
+                    #
+                    # Indexing the absolute step straight into the file instead assumes the file
+                    # begins at absolute step 0. Measured on a stage that began at 1500: a
+                    # 10-frame trajectory was handed indices 3..12 -- three that exist in no
+                    # file, and seven naming another configuration's frame under this row's step,
+                    # which reads perfectly and is wrong by a fixed amount.
+                    if _interval <= 0 or step <= _start or step % _interval:
                         return None
-                    return step // _interval - 1
+                    return step // _interval - _start // _interval - 1
 
                 cv_reporter = CVReporter(
                     cv_series, interval, periodic=not implicit, timestep_fs=timestep_fs,
-                    frame_index_for_step=_frame_for)
-                # STEP 0, written here because an OpenMM reporter cannot fire before the first
-                # step. Only on a fresh start: on a resume, step 0 was written by the segment
-                # that began the stage and is already in the file.
+                    frame_index_for_step=_frame_for, start_step=stage_start_step)
+                # THE INITIAL OBSERVATION, written here because an OpenMM reporter cannot fire
+                # before the first step. Only on a fresh start: on a resume it was written by the
+                # segment that began the stage and is already in the file.
+                #
+                # At the ABSOLUTE step the stage starts from, which is what every row this
+                # reporter goes on to write is labelled with. A literal 0 here made the initial
+                # row the one row in the file under a different convention -- a first gap of the
+                # whole equilibration instead of one cadence, in a series whose interval is
+                # refused unless it divides the stage exactly so that no such gap can exist.
                 if done == 0:
                     cv_reporter.observe(
                         simulation.context.getState(getPositions=True,
-                                                    enforcePeriodicBox=not implicit), 0)
+                                                    enforcePeriodicBox=not implicit),
+                        stage_start_step)
                 simulation.reporters.append(cv_reporter)
 
             if hamiltonian_identity_record is not None:
@@ -1564,6 +1641,11 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                         fingerprint=fingerprint,
                         identity=_checkpoint_identity(stage, name, seed, acceleration,
                                                       timestep_fs),
+                        # Where this stage began, so a commit can record ITS OWN progress rather
+                        # than the absolute step. The resume path reads `steps_done` as this
+                        # stage's progress (`remaining = steps - done`), and the completion
+                        # record already writes it that way.
+                        start_step=stage_start_step,
                         # A callable per stream, read at commit time: the counts a generation
                         # vouches for have to be what is on disk WHEN it commits, not what was
                         # there when the reporter was constructed.
@@ -2001,11 +2083,14 @@ class _CheckpointWithFingerprint:
     """
 
     def __init__(self, directory, interval: int, *, fingerprint: str,
-                 identity=None, streams=None, cv_prefix=None) -> None:
+                 identity=None, streams=None, cv_prefix=None, start_step: int = 0) -> None:
         self._directory = Path(directory)
         self._interval = int(interval)
         self._fingerprint = fingerprint
         self._identity = dict(identity or {})
+        #: The ABSOLUTE step this stage began at, so `steps_done` can be recorded as THIS
+        #: stage's progress -- which is what the resume path means by it.
+        self._start_step = int(start_step)
         #: name -> callable returning the committed count for that stream, read at commit time.
         self._streams = dict(streams or {})
         #: callable returning the committed CV prefix record, or None when CVs are disabled.
@@ -2022,7 +2107,18 @@ class _CheckpointWithFingerprint:
             self._directory,
             write_checkpoint=lambda path: simulation.saveCheckpoint(str(path)),
             state={"fingerprint": self._fingerprint,
-                   "steps_done": int(simulation.currentStep),
+                   # THIS STAGE'S progress, not the absolute step. The resume path reads this
+                   # key as the stage's own (`remaining = steps - done`) and the completion
+                   # record writes it that way, so a commit that stored the absolute step put
+                   # two conventions under one key -- and the one a resume reads was the wrong
+                   # one. Measured before the fix: a 20000-step production stage after 6000
+                   # steps of equilibration, interrupted and resumed, integrated 14000 steps
+                   # and reported "20000 steps completed".
+                   "steps_done": int(simulation.currentStep) - self._start_step,
+                   # The absolute step as well, because it is the one thing the stage-relative
+                   # count cannot be recovered from on its own, and a reader of a generation
+                   # should not have to know the stage's origin to place it on the run's axis.
+                   "absolute_step": int(simulation.currentStep),
                    **self._identity,
                    "streams": {name: int(count()) for name, count in self._streams.items()},
                    # In the SAME generation transaction as the Context state, so the prefix a

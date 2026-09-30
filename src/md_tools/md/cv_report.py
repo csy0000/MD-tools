@@ -41,7 +41,7 @@ class CVReporter:
     """
 
     def __init__(self, series, interval_steps, *, periodic, timestep_fs,
-                 frame_index_for_step=None):
+                 frame_index_for_step=None, start_step=0):
         self.series = series
         self.interval = int(interval_steps)
         if self.interval < 1:
@@ -49,12 +49,33 @@ class CVReporter:
                              f"got {interval_steps}")
         self.periodic = bool(periodic)
         self.timestep_fs = float(timestep_fs)
+        #: The ABSOLUTE step this stage began at. The cadence is measured from here rather than
+        #: from step 0 of the run: see `describeNextReport`.
+        self.start_step = int(start_step)
         #: Maps an absolute step to the trajectory frame written at it, or None when there is no
         #: frame there. Supplied by the caller, which is what knows the trajectory's cadence.
         self.frame_index_for_step = frame_index_for_step or (lambda _step: None)
 
     def describeNextReport(self, simulation):          # noqa: N802 - OpenMM's interface
-        steps = self.interval - simulation.currentStep % self.interval
+        # THE CADENCE IS THE STAGE'S, measured from the step the stage began at.
+        #
+        # An OpenMM reporter ordinarily fires on the absolute grid -- `interval - currentStep %
+        # interval` -- which is what every other reporter here does, and for a trajectory or a
+        # state table that is right: they promise a cadence and nothing about endpoints.
+        #
+        # A CV series promises more, and `cv/schedule.py` refuses an interval that does not
+        # divide the stage's step count so that it can: step 0 and the final step each appear
+        # EXACTLY ONCE, with uniform spacing throughout, because every downstream time-series
+        # analysis assumes uniform spacing and none can detect a violation. On the absolute grid
+        # those promises hold only when the stage happens to begin on a multiple of the interval.
+        # A stage beginning at 1500 with an interval of 400 would be observed at 1600, 2000, ...
+        # -- a first gap of 100 against a cadence of 400 -- and its final step, 1500 + the stage
+        # length, is not a multiple of 400 and would never be observed at all.
+        #
+        # Measuring from `start_step` makes the grid the one the schedule actually checked. Where
+        # the stage does begin on a multiple, which is the ordinary case, this is the same grid
+        # as before and no existing series changes.
+        steps = self.interval - (simulation.currentStep - self.start_step) % self.interval
         # positions, velocities, forces, energies, wrapped. Only the first is True: see the
         # module note on why asking for energy here would be a category error.
         return (steps, True, False, False, False, self.periodic or None)
