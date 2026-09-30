@@ -30,10 +30,14 @@ md-openmm data-register     a finished tree   -> a verified dataset under $MD_DA
 md-openmm export-reference  a finished run    -> a bundle that runs on OpenMM alone
 ```
 
-**On the 0.7.0 line only**, `md-openmm combine-topology` (two ligand parameter packages, one
-environment and an atom map -> an alchemical topology plan) is the one authorized addition. It is
-UNDER CONSTRUCTION: `md_tools.build.combine` is its surface, `md_tools.alchemy.topology` does the
-work, and nothing downstream consumes a plan yet. See [0.7.0 status](docs/development/0.7.0/STATUS.md).
+**On the 0.7.0 line only**, `md-openmm combine-topology` (a ligand package and the environment
+holding it -- plus, for a transformation, a second package and an atom map -> an alchemical
+topology plan) is the one authorized addition. `md_tools.build.combine` is its surface and
+`md_tools.alchemy.topology` does the work. A plan IS consumed downstream: `build-md` generates a
+lambda ladder from one under `protocol: alchemical`. Four modes -- `single`, `hybrid`, `dual`
+transform one ligand into another; `decoupling` removes one, and its endpoint B is the same ligand
+ABSENT, so it takes no second package and no map.
+See [0.7.0 status](docs/development/0.7.0/STATUS.md).
 
 AIS is `protocol: AIS` in a `build-md` configuration and `protocol = AIS` in an `.in` file. **Do
 not add a sixth command**, and do not add a second executable: `md-run` is a SUBCOMMAND.
@@ -41,7 +45,7 @@ not add a sixth command**, and do not add a second executable: `md-run` is a SUB
 `md-run` is a surface, not an implementation. It parses the Amber-like input, resolves it through
 `md_tools.build.md`, writes the resulting `resolved.config` into `-odir` with the input's sha256,
 and hands the work to the same function a generated script calls — `stage_main`, `replica_main`,
-`ais_main`. If you find run logic in `md_tools.run`, it is in the wrong package.
+`ais_main`, `window_main`. If you find run logic in `md_tools.run`, it is in the wrong package.
 
 **The short flags are Amber's**, and this is contractual:
 
@@ -303,9 +307,12 @@ Do not change these without a failing test that demonstrates a defect.
   become a no-op while the world is plural: N ranks with no coordination are N simulations writing
   over one set of paths, and the result looks complete. A second `except ImportError: return`
   anywhere is a second policy, and it will be the one that runs.
-* **The guard belongs in the runtime, not in `md-run`.** `stage_main`, `replica_main` and
-  `ais_main` run the shared preflight themselves and CONSUME its result, because the generated
-  wrappers call them directly. A safe outer command wrapping an unsafe runtime is worse than no
+* **The guard belongs in the runtime, not in `md-run`.** `stage_main`, `replica_main`, `ais_main`
+  and `window_main` run the shared preflight themselves and CONSUME its result, because the
+  generated wrappers call them directly. `window_main` reaches it one level down, through
+  `run_window`, because a ladder's preflight is per WINDOW: each has its own output paths and its
+  own continuation to validate, and a single check at the top would be checking one window's paths
+  on behalf of twelve. A safe outer command wrapping an unsafe runtime is worse than no
   wrapper: it makes the unsafe path look tested. "Calls the preflight and ignores what it returns"
   is the same defect wearing a better name — if a runtime re-resolves the platform, the machine
   settings or the MPI world, there are two policies again.
