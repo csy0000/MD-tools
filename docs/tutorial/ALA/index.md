@@ -46,9 +46,10 @@ renamed accordingly rather than run at a pressure that means nothing.
 | [**cMD**](cMD.md) | the unbiased reference every method here is checked against, 10 ns | published |
 | [**REST2**](REST2.md) | solute tempering, four states over τ 0 → 0.5 | published |
 | [**AIS**](AIS.md) | annealed importance sampling between two Hamiltonians, with the torsion reweighting checked against the plain simulation | published |
-| **Umbrella sampling** | a potential of mean force along φ | planned, 0.6.3 |
+| [**Umbrella sampling**](umbrella.md) | biasing φ, one window per run, towards a potential of mean force | commands published; the profile itself **not yet measured** |
 | **Alchemical (TI, FEP)** | free energies by transformation | planned, 0.7.0 |
 
-*Umbrella sampling arrives in 0.6.3 and the alchemical pages in 0.7.0. They are listed here so the
-shape of the set is visible; neither is written yet, and neither is linked to a page that does not
-exist.*
+*The umbrella page's build, stages, generated tree and refusals were executed as written, on the
+CPU; its per-window means, the window overlap and the PMF need CUDA and are marked as a gap on the
+page rather than filled. The alchemical pages arrive in 0.7.0 — listed so the shape of the set is
+visible, not written yet, and not linked to a page that does not exist.*

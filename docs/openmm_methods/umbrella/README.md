@@ -70,20 +70,76 @@ it is checked by energy rather than by sampling, in `tests/test_torsion_restrain
 
 ## Running a set of windows
 
-One window per run, one `-odir` each. There is no window scheduler: a campaign is a loop in the
-project's own script, which is where the choice of centres and spacings belongs.
+One window per run. There is no window scheduler: a campaign is a loop in the project's own
+script, which is where the choice of centres and spacings belongs.
+
+**One system root per window, over one shared `build/`.** That is not a style preference. `build-md`
+writes the window's restraint into `input/umbrella.in` as
+`umbrella_file = umbrella.<digest>.yaml`, and `input/` is shared by every run on a system root —
+so a second window under the same root is refused:
+
+```text
+build-md: input/umbrella.in already exists and is not what this configuration resolves to.
+  `input/` is shared by every run on this system: the runs already beside it read THIS file, so
+  replacing it would make their inputs describe a different experiment than the one they ran.
+```
+
+The refusal is right, and it is exactly one file wide: across three centres, `min/resolved.config`,
+`input/min.in` and `input/eq_1.in` come out byte-identical and only `umbrella.in` differs. So give
+each window its own root and let them share the built system, which is genuinely the same system:
 
 ```bash
+# Build once, at the top. Every window reads this one system.
+md-openmm build-top -i ALA.pdb --config build.config \
+    -os build/built.xml -op build/built.pdb -log build/built.log
+
 for centre in -150 -120 -90 -60 -30; do
-  sed "s/centre_deg: -60.0/centre_deg: ${centre}.0/" umbrella.yaml > w.yaml
-  md-openmm build-md -odir ./w${centre} --config example.config
-  ( cd w${centre} && ./run.sh ../build/built.pdb ../build/built.xml )
+  mkdir -p w${centre}
+  ln -sfn ../build w${centre}/build          # relative, so the tree stays movable
+  cp cv.yaml w${centre}/
+
+  # The window's OWN restraint file, and a configuration that names it. Both, together:
+  # a configuration that still points at a shared `umbrella.yaml` biases every window at
+  # whatever that file says, whatever the loop variable is.
+  cat > w${centre}/umbrella.yaml <<YAML
+schema_version: 1
+restraints:
+  - {cv: phi_ALA, form: harmonic, centre_deg: ${centre}.0, force_constant: 100.0}
+YAML
+  cp example.config w${centre}/
+
+  ( cd w${centre} && md-openmm build-md -odir ./run1 --config example.config \
+      && cd run1 && ./run.sh )
 done
 ```
 
-Each run records its own restraint in `build-md.log` under `umbrella_definition`, including the
-resolved atom indices — so a reader of the output does not have to open two files to learn which
-four atoms were biased.
+**Check that the windows differ before running them.** The copied definition is
+content-addressed, so one `ls` answers it — five windows must show five digests:
+
+```bash
+ls w*/run1/umbrella.*.yaml
+```
+
+This is worth a line of script because the failure is invisible in the output. An earlier version
+of this page edited the restraint into a file the configuration did not name; every window then
+resolved the same definition, every run reported `status: completed`, and the profile was five
+copies of one window at −60° with nothing anywhere saying so.
+
+Each run also records its own restraint in `build-md.log` under `umbrella_definition`, including
+the resolved atom indices — so a reader of the output does not have to open two files to learn
+which four atoms were biased:
+
+```yaml
+# umbrella_definition:
+#   source_sha256: ac66d59f044beef42fa85280a38b76470780a0f5760ef302e90aeb93a275b2d7
+#   copied_as: umbrella.ac66d59f044b.yaml
+#   restraints:
+#   - cv: phi_ALA
+#     form: harmonic
+#     centre_deg: -60.0
+#     force_constant_kj_mol_rad2: 100.0
+#     atom_indices: [4, 6, 8, 14]
+```
 
 ## Measured behaviour
 

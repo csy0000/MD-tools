@@ -117,6 +117,7 @@ nav:
           - cMD: tutorial/ALA/cMD.md
           - REST2: tutorial/ALA/REST2.md
           - AIS: tutorial/ALA/AIS.md
+          - Umbrella sampling: tutorial/ALA/umbrella.md
       - Paracetamol:
           - The system: tutorial/paracetamol/index.md
           - cMD: tutorial/paracetamol/cMD.md
