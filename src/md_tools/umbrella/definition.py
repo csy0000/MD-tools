@@ -21,8 +21,19 @@ SCHEMA_VERSION = 1
 #: the two together so a form the configuration accepts is always one the runtime can build.
 RESTRAINT_FORMS = ("harmonic", "flat_bottom")
 
-_REQUIRED = ("cv", "centre_deg", "force_constant")
-_OPTIONAL = ("form", "half_width_deg")
+#: A restraint is written in the units of the variable it restrains, and the KEY NAME carries
+#: them. An angular centre is `centre_deg`; a distance's is `centre_nm`. They are not
+#: interchangeable and a bare number cannot say which it is -- 0.5 is a plausible distance in
+#: nanometres, a plausible angle in radians, and a very weak force constant -- so the wrong
+#: spelling for a kind is refused BY NAME rather than accepted and reinterpreted.
+_CENTRE_KEY = {"degrees": "centre_deg", "nanometers": "centre_nm"}
+_WIDTH_KEY = {"degrees": "half_width_deg", "nanometers": "half_width_nm"}
+#: The force constant's units follow the same rule, and are recorded under a key that states them.
+_CONSTANT_KEY = {"degrees": "force_constant_kj_mol_rad2",
+                 "nanometers": "force_constant_kj_mol_nm2"}
+
+_REQUIRED = ("cv", "force_constant")
+_OPTIONAL = ("form", *_CENTRE_KEY.values(), *_WIDTH_KEY.values())
 
 
 class UmbrellaError(ValueError):
@@ -35,22 +46,45 @@ class UmbrellaRestraint:
 
     cv: str
     form: str
-    centre_deg: float
+    #: In the restrained variable's OWN units -- degrees for an angle or torsion, nanometres for
+    #: a distance. `units` says which, and every spelling below derives from it.
+    centre: float
     force_constant: float
-    half_width_deg: float | None
+    half_width: float | None
     atom_indices: tuple[int, ...]
+    kind: str = "torsion"
+    units: str = "degrees"
+
+    @property
+    def centre_deg(self) -> float | None:
+        """The centre when it is an angular one, else None. The name predates the other kinds."""
+        return self.centre if self.units == "degrees" else None
+
+    @property
+    def half_width_deg(self) -> float | None:
+        return self.half_width if self.units == "degrees" else None
+
+    @property
+    def centre_nm(self) -> float | None:
+        return self.centre if self.units == "nanometers" else None
+
+    @property
+    def half_width_nm(self) -> float | None:
+        return self.half_width if self.units == "nanometers" else None
 
     def record(self) -> dict[str, Any]:
         """What the run writes down about this restraint.
 
         The atom indices are included even though the name determines them: a reader of the
-        output should not have to open two files to learn which four atoms were biased.
+        output should not have to open two files to learn which atoms were biased. Every numeric
+        key names its own units, so a record cannot be read under the wrong ones.
         """
-        out = {"cv": self.cv, "form": self.form, "centre_deg": self.centre_deg,
-               "force_constant_kj_mol_rad2": self.force_constant,
+        out = {"cv": self.cv, "kind": self.kind, "form": self.form,
+               _CENTRE_KEY[self.units]: self.centre,
+               _CONSTANT_KEY[self.units]: self.force_constant,
                "atom_indices": list(self.atom_indices)}
-        if self.half_width_deg is not None:
-            out["half_width_deg"] = self.half_width_deg
+        if self.half_width is not None:
+            out[_WIDTH_KEY[self.units]] = self.half_width
         return out
 
 
@@ -126,23 +160,62 @@ def load_umbrella_definition(path, cv_definition) -> tuple[UmbrellaRestraint, ..
                 f"{where} has force_constant {force_constant}, which applies no bias. A window "
                 f"with no restraint is an unbiased run wearing a window's name.")
 
-        width = entry.get("half_width_deg")
+        # THE UNITS COME FROM THE VARIABLE, and the key must be spelled for them. A `centre_deg`
+        # on a distance is not a centre this build can interpret: accepting it would place the
+        # window at that number of nanometres, which is nobody's intent and samples perfectly
+        # happily. So the right key is required and the wrong one is refused BY NAME.
+        variable = known[name]
+        units = variable.units
+        centre_key = _CENTRE_KEY[units]
+        width_key = _WIDTH_KEY[units]
+        for other_units, other_key in _CENTRE_KEY.items():
+            if other_units != units and entry.get(other_key) is not None:
+                raise UmbrellaError(
+                    f"{where} restrains {name!r}, which is a {variable.kind} measured in {units}, "
+                    f"and gives {other_key} = {entry[other_key]}. Write {centre_key} instead: "
+                    f"{other_key} would have to be reinterpreted as {units} to be used at all, "
+                    f"and a number alone cannot say which units it was written in.")
+        for other_units, other_key in _WIDTH_KEY.items():
+            if other_units != units and entry.get(other_key) is not None:
+                raise UmbrellaError(
+                    f"{where} restrains a {variable.kind} measured in {units} and gives "
+                    f"{other_key} = {entry[other_key]}; write {width_key} instead.")
+        if entry.get(centre_key) is None:
+            raise UmbrellaError(
+                f"{where} restrains {name!r}, a {variable.kind} measured in {units}, and has no "
+                f"{centre_key}")
+        centre = float(entry[centre_key])
+
+        width = entry.get(width_key)
         if form == "flat_bottom":
             if width is None or float(width) <= 0.0:
                 raise UmbrellaError(
-                    f"{where} is flat_bottom and needs a positive half_width_deg; got {width!r}. "
+                    f"{where} is flat_bottom and needs a positive {width_key}; got {width!r}. "
                     f"A zero-width bound is a harmonic restraint -- ask for that form instead of "
                     f"expressing it as a degenerate bound.")
             width = float(width)
         elif width is not None:
             raise UmbrellaError(
-                f"{where} is {form} and has no half-width, but half_width_deg = {width} was "
+                f"{where} is {form} and has no half-width, but {width_key} = {width} was "
                 f"given. It would be silently ignored, so it is refused.")
 
+        # Bounds the force can enforce anyway, checked here so the refusal names the
+        # configuration rather than surfacing from inside a force three stages later.
+        if units == "nanometers" and centre < 0.0:
+            raise UmbrellaError(
+                f"{where} centres a distance window at {centre} nm. A negative separation is not "
+                f"a geometry, and squaring it would place the window at its absolute value "
+                f"without saying so.")
+        if variable.kind == "angle" and not 0.0 <= centre <= 180.0:
+            raise UmbrellaError(
+                f"{where} centres an angle window at {centre} degrees. An angle between three "
+                f"atoms is unsigned and bounded by [0, 180], so this names no geometry -- unlike "
+                f"a torsion, it does not wrap onto one.")
+
         resolved.append(UmbrellaRestraint(
-            cv=name, form=form, centre_deg=float(entry["centre_deg"]),
-            force_constant=force_constant, half_width_deg=width,
-            atom_indices=tuple(int(i) for i in known[name].indices)))
+            cv=name, form=form, centre=centre, force_constant=force_constant,
+            half_width=width, kind=variable.kind, units=units,
+            atom_indices=tuple(int(i) for i in variable.indices)))
     return tuple(resolved)
 
 

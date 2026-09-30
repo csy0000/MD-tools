@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 
 from .cost import CVCost, cost_record
-from .torsion import torsion_degrees
+from .torsion import EVALUATORS
 
 
 class CVReportError(RuntimeError):
@@ -164,7 +164,10 @@ class CVSeries:
         """
         started = time.perf_counter()
         try:
-            values = [torsion_degrees(positions, cv.indices, box)
+            # Dispatched on the KIND the definition resolved, never on the arity of the index
+            # tuple. Arity would work today -- 2, 3 and 4 atoms are distinct -- and would stop
+            # working the moment two kinds share one, which a second four-atom quantity would do.
+            values = [EVALUATORS[cv.kind](positions, cv.indices, box)
                       for cv in self.definition.variables]
         except Exception as broken:
             raise CVReportError(

@@ -1198,6 +1198,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         umbrella_file = stage.get("umbrella_file")
         if umbrella_file:
             from ..cv import load_cv_definition as _load_cv
+            from ..md.coordinate_restraints import AngleRestraint, DistanceRestraint
             from ..md.torsion_restraints import FLAT_BOTTOM, HARMONIC, TorsionRestraint
             from ..umbrella import load_umbrella_definition
 
@@ -1207,13 +1208,20 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             umbrella_restraints = load_umbrella_definition(
                 _beside_resolved_config(stage, umbrella_file), cv_definition_shared)
 
-            # One force per FORM, not per restraint: every torsion in a CustomTorsionForce shares
-            # its energy expression, so harmonic and flat-bottom windows cannot live in one force.
+            # One force per (KIND, FORM). Every term in a CustomTorsionForce shares its energy
+            # expression, so harmonic and flat-bottom windows cannot live in one force -- and a
+            # distance, an angle and a torsion are three different OpenMM forces besides, each
+            # with its own per-term parameters and its own units.
+            builders = {"torsion": TorsionRestraint, "angle": AngleRestraint,
+                        "distance": DistanceRestraint}
+            adders = {"torsion": "add_torsion", "angle": "add_angle",
+                      "distance": "add_distance"}
             by_form = {}
             for entry in umbrella_restraints:
-                force = by_form.get(entry.form)
+                key = (entry.kind, entry.form)
+                force = by_form.get(key)
                 if force is None:
-                    force = by_form[entry.form] = TorsionRestraint(system, entry.form)
+                    force = by_form[key] = builders[entry.kind](system, entry.form)
                 # The force constant rides on the PER-TORSION `scale`, not on the global. The
                 # energy is 0.5 * k_global * scale * dtheta^2, so with the global at 1.0 each
                 # restraint carries its own strength and a window may mix them freely. The global
@@ -1223,8 +1231,12 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                 # a config with two different force_constants unbuildable, and it built anyway:
                 # the mismatch was caught here, at run time, after minimisation and three
                 # equilibration stages had already run.
-                force.add_torsion(entry.atom_indices, entry.centre_deg,
-                                  entry.half_width_deg or 0.0, scale=entry.force_constant)
+                # The centre and half-width are passed in the variable's own units; each adder
+                # converts at its own boundary, so a configuration is written in the units a
+                # person thinks in while each force does its arithmetic in OpenMM's.
+                getattr(force, adders[entry.kind])(
+                    entry.atom_indices, entry.centre, entry.half_width or 0.0,
+                    scale=entry.force_constant)
             umbrella_forces = tuple(by_form.values())
         else:
             umbrella_forces = ()

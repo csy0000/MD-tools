@@ -243,13 +243,37 @@ def validate_for_continuation(directory, definition, *, taus, interval_steps, co
             problems.append(f"{sidecar.name} is not readable JSON ({broken})")
             continue
 
-        for field, expected, what in (
-                ("definition_sha256", definition.digest, "definition digest"),
-                ("interval_steps", int(interval_steps), "reporting interval"),
-                ("state_index", index, "state index"),
-                ("units", "degrees", "units"),
-                ("wrapping", "[-180, 180)", "wrapping convention"),
-                ("exchange_phase", PHASE, "exchange-boundary convention")):
+        # WHAT THIS RUN RESOLVES, asked of the definition rather than written here as a literal.
+        #
+        # `units` and `wrapping` were compared against "degrees" and "[-180, 180)" by value. That
+        # is true of every torsion-only ladder and of nothing else: the first correct run
+        # reporting a distance would have been refused HERE -- not only at completion but on any
+        # append into an existing sidecar, which is the failure that can land mid-campaign after
+        # the sampling is paid for.
+        #
+        # A file-level key is compared only when this run would write one, so a sidecar from
+        # before this change still validates; the per-column maps are compared when the sidecar
+        # carries them, and their absence in an older file is not evidence of disagreement.
+        expectations = [
+            ("definition_sha256", definition.digest, "definition digest"),
+            ("interval_steps", int(interval_steps), "reporting interval"),
+            ("state_index", index, "state index"),
+            ("exchange_phase", PHASE, "exchange-boundary convention"),
+        ]
+        for field in ("units", "wrapping"):
+            resolved_value = definition.agreed(field)
+            if resolved_value is not None and field in body:
+                expectations.append((field, resolved_value, field))
+        if "column_units" in body:
+            expectations.append(
+                ("column_units", {cv.name: cv.units for cv in definition.variables},
+                 "per-column units"))
+        if "column_wrapping" in body:
+            expectations.append(
+                ("column_wrapping", {cv.name: cv.wrapping for cv in definition.variables
+                                     if cv.wrapping is not None},
+                 "per-column wrapping conventions"))
+        for field, expected, what in expectations:
             if body.get(field) != expected:
                 problems.append(
                     f"{sidecar.name} records {what} {body.get(field)!r} and this run resolves "
@@ -313,8 +337,17 @@ def manifest_entries(directory, definition, *, taus, interval_steps, total_steps
             "definition_sha256": definition.digest,
             "atom_indices": [list(cv.indices) for cv in definition.variables],
             "columns": list(COLUMNS) + list(definition.names),
-            "units": "degrees",
-            "wrapping": "[-180, 180)",
+            # PER COLUMN, with the file-level key present only when it is true of every one.
+            # These used to be the literals "degrees" and "[-180, 180)", which no mixed-unit
+            # definition can satisfy: a distance has no wrapping convention, so there is no value
+            # this key could carry that is also true. See md_tools.cv.definition.CV_KINDS.
+            **({"units": definition.agreed("units")}
+               if definition.agreed("units") is not None else {}),
+            **({"wrapping": definition.agreed("wrapping")}
+               if definition.agreed("wrapping") is not None else {}),
+            "column_units": {cv.name: cv.units for cv in definition.variables},
+            "column_wrapping": {cv.name: cv.wrapping for cv in definition.variables
+                                if cv.wrapping is not None},
             "periodic_convention": (
                 "triclinic minimum image applied to the three sequential bond vectors"),
             "exchange_phase": PHASE,

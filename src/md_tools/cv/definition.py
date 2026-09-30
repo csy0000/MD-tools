@@ -12,12 +12,25 @@ WHY SO STRICT
     suffixed; an index out of range is refused rather than clamped. Every one of those is a case
     where guessing produces a file that looks exactly like the correct one.
 
-VERSION 1 IS TORSIONS AND NOTHING ELSE
+WHAT A `type` MAY BE, AND WHERE THAT IS WRITTEN DOWN
 
-    Deliberately. `type` is required and must be `torsion`, and any other value is refused BY NAME
-    with a message that says the schema version it was refused under -- so a `distance` entry
-    written against a future schema fails loudly on an old build instead of being ignored into a
-    silently shorter CSV.
+    `torsion`, `angle` and `distance`. `type` is required and any other value is refused BY NAME
+    with the schema version it was refused under -- so an entry written against a future schema
+    fails loudly on an old build instead of being ignored into a silently shorter CSV.
+
+    Everything that follows from the choice of kind -- how many atoms it needs, what its units
+    are, whether it wraps -- is in `CV_KINDS` and nowhere else. `SUPPORTED_TYPES` is derived from
+    that table rather than listed beside it, because a list of names that has to be kept in step
+    with a table of properties is two statements of one fact.
+
+    `distance` and `angle` arrived for Boresch-type restraints, where a dissociation coordinate
+    is a distance and the five orientational terms that hold the pathway are angles and torsions.
+    A torsion-only `cv.yaml` resolves to exactly the same variables, on the same atoms, with
+    the same digest -- the digest is over the FILE, so no record that binds it moves. Its sidecar
+    is NOT byte-identical: every column now states its own units, and its periodic ones their own
+    wrapping, because the per-column value is authoritative and the file-level one is a derived
+    convenience. A reader that consulted only the file-level keys still finds them, unchanged,
+    whenever they are true of every column.
 """
 
 from __future__ import annotations
@@ -28,9 +41,50 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-#: The only `schema_version` this build reads, and the only `type` it evaluates.
+#: The only `schema_version` this build reads.
 SCHEMA_VERSION = 1
-SUPPORTED_TYPES = ("torsion",)
+
+
+@dataclass(frozen=True)
+class CVKind:
+    """What one kind of collective variable IS: its arity, its units, its wrapping.
+
+    ONE TABLE, ASKED BY EVERYONE. `units` and `wrapping` used to be literals written in three
+    places -- the definition record, a ladder's per-state sidecar, and the ladder's
+    append-compatibility guard, which compared them against `"degrees"` and `"[-180, 180)"` BY
+    VALUE. Three writers of one field with nothing comparing them is the shape that has already
+    cost this project a doubled step count and a completion record missing a key the periodic
+    path supplied; with a second kind of variable it would cost a campaign that samples correctly
+    and is then refused at completion, or mid-campaign on the next append.
+
+    `wrapping` is None for a quantity with no periodic convention. A distance does not wrap, and
+    the honest record of that is an ABSENT key rather than a null or an empty string, both of
+    which read as a convention whose name happens to be blank.
+    """
+
+    atoms: int
+    units: str
+    wrapping: str | None
+    #: What the slots MEAN, quoted in refusals so a message says more than how many are needed.
+    order: str
+
+    @property
+    def periodic(self) -> bool:
+        return self.wrapping is not None
+
+
+#: Every `type` a `cv.yaml` may name, and everything that follows from the choice.
+CV_KINDS: dict[str, CVKind] = {
+    "torsion": CVKind(atoms=4, units="degrees", wrapping="[-180, 180)",
+                      order="bonding order i-j-k-l"),
+    "angle": CVKind(atoms=3, units="degrees", wrapping=None,
+                    order="bonding order i-j-k, with j the vertex"),
+    "distance": CVKind(atoms=2, units="nanometers", wrapping=None,
+                       order="the two atoms it is measured between"),
+}
+
+#: The types this build evaluates. Derived from the table, so the two cannot disagree.
+SUPPORTED_TYPES = tuple(CV_KINDS)
 
 #: A CV name is a CSV column header and a key in a resolved sidecar. Restricting it to this keeps
 #: it from needing quoting in one format and escaping in another -- a comma or a newline inside a
@@ -47,15 +101,36 @@ class CVDefinitionError(ValueError):
 
 
 @dataclass(frozen=True)
-class TorsionCV:
-    """One resolved torsion: a name and the four atom indices it will actually be measured on."""
+class CollectiveVariable:
+    """One resolved variable: a name, its kind, and the atom indices it is measured on."""
 
     name: str
-    indices: tuple[int, int, int, int]
+    indices: tuple[int, ...]
+    #: A key of `CV_KINDS`. Defaulted to `torsion` so the many places that build one of these
+    #: positionally, from when a torsion was the only kind, keep meaning what they meant.
+    kind: str = "torsion"
     #: The selectors as written, when the entry used them. Kept for the sidecar so a reader can
-    #: see WHY these four indices, not merely which -- an index list alone cannot be checked
-    #: against a topology by a person reading the output later.
+    #: see WHY these indices, not merely which -- an index list alone cannot be checked against a
+    #: topology by a person reading the output later.
     selectors: tuple[dict[str, str], ...] | None = None
+
+    @property
+    def spec(self) -> CVKind:
+        return CV_KINDS[self.kind]
+
+    @property
+    def units(self) -> str:
+        return self.spec.units
+
+    @property
+    def wrapping(self) -> str | None:
+        return self.spec.wrapping
+
+
+#: The name this class had when a torsion was the only kind there was. Kept because it is part of
+#: the import API and appears in tests and in other sessions' code; it is the same class, not a
+#: torsion-only subset of it.
+TorsionCV = CollectiveVariable
 
 
 @dataclass(frozen=True)
@@ -78,23 +153,56 @@ class CVDefinition:
     def names(self) -> tuple[str, ...]:
         return tuple(cv.name for cv in self.variables)
 
+    @property
+    def kinds(self) -> tuple[str, ...]:
+        return tuple(cv.kind for cv in self.variables)
+
+    def agreed(self, field: str):
+        """The one value of `field` every column shares, or None when they differ.
+
+        THE PER-COLUMN VALUE IS AUTHORITATIVE and this is a derived convenience. A file-level
+        `units` is written only when it is true of every column, so a reader consulting either
+        one cannot be silently wrong -- which is a stronger property than writing both and
+        trusting that they agree.
+        """
+        if not self.variables:
+            return None
+        values = {getattr(cv, field) for cv in self.variables}
+        return values.pop() if len(values) == 1 else None
+
     def resolved(self) -> dict[str, Any]:
         """The sidecar body: everything a reader needs to interpret the CSV without the topology."""
-        return {
+        agreed_units = self.agreed("units")
+        agreed_wrapping = self.agreed("wrapping")
+        body: dict[str, Any] = {
             "schema_version": self.schema_version,
             "source": self.source,
             "definition_sha256": self.digest,
-            "units": "degrees",
-            "wrapping": "[-180, 180)",
-            "periodic_convention": (
-                "triclinic minimum image applied to the three sequential bond vectors"),
-            "sign_convention": "IUPAC/MDTraj: positive is clockwise looking along j -> k",
-            "columns": list(self.names),
-            "collective_variables": [
-                {"name": cv.name, "type": "torsion", "atom_indices": list(cv.indices),
-                 **({"atoms": [dict(s) for s in cv.selectors]} if cv.selectors else {})}
-                for cv in self.variables],
         }
+        # The file-level keys, when and only when they describe every column: a torsion-only
+        # definition still carries both, with the values it always had, and a mixed one omits
+        # them rather than picking a winner. They are DERIVED -- the per-column values below are
+        # authoritative -- so a reader consulting either cannot be silently wrong. `wrapping` is
+        # omitted for an unwrapped quantity for the same reason it is None in the table: there is
+        # no convention to name, and a null would read as one whose name is blank.
+        if agreed_units is not None:
+            body["units"] = agreed_units
+        if agreed_wrapping is not None:
+            body["wrapping"] = agreed_wrapping
+        if any(cv.spec.periodic for cv in self.variables):
+            body["periodic_convention"] = (
+                "triclinic minimum image applied to the three sequential bond vectors")
+            body["sign_convention"] = (
+                "IUPAC/MDTraj: positive is clockwise looking along j -> k")
+        body["columns"] = list(self.names)
+        body["collective_variables"] = [
+            {"name": cv.name, "type": cv.kind, "atom_indices": list(cv.indices),
+             "units": cv.units,
+             # ABSENT, not null, for a quantity that does not wrap.
+             **({"wrapping": cv.wrapping} if cv.wrapping is not None else {}),
+             **({"atoms": [dict(s) for s in cv.selectors]} if cv.selectors else {})}
+            for cv in self.variables]
+        return body
 
 
 def _require_mapping(value, *, what: str) -> dict:
@@ -167,6 +275,7 @@ def _parse_entry(entry: Any, *, position: int, topology, particles: int | None) 
             f"{where}: type {kind!r} is not supported by cv.yaml schema version {SCHEMA_VERSION}, "
             f"which defines {list(SUPPORTED_TYPES)} only. A later schema version may add it; this "
             f"build refuses it rather than omitting the column")
+    spec = CV_KINDS[kind]
 
     has_indices = "atom_indices" in entry
     has_atoms = "atoms" in entry
@@ -179,10 +288,10 @@ def _parse_entry(entry: Any, *, position: int, topology, particles: int | None) 
     selectors = None
     if has_indices:
         raw = entry["atom_indices"]
-        if not isinstance(raw, list) or len(raw) != 4:
+        if not isinstance(raw, list) or len(raw) != spec.atoms:
             raise CVDefinitionError(
-                f"{where}: atom_indices must be a list of exactly four zero-based indices in "
-                f"bonding order i-j-k-l; got {raw!r}")
+                f"{where}: a {kind} needs exactly {spec.atoms} zero-based atom_indices, in "
+                f"{spec.order}; got {raw!r}")
         indices = []
         for index in raw:
             if isinstance(index, bool) or not isinstance(index, int):
@@ -198,10 +307,10 @@ def _parse_entry(entry: Any, *, position: int, topology, particles: int | None) 
             indices.append(int(index))
     else:
         raw = entry["atoms"]
-        if not isinstance(raw, list) or len(raw) != 4:
+        if not isinstance(raw, list) or len(raw) != spec.atoms:
             raise CVDefinitionError(
-                f"{where}: atoms must be a list of exactly four selectors in bonding order "
-                f"i-j-k-l; got {len(raw) if isinstance(raw, list) else type(raw).__name__}")
+                f"{where}: a {kind} needs exactly {spec.atoms} selectors, in {spec.order}; got "
+                f"{len(raw) if isinstance(raw, list) else type(raw).__name__}")
         if topology is None:
             raise CVDefinitionError(
                 f"{where}: uses atom selectors, which can only be resolved against a topology, "
@@ -226,10 +335,11 @@ def _parse_entry(entry: Any, *, position: int, topology, particles: int | None) 
             indices.append(resolve_selector(topology, selector, where=at))
         selectors = tuple(selectors_built)
 
-    if len(set(indices)) != 4:
+    if len(set(indices)) != spec.atoms:
         raise CVDefinitionError(
-            f"{where}: the four atoms of a torsion must be distinct; resolved to {indices}")
-    return TorsionCV(name=name, indices=tuple(indices), selectors=selectors)
+            f"{where}: the {spec.atoms} atoms of a {kind} must be distinct; resolved to "
+            f"{indices}")
+    return CollectiveVariable(name=name, indices=tuple(indices), kind=kind, selectors=selectors)
 
 
 def parse_cv_definition(text: str, *, source: str = "cv.yaml", topology=None,

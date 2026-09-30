@@ -137,3 +137,63 @@ def torsion_degrees(positions, indices, box=None) -> float:
     if degrees >= 180.0:
         degrees -= 360.0
     return degrees
+
+
+def distance_nm(positions, indices, box=None) -> float:
+    """The distance between two atoms, in nanometres.
+
+    `positions` is an (N, 3) array in nanometres and `indices` the two atoms it is measured
+    between. The separation is minimum-imaged under the same convention the torsion's bond
+    vectors use, which is what makes a distance measured across a periodic boundary the short one
+    rather than the box-length complement.
+
+    A DISTANCE DOES NOT WRAP, and nothing here folds it into a range. That is why `CV_KINDS`
+    gives it no `wrapping` and its sidecar column carries no such key: the minimum image is a
+    choice about which periodic copy is meant, not a convention about the reported value's
+    interval, and conflating the two would invite a reader to look for a period that does not
+    exist.
+    """
+    positions = np.asarray(positions, dtype=float)
+    i, j = (int(n) for n in indices)
+    separation = minimum_image(positions[j] - positions[i], box)
+    return float(math.sqrt(float(np.dot(separation, separation))))
+
+
+def angle_degrees(positions, indices, box=None) -> float:
+    """The angle at `j` in the triple `i-j-k`, in degrees, on [0, 180].
+
+    An angle between three atoms is unsigned and bounded, so unlike a torsion it has no sign
+    convention and no wrapping: there is no second branch for a reader to be on the wrong side
+    of. `atan2` of the cross and dot products is used rather than `arccos` of the normalised dot,
+    because the latter loses all precision as the triple approaches collinear and can leave the
+    domain outright through rounding -- returning a NaN for a geometry that is perfectly well
+    defined at 179.999 degrees.
+    """
+    positions = np.asarray(positions, dtype=float)
+    i, j, k = (int(n) for n in indices)
+
+    # Both vectors point AWAY from the vertex, which is what makes the angle between them the
+    # interior angle at j. Taking them head-to-tail along the chain would report its supplement.
+    first = minimum_image(positions[i] - positions[j], box)
+    second = minimum_image(positions[k] - positions[j], box)
+
+    first_length = math.sqrt(float(np.dot(first, first)))
+    second_length = math.sqrt(float(np.dot(second, second)))
+    if first_length == 0.0 or second_length == 0.0:
+        raise TorsionError(
+            f"atoms {i}, {j}, {k}: the vertex {j} coincides with one of its neighbours, so the "
+            f"angle there is undefined")
+
+    cross = math.sqrt(float(np.dot(np.cross(first, second), np.cross(first, second))))
+    dot = float(np.dot(first, second))
+    return math.degrees(math.atan2(cross, dot))
+
+
+#: Every kind's evaluator, by the `type` a `cv.yaml` names. `md_tools.cv.definition.CV_KINDS` says
+#: what each kind IS; this says how to measure one, and a kind present in one and missing from the
+#: other is a definition that validates and cannot be evaluated -- so a test compares the keys.
+EVALUATORS = {
+    "torsion": torsion_degrees,
+    "angle": angle_degrees,
+    "distance": distance_nm,
+}

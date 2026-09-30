@@ -42,10 +42,52 @@ def test_a_duplicate_yaml_key_is_refused():
 
 
 def test_an_unsupported_type_is_refused_by_name_with_the_schema_version():
-    """A `distance` written against a future schema must fail loudly, not shorten the CSV."""
-    text = GOOD.replace("type: torsion", "type: distance")
-    with pytest.raises(CVDefinitionError, match="'distance'.*schema version 1"):
+    """A type written against a future schema must fail loudly, not shorten the CSV.
+
+    MIGRATED: this case used `distance` as its example of an unsupported type, and `distance` is
+    now supported -- so the test began asserting the opposite of the behaviour it was written to
+    protect. The intent it was protecting is intact and is what is checked here: an unknown type
+    is refused BY NAME, with the schema version it was refused under, rather than being dropped
+    into a silently shorter CSV. `rmsd` stands in as a type this build genuinely does not have.
+    """
+    text = GOOD.replace("type: torsion", "type: rmsd")
+    with pytest.raises(CVDefinitionError, match="'rmsd'.*schema version 1"):
         parse_cv_definition(text, particles=20)
+
+
+def test_every_supported_type_has_an_evaluator_and_an_arity():
+    """A kind that validates and cannot be evaluated is a definition that fails at the first row."""
+    from md_tools.cv import CV_KINDS, EVALUATORS, SUPPORTED_TYPES
+
+    assert set(CV_KINDS) == set(EVALUATORS), set(CV_KINDS) ^ set(EVALUATORS)
+    assert set(SUPPORTED_TYPES) == set(CV_KINDS), "SUPPORTED_TYPES must derive from the table"
+    for name, spec in CV_KINDS.items():
+        assert spec.atoms >= 2, (name, spec.atoms)
+        assert spec.units, name
+
+
+@pytest.mark.parametrize("kind, indices, needs", [
+    ("distance", "[4, 6, 8]", "exactly 2"),
+    ("distance", "[4]", "exactly 2"),
+    ("angle", "[4, 6]", "exactly 3"),
+    ("angle", "[4, 6, 8, 14]", "exactly 3"),
+    ("torsion", "[4, 6, 8]", "exactly 4"),
+])
+def test_arity_is_enforced_per_kind(kind, indices, needs):
+    """Each kind needs its own number of atoms, and the refusal says which and in what order."""
+    text = GOOD.replace("type: torsion", f"type: {kind}").replace("[4, 6, 8, 14]", indices)
+    with pytest.raises(CVDefinitionError, match=needs):
+        parse_cv_definition(text, particles=20)
+
+
+def test_a_distance_column_carries_no_wrapping_convention():
+    """There is no value that key could hold which is also true of a distance."""
+    text = GOOD.replace("type: torsion", "type: distance").replace("[4, 6, 8, 14]", "[4, 6]")
+    body = parse_cv_definition(text, particles=20).resolved()
+    column = body["collective_variables"][0]
+    assert column["units"] == "nanometers"
+    assert "wrapping" not in column, "an absent key, not a null: a null reads as a convention"
+    assert "wrapping" not in body, "nor at file level, where it would describe every column"
 
 
 def test_an_unknown_field_is_refused():
@@ -74,8 +116,8 @@ def test_a_name_that_is_not_csv_safe_is_refused():
 
 
 @pytest.mark.parametrize("indices, fragment", [
-    ("[4, 6, 8]", "exactly four"),
-    ("[4, 6, 8, 14, 15]", "exactly four"),
+    ("[4, 6, 8]", "exactly 4"),
+    ("[4, 6, 8, 14, 15]", "exactly 4"),
     ("[4, 6, 8, -1]", "zero-based"),
     ("[4, 6, 8, 99]", "out of range"),
     ("[4, 6, 8, 6]", "distinct"),
