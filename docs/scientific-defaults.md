@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| Repository | MD-tools (`csy0000/MD-tools`), version 0.5.4 |
-| Applies to | the defaults `md-openmm build-top` and `md-openmm build-md` apply |
-| Date | 2026-08-27 |
+| Repository | MD-tools (`csy0000/MD-tools`), version 0.6.4 |
+| Applies to | the defaults `md-openmm build-top`, `md-openmm build-md` and `md-openmm combine-topology` apply |
+| Date | 2026-08-27, revised 2026-09-30 (§13: the alchemical λ components and the CUDA reproducibility measurement) |
 | References | `docs/scientific-defaults.bib` |
 
 ---

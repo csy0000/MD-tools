@@ -176,7 +176,7 @@ starts from exactly these files.
 | [**Selective REST2**](REST2.md) | choosing the hot region: the ligand alone, or the ligand plus the sidechains lining the pocket | published, `0.6.1` |
 | [**cMD**](cMD.md) | a long unbiased simulation of the same complex, as the reference every enhanced method is compared against | published, `0.6.1` — 1 µs |
 | [**AIS**](AIS.md) | annealing a weakened pocket back to full strength | published, `0.6.1` — usable for the ligand alone, not for the ligand plus its shell |
-| **Umbrella sampling** | a potential of mean force along the ligand–protein centre-of-mass distance | planned, 0.6.3 |
+| **Umbrella sampling** | a potential of mean force along the ligand–protein centre-of-mass distance | page planned, 0.6.5 |
 | **Alchemical — ligand to ligand** | absolute and relative binding free energies on this complex | planned, 0.6.5 |
 
 *Umbrella sampling arrives in 0.6.3 and the alchemical pages in 0.7.0. They are listed here so the

@@ -33,7 +33,7 @@ size.
 | **cMD** | alanine dipeptide, paracetamol, chignolin, barnase–barstar, TYK2 (1 µs) | published |
 | **REST2** | alanine dipeptide, paracetamol, chignolin, TYK2 (selective) | published |
 | **AIS** | alanine dipeptide, paracetamol; TYK2 as a measured LIMIT | published |
-| **Umbrella sampling** | alanine dipeptide (φ), protein–ligand and protein–protein (centre-of-mass distance) | planned, 0.6.3 |
+| **Umbrella sampling** | alanine dipeptide (φ), protein–ligand and protein–protein (centre-of-mass distance) | page planned, 0.6.5 |
 | **Alchemical — decoupling** | [ethanol](ethanol/hydration.md) (hydration free energy) | published |
 | **Alchemical — relative, ligand to ligand** | [ethane → chloroethane](ethane-chloroethane/relative.md); protein-ligand planned | published |
 
