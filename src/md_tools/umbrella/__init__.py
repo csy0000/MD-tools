@@ -26,7 +26,13 @@ object, so the failure cannot be expressed.
 """
 from __future__ import annotations
 
+from .boresch import (BORESCH_TERMS, BoreschAnchors, BoreschError, boresch_cv_document,
+                      boresch_window_document, check_anchors, measure_anchors,
+                      standard_state_note)
 from .definition import (UmbrellaError, UmbrellaRestraint, RESTRAINT_FORMS,
                          load_umbrella_definition)
 
-__all__ = ["UmbrellaError", "UmbrellaRestraint", "RESTRAINT_FORMS", "load_umbrella_definition"]
+__all__ = ["BORESCH_TERMS", "BoreschAnchors", "BoreschError", "RESTRAINT_FORMS", "UmbrellaError",
+           "UmbrellaRestraint", "boresch_cv_document", "boresch_window_document",
+           "check_anchors", "load_umbrella_definition", "measure_anchors",
+           "standard_state_note"]

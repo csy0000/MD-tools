@@ -169,6 +169,7 @@ nav:
       - Equilibrium:
           - cMD: openmm_methods/cMD/README.md
           - Umbrella sampling: openmm_methods/umbrella/README.md
+          - Boresch dissociation: openmm_methods/umbrella/boresch-dissociation.md
       - Enhanced sampling:
           - REST2: openmm_methods/REST2/README.md
           - AIS:
