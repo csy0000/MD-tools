@@ -844,7 +844,93 @@ Read this section before quoting anything above as support for a result.
 
 ---
 
-## 13. Recommendation for method-development comparisons
+## 13. Alchemical λ components: OpenFE's vocabulary, adopted deliberately
+
+**The claim.** The λ components this package moves are named, and scheduled, as the Open Free
+Energy stack names and schedules them. This is a deliberate alignment with the field's reference
+implementation, not a coincidence and not a dependency.
+
+| setting | MD-tools | OpenFE | evidence | note |
+|---|---|---|---|---|
+| bonded components | `lambda_bonds`, `lambda_angles`, `lambda_torsions` | same three | **ID** [38] | one per force kind; `openmmtools.alchemy.AlchemicalState` exposes the same three [39] |
+| nonbonded components | `lambda_electrostatics`, `lambda_sterics` | same two | **ID** [38] | |
+| bonded schedule | linear in the progress coordinate, unstaged | `lambda x: x` for all three | **ID** [38] | |
+| window placement | evenly spaced, both end points included | `np.linspace(0, 1, windows)` | **ID** [38] | |
+| schedule end points | must begin at 0 and end at 1 | `_validate_schedule` enforces it | **ID** [38] | |
+| softcore form | Amber18 §21.1.5 eqs 21.5–21.7 | Gapsys *or* Beutler [40,41] | **CE** | **DELIBERATELY DIFFERENT — see below** |
+| dispersion correction | on | `use_dispersion_correction: False` | **CE** | **DELIBERATELY DIFFERENT — see below** |
+
+### Why the bonded degrees of freedom are three and not one
+
+Until 0.6.4 this package had a single `lambda_bonded`. Splitting it costs nothing — each force kind
+already built its own mixing force — and buys two things. A reader who knows one package can read
+the other's records without a translation table. And OpenFE is an implementation this package can
+be checked *against*: a shared component vocabulary is what makes a per-component comparison
+possible, where a single coarse component could only ever be compared against the sum of their
+three.
+
+### Why the bonded components are NOT staged
+
+OpenFE's `default` protocol stages the endpoint-unique atoms and leaves everything else linear:
+
+```text
+lambda_sterics_insert        2x  (x < 0.5) else 1        new core grown in the first half
+lambda_electrostatics_insert 0   (x < 0.5) else 2(x-0.5) new charges added in the second
+lambda_electrostatics_delete 2x  (x < 0.5) else 1        old charges removed in the first
+lambda_sterics_delete        0   (x < 0.5) else 2(x-0.5) old core removed in the second
+lambda_sterics_core / lambda_electrostatics_core / bonds / angles / torsions:  x
+```
+
+Staging exists for one reason: never to evaluate a Coulomb term on a particle whose repulsive core
+has already gone. The schedule above achieves that at **both** ends — the disappearing ligand is
+discharged before its core is removed, and the appearing one grows its core before it is charged —
+and OpenFE enforces it rather than trusting it, walking every window and refusing any state with
+"charges but no LJ interactions", *"even when using softcore electrostatics"* [38].
+
+Bonded terms have no such singularity, which is why they are linear there and are linear here. This
+answers a question this repository had left open and refused by name: `lambda_path: staged`
+currently refuses because there was no agreed placement for the bonded component. **The placement
+is now decided and it is OpenFE's: the bonded components are not a stage and do not ride with
+either nonbonded family.**
+
+Note what this replaces. The two placements previously argued for internally — "with sterics",
+because moving an equilibrium length under full charges does electrostatic work; and "across the
+whole path", by analogy with the singularity argument — were each defensible and neither had
+external support. One of them happens to agree with OpenFE. That agreement is the evidence, and it
+is worth more than the argument that reached it.
+
+### Two deliberate differences, stated because they are not oversights
+
+**Softcore.** OpenFE offers `softcore_LJ: Literal["gapsys", "beutler"]` — a closed enumeration.
+This package implements the **Amber18** form (manual §21.1.5, eqs 21.5–21.7) and refuses the other
+two BY NAME rather than mapping them onto it. The reason is cross-engine validation: the Amber18
+form is what `pmemd` integrates, so a comparison against AMBER is like-for-like. A consequence
+worth stating plainly is that **this Hamiltonian cannot be expressed in OpenFE's settings**, and
+equally that an OpenFE result is an *independent* check of ours rather than a reimplementation of
+it — two different softcore functions agreeing on a ΔΔG is stronger evidence than two
+implementations of one function agreeing.
+
+**Dispersion correction.** OpenFE defaults `use_dispersion_correction: False` and
+`endstate_dispersion_correction: False`; this package leaves the analytic long-range dispersion
+correction ON, as the built System has it. Turning it off in the alchemical System alone would make
+the end states disagree with the Systems `build-top` produced, which is the property the end-state
+recovery tests assert.
+
+### What this evidence does not establish
+
+**ID is implementation documentation, not a scientific result.** [38] and [39] say what those
+packages do; they do not establish that a linear bonded schedule is optimal, and no citation here
+does. The claim being made is narrower and it is the honest one: *where a convention is arbitrary
+but must be chosen, this package chooses what the field's reference implementation chose, so that
+records are mutually readable and a cross-implementation comparison is possible.* Whether a
+different bonded schedule would sample better is untested, here and there.
+
+**MD-tools imports nothing from OpenFE**, and nothing in this package requires it to be installed.
+The vocabulary and the schedule are adopted; the code is this repository's own.
+
+---
+
+## 14. Recommendation for method-development comparisons
 
 If you are comparing protocols — sampling methods, restraint schemes, REST2 ladders, timestep
 choices — rather than predicting a number:
@@ -879,7 +965,7 @@ choices — rather than predicting a number:
 
 ---
 
-## 14. Reproducibility: where each of these values is recorded
+## 15. Reproducibility: where each of these values is recorded
 
 Every choice argued above is written into the generated records, at the point it is decided, and
 never reconstructed by parsing a log afterwards. `null` means "does not apply here" and is written
@@ -912,7 +998,7 @@ than filled in from the current default. (This named a retrospective tool
 
 ---
 
-## 15. Sources
+## 16. Sources
 
 Numbered in order of first citation, and cited by number in the text above. `docs/scientific-defaults.bib` holds the same entries keyed by name, with the DOI of each verified against the
 Crossref REST API on 2026-08-27.
@@ -1053,3 +1139,23 @@ J. Comput.-Aided Mol. Des., 2017, 31, 147–161.
 2690–2693.
 
 [37] R. M. Neal. Annealed importance sampling. Stat. Comput., 2001, 11, 125–139.
+
+[38] The Open Free Energy Consortium. `LambdaProtocol.default_functions` and `LambdaSettings` /
+`AlchemicalSettings`, in `openfe/protocols/openmm_rfe/`. https://github.com/OpenFreeEnergy/openfe,
+read 2026-09-30 from `_rfe_utils/lambdaprotocol.py` (itself "very slightly adapted from perses")
+and `equil_rfe_settings.py`. *Software documentation — read from the source, not the docs page,
+because the published API reference states `lambda_functions: str = "default"` without giving the
+functions that key selects.*
+
+[39] The Chodera Lab. `openmmtools.alchemy.AlchemicalState`. https://openmmtools.readthedocs.io/,
+values read back from the installed openmmtools 0.26.0: the state exposes `lambda_bonds`,
+`lambda_angles`, `lambda_torsions`, `lambda_electrostatics`, `lambda_sterics`, and
+`AlchemicalRegion` defaults `alchemical_bonds`, `alchemical_angles` and `alchemical_torsions` to
+`None` — bonded alchemy is off unless requested. *Software documentation.*
+
+[40] V. Gapsys; D. Seeliger; B. L. de Groot. New Soft-Core Potential Function for Molecular
+Dynamics Based Alchemical Free Energy Calculations. J. Chem. Theory Comput., 2012, 8, 2373–2382.
+
+[41] T. C. Beutler; A. E. Mark; R. C. van Schaik; P. R. Gerber; W. F. van Gunsteren. Avoiding
+singularities and numerical instabilities in free energy calculations based on molecular
+simulations. Chem. Phys. Lett., 1994, 222, 529–539.

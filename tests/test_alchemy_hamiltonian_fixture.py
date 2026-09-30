@@ -42,14 +42,27 @@ from md_tools.alchemy.softcore import SoftcoreSettings  # noqa: E402
 
 TOL = {False: 1e-8, True: 1e-4}
 BOX, CUTOFF = 2.4, 0.9
-NAMES = ("lambda_electrostatics", "lambda_sterics", "lambda_bonded")
+from md_tools.alchemy.hamiltonian import (BONDED_PARAMETERS,  # noqa: E402
+                                          PUBLIC_PARAMETERS as NAMES)
 
 DIAGONAL = [(v, v, v) for v in (0.0, 0.25, 0.5, 0.75, 1.0)]
 OFF_DIAGONAL = [(1.0, 0.5, 0.3), (0.0, 0.6, 1.0), (0.4, 1.0, 0.0), (0.8, 0.2, 0.5)]
 
 
+#: (electrostatics, sterics, bonded) -> the FIVE public parameters, with the three bonded
+#: components moving together. These tests were written when the bonded degrees of freedom were one
+#: parameter; 0.6.4 split them into `lambda_bonds`, `lambda_angles` and `lambda_torsions` to match
+#: OpenFE's vocabulary. Every case here drives them together, which is what the old single
+#: parameter meant, so the triples below keep their meaning exactly -- expanded here rather than
+#: rewritten at every call site, so the diff shows the convention change and not 200 edited tuples.
+def _expand(v):
+    elec, sterics, bonded = v
+    return {"lambda_electrostatics": elec, "lambda_sterics": sterics,
+            "lambda_bonds": bonded, "lambda_angles": bonded, "lambda_torsions": bonded}
+
+
 def _state(t):
-    return dict(zip(NAMES, t))
+    return _expand(t)
 
 
 def _context(system, x):
@@ -194,21 +207,20 @@ def test_derivatives_against_finite_differences(periodic, tail, boundary_14, dis
     steps = (1e-2, 1e-3, 1e-4)
     report = []
     for base in (0.0, 0.25, 0.5, 0.75, 1.0):
-        state = _state((base, base, base))
+        # ONE PARAMETER AT A TIME, over the full public set: since 0.6.4 the bonded degrees of
+        # freedom are three parameters, and moving them together would compare a combined finite
+        # difference against one component's partial.
+        state = {n: base for n in NAMES}
         parts = h.derivative_components(c, state)
         analytic = {p: sum(v for g, v in parts[p].items() if FORCE_GROUPS[g] in groups)
                     for p in NAMES}
-        for k, name in enumerate(NAMES):
-            def own(v, k=k):
-                t = [base] * 3
-                t[k] = v
-                h.set_state(c, _state(t))
+        for name in NAMES:
+            def own(v, name=name):
+                h.set_state(c, {**state, name: v})
                 return c.getState(getEnergy=True, groups=groups).getPotentialEnergy()._value
 
-            def ref(v, k=k):
-                t = [base] * 3
-                t[k] = v
-                return fx.reference_energy(sa, sb, a, b, x, _state(t), **kw)["total"]
+            def ref(v, name=name):
+                return fx.reference_energy(sa, sb, a, b, x, {**state, name: v}, **kw)["total"]
             own_fd = [_fd(own, base, s) for s in steps]
             ref_fd = [_fd(ref, base, s) for s in steps]
             own_err = [abs(analytic[name] - d) for d in own_fd + _richardson(own_fd)]
@@ -669,7 +681,8 @@ def test_the_bonded_integrand_has_an_expectation_and_warns():
     # ...and under `separable` the same zero means the removal is not in effect, its own defect
     other = fx.bonded_derivative_split(sa, sb, set(a) | set(b), x, box=BOX, policy="separable")
     assert "NOT IN EFFECT" in other["warning"]
-    analytic = h.derivative_components(c, state)["lambda_bonded"]["bonded_mixed"]
+    analytic = sum(h.derivative_components(c, state)[n].get("bonded_mixed", 0.0)
+                   for n in BONDED_PARAMETERS)
     assert analytic == pytest.approx(split["total"], abs=1e-9)
     assert analytic == pytest.approx(split["core"], abs=1e-9)
 
@@ -686,7 +699,8 @@ def test_the_bonded_integrand_has_an_expectation_and_warns():
     assert "not stated" in unstated["warning"]
     h2 = build_hamiltonian(removed, sb, a, b)
     c2 = _context(h2.system, x)
-    moved = h2.derivative_components(c2, state)["lambda_bonded"]["bonded_mixed"]
+    moved = sum(h2.derivative_components(c2, state)[n].get("bonded_mixed", 0.0)
+                for n in BONDED_PARAMETERS)
     assert moved == pytest.approx(split["total"], abs=1e-9)
     assert abs(moved - analytic) == pytest.approx(abs(split["unique_touching"]), abs=1e-9)
     print(f"\nbonded integrand: identical junctions {analytic:.3f} kJ/mol (core only); "

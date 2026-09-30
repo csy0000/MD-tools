@@ -34,7 +34,10 @@ from md_tools.alchemy.hamiltonian import FORCE_GROUPS, build_hamiltonian  # noqa
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
-NAMES = ("lambda_electrostatics", "lambda_sterics", "lambda_bonded")
+from md_tools.alchemy.hamiltonian import PUBLIC_PARAMETERS as NAMES  # noqa: E402
+#: Taken from the Hamiltonian, not restated. 0.6.4 split the single bonded component
+#: into `lambda_bonds`, `lambda_angles`, `lambda_torsions` (OpenFE's names); a test
+#: carrying its own copy of the list would have kept passing against a stale one.
 STATES = [(v, v, v) for v in (0.0, 0.25, 0.5, 0.75, 1.0)] + [(1.0, 0.5, 0.3), (0.4, 1.0, 0.0)]
 FLOOR = {"mixed": 1e-6, "double": 1e-10}
 
@@ -67,7 +70,7 @@ def test_cuda_matches_reference_per_force_group(precision, tail):
     assert platform_name == "CUDA", platform_name
     report = []
     for t in STATES:
-        state = dict(zip(NAMES, t))
+        state = dict(zip(NAMES, t)) if len(t) == len(NAMES) else {n: t[0] for n in NAMES}
         h.set_state(cuda, state)
         h.set_state(ref, state)
         for name, g in FORCE_GROUPS.items():
@@ -107,7 +110,7 @@ def test_cuda_matches_reference_on_the_plan_with_internal_pairs(precision):
     cuda, ref = _context(h.system, x, "CUDA", precision), _context(h.system, x, "Reference")
     assert cuda.getPlatform().getName() == "CUDA"
     for v in (0.0, 0.25, 0.5, 0.75, 1.0):
-        state = dict(zip(NAMES, (v, v, v)))
+        state = {n: v for n in NAMES}
         e_c, e_r = h.energy(cuda, state), h.energy(ref, state)
         assert abs(e_c - e_r) <= max(10 * calib, FLOOR[precision] * abs(e_r)), (precision, v, e_c, e_r)
         d_c, d_r = h.derivatives(cuda, state), h.derivatives(ref, state)
@@ -145,7 +148,7 @@ def test_cuda_forces_are_the_gradient_of_the_energy(precision):
     report = {}
     cuda = _context(h.system, x, "CUDA", precision)
     for v in (0.0, 0.25, 0.5, 0.75, 1.0):
-        h.set_state(cuda, dict(zip(NAMES, (v, v, v))))
+        h.set_state(cuda, {n: v for n in NAMES})
         rows = fx.fd_force_check(cuda, FD_ATOMS, steps)
         report[v] = _worst(rows)
         worst = max(rows, key=lambda r: r["richardson_error"])

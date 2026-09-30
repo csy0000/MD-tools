@@ -312,24 +312,33 @@ def _nb_params(system):
 
 
 def _bonded_energy(system, x, box):
+    """{force kind: energy}, NOT a single total.
+
+    Since 0.6.4 the bonded degrees of freedom are three lambdas -- `lambda_bonds`,
+    `lambda_angles`, `lambda_torsions`, as OpenFE names them -- so an independent reference that
+    summed all three families into one number could only agree with the Hamiltonian where the
+    three happened to be equal. That is precisely the case a finite-difference check moving ONE
+    of them does not exercise.
+    """
     def vec(i, j):
         d = x[j] - x[i]
         if box is not None:
             d = d - box * np.round(d / box)
         return d
-    total = 0.0
+    totals = {"HarmonicBondForce": 0.0, "HarmonicAngleForce": 0.0,
+              "PeriodicTorsionForce": 0.0}
     for f in system.getForces():
         kind = type(f).__name__
         if kind == "HarmonicBondForce":
             for k in range(f.getNumBonds()):
                 i, j, r0, kk = f.getBondParameters(k)
-                total += 0.5 * kk._value * (np.linalg.norm(vec(i, j)) - r0._value) ** 2
+                totals[kind] += 0.5 * kk._value * (np.linalg.norm(vec(i, j)) - r0._value) ** 2
         elif kind == "HarmonicAngleForce":
             for k in range(f.getNumAngles()):
                 i, j, m, t0, kk = f.getAngleParameters(k)
                 a, b = vec(j, i), vec(j, m)
                 theta = math.acos(np.clip(a @ b / np.linalg.norm(a) / np.linalg.norm(b), -1, 1))
-                total += 0.5 * kk._value * (theta - t0._value) ** 2
+                totals[kind] += 0.5 * kk._value * (theta - t0._value) ** 2
         elif kind == "PeriodicTorsionForce":
             for k in range(f.getNumTorsions()):
                 i, j, m, l, per, ph, kk = f.getTorsionParameters(k)
@@ -337,8 +346,8 @@ def _bonded_energy(system, x, box):
                 n1, n2 = np.cross(b1, b2), np.cross(b2, b3)
                 m1 = np.cross(n1, b2 / np.linalg.norm(b2))
                 phi = math.atan2(m1 @ n2, n1 @ n2)
-                total += kk._value * (1 + math.cos(per * phi - ph._value))
-    return total
+                totals[kind] += kk._value * (1 + math.cos(per * phi - ph._value))
+    return totals
 
 
 _RECIP_CACHE: dict = {}
@@ -408,7 +417,10 @@ def reference_energy(system_a, system_b, a_only, b_only, x, state, *, kappa=None
     treats it as the C-C exceptions are (weighted with X, zero in the end state where R is a
     dummy); "unscaled" adds it to the unscaled sum instead (Amber18 manual 21.1.5).
     """
-    le, ls, lb = (state["lambda_electrostatics"], state["lambda_sterics"], state["lambda_bonded"])
+    le, ls = state["lambda_electrostatics"], state["lambda_sterics"]
+    lam_bonded = {"HarmonicBondForce": state["lambda_bonds"],
+                  "HarmonicAngleForce": state["lambda_angles"],
+                  "PeriodicTorsionForce": state["lambda_torsions"]}
     qa, sa, ea, exa, _ = _nb_params(system_a)
     qb, sb, eb, exb, _ = _nb_params(system_b)
     n = len(qa)
@@ -468,7 +480,9 @@ def reference_energy(system_a, system_b, a_only, b_only, x, state, *, kappa=None
         unscaled += np.sum(K_COULOMB * q[i[sel]] * q[j[sel]] / r[sel]
                            + _lj(r[sel], 0.5 * (s[i[sel]] + s[j[sel]]), np.sqrt(e[i[sel]] * e[j[sel]])))
 
-    bonded = (1 - lb) * _bonded_energy(system_a, x, box) + lb * _bonded_energy(system_b, x, box)
+    ea_bonded, eb_bonded = _bonded_energy(system_a, x, box), _bonded_energy(system_b, x, box)
+    bonded = sum((1 - lam_bonded[k]) * ea_bonded[k] + lam_bonded[k] * eb_bonded[k]
+                 for k in ea_bonded)
     out = {"electrostatics": float((1 - le) * el_a + le * el_b),
            "lennard_jones": float((1 - ls) * lj_a + ls * lj_b),
            "bonded": float(bonded), "softcore_internal": float(unscaled)}
@@ -493,7 +507,9 @@ def plain_energy(system, x, *, kappa=None, cutoff=None, box=None, nmax=22):
     if periodic:
         total -= K_COULOMB * np.sum(qq[is_exc] * erf(kappa * r[is_exc]) / r[is_exc])
         total += _recip(q, x, box, kappa, nmax) - K_COULOMB * kappa / math.sqrt(math.pi) * np.sum(q * q)
-    return float(total + _bonded_energy(system, x, box))
+    # `plain_energy` is ONE System evaluated as itself -- no lambda anywhere -- so the three
+    # bonded families simply sum. Only the alchemical reference weights them separately.
+    return float(total + sum(_bonded_energy(system, x, box).values()))
 
 
 # ---------------------------------------------------------------------------------------------

@@ -54,7 +54,10 @@ _NO_ROOT = pytest.mark.skipif(
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow, _NO_ROOT]
 
-NAMES = ["lambda_bonded", "lambda_electrostatics", "lambda_sterics"]
+from md_tools.alchemy.hamiltonian import PUBLIC_PARAMETERS as NAMES  # noqa: E402
+#: Taken from the Hamiltonian, not restated. 0.6.4 split the single bonded component
+#: into `lambda_bonds`, `lambda_angles`, `lambda_torsions` (OpenFE's names); a test
+#: carrying its own copy of the list would have kept passing against a stale one.
 BASE = [k / 15 for k in range(16)]
 #: the water leg is `solvent_v2` since M2.0f: ethane-tip3p v2 (2.7 nm). The v1 leg directory,
 #: `solvent`, holds the void windows of the stopped run and is never read.

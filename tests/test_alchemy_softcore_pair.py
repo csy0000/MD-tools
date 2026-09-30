@@ -95,7 +95,7 @@ def test_pair_energy_force_and_derivatives(direction):
     for r in (0.02, 0.1, 0.25, 0.31, 0.5, 1.2):
         c.setPositions([[0, 0, 0], [r, 0, 0]])
         for le, ls in itertools.product(lambdas, lambdas):
-            state = {"lambda_electrostatics": le, "lambda_sterics": ls, "lambda_bonded": 0.0}
+            state = {"lambda_electrostatics": le, "lambda_sterics": ls, "lambda_bonds": 0.0, "lambda_angles": 0.0, "lambda_torsions": 0.0}
             h.set_state(c, state)
             st = c.getState(getEnergy=True, getForces=True)
             energy = st.getPotentialEnergy()._value
@@ -110,7 +110,7 @@ def test_pair_energy_force_and_derivatives(direction):
                 worst[key] = max(worst[key], err)
                 assert got == pytest.approx(want, rel=1e-9, abs=1e-9), (key, r, le, ls, got, want)
             assert abs(force_on_1[1]) < 1e-12 and abs(force_on_1[2]) < 1e-12
-            assert d["lambda_bonded"] == 0.0
+            assert all(d[n] == 0.0 for n in ("lambda_bonds", "lambda_angles", "lambda_torsions"))
     assert max(worst.values()) < 1e-9, worst
 
 
@@ -123,8 +123,8 @@ def test_physical_end_points_of_the_pair():
     c.setPositions([[0, 0, 0], [r, 0, 0]])
     sigma, eps = (SC + SU) / 2, np.sqrt(EC * EU)
     plain = K_COULOMB * QC * QU / r + 4 * eps * ((sigma / r) ** 12 - (sigma / r) ** 6)
-    zero = {"lambda_electrostatics": 0.0, "lambda_sterics": 0.0, "lambda_bonded": 0.0}
-    one = {"lambda_electrostatics": 1.0, "lambda_sterics": 1.0, "lambda_bonded": 1.0}
+    zero = {"lambda_electrostatics": 0.0, "lambda_sterics": 0.0, "lambda_bonds": 0.0, "lambda_angles": 0.0, "lambda_torsions": 0.0}
+    one = {"lambda_electrostatics": 1.0, "lambda_sterics": 1.0, "lambda_bonds": 1.0, "lambda_angles": 1.0, "lambda_torsions": 1.0}
     assert h.energy(c, zero) == pytest.approx(plain, rel=1e-12)
     assert h.energy(c, one) == pytest.approx(0.0, abs=1e-12)
 
@@ -135,7 +135,7 @@ def test_overlap_is_finite_away_from_the_physical_end():
     h = build_hamiltonian(sa, sb, a_only, b_only)
     c = _context(h.system)
     c.setPositions([[0, 0, 0], [1e-5, 0, 0]])
-    state = {"lambda_electrostatics": 0.5, "lambda_sterics": 0.5, "lambda_bonded": 0.0}
+    state = {"lambda_electrostatics": 0.5, "lambda_sterics": 0.5, "lambda_bonds": 0.0, "lambda_angles": 0.0, "lambda_torsions": 0.0}
     energy = h.energy(c, state)
     u, *_ = _reference("disappearing")
     assert np.isfinite(energy)

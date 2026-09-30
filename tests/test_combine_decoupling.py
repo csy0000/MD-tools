@@ -186,3 +186,55 @@ def test_a_paired_mode_without_endpoint_b_is_refused_and_says_which_mode_has_one
     message = str(refusal.value)
     assert "endpoints.B" in message
     assert "decoupling" in message
+
+
+# ---------------------------------------------------------- the component vocabulary is OpenFE's
+def test_the_lambda_components_are_openfes_names():
+    """0.6.4 adopted OpenFE's component vocabulary deliberately; this pins it.
+
+    `openmmtools.alchemy.AlchemicalState` and OpenFE's `LambdaProtocol` both name the bonded
+    degrees of freedom `lambda_bonds`, `lambda_angles` and `lambda_torsions`. This package had one
+    `lambda_bonded` until 0.6.4. Renaming back, or adding a sixth component under a private name,
+    would silently end the mutual readability the split was made for -- and would do it without
+    failing anything else, because every internal user takes the list from here.
+
+    Asserted as a SET plus an explicit order check, because `linear_path` sorts and the records
+    are keyed by name: a reordering is harmless and a renaming is not.
+    """
+    from md_tools.alchemy.hamiltonian import (BONDED_PARAMETERS, LAMBDA_ELECTROSTATICS,
+                                              LAMBDA_STERICS, PUBLIC_PARAMETERS)
+
+    assert set(BONDED_PARAMETERS) == {"lambda_bonds", "lambda_angles", "lambda_torsions"}
+    assert set(PUBLIC_PARAMETERS) == set(BONDED_PARAMETERS) | {LAMBDA_ELECTROSTATICS,
+                                                               LAMBDA_STERICS}
+    assert len(PUBLIC_PARAMETERS) == 5
+
+
+def test_the_configuration_layer_and_the_hamiltonian_agree_on_the_components():
+    """The gap that shipped once: `ALCHEMICAL_COMPONENTS` was missing a component the Hamiltonian
+    had, and nothing joined them up until a window tried to run and the path was refused.
+
+    `md_tools.alchemy.paths` refuses a name it does not know; only the caller knows which names
+    must ALL be present, so completeness is asserted here rather than inferred anywhere.
+    """
+    from md_tools.alchemy.hamiltonian import PUBLIC_PARAMETERS
+    from md_tools.build.md import ALCHEMICAL_COMPONENTS
+
+    assert set(ALCHEMICAL_COMPONENTS) == set(PUBLIC_PARAMETERS)
+
+
+def test_each_bonded_force_kind_has_its_own_parameter():
+    """The map is the one authority, and `_MIXABLE_BONDED` is derived from it.
+
+    A force kind that is mixable but has no parameter would build a mixing force that nothing
+    moves -- its terms would sit at the endpoint-A value forever, with no derivative and nothing
+    refused.
+    """
+    from md_tools.alchemy.hamiltonian import (BONDED_PARAMETER_FOR, BONDED_PARAMETERS,
+                                              _MIXABLE_BONDED)
+
+    assert tuple(BONDED_PARAMETER_FOR) == tuple(_MIXABLE_BONDED)
+    assert set(BONDED_PARAMETER_FOR.values()) == set(BONDED_PARAMETERS)
+    assert BONDED_PARAMETER_FOR["HarmonicBondForce"] == "lambda_bonds"
+    assert BONDED_PARAMETER_FOR["HarmonicAngleForce"] == "lambda_angles"
+    assert BONDED_PARAMETER_FOR["PeriodicTorsionForce"] == "lambda_torsions"

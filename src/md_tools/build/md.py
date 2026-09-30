@@ -45,16 +45,19 @@ SOFTCORE_DEFAULTS = SoftcoreSettings()
 
 PROTOCOLS = ("cMD", "REST2", "AIS", "umbrella", "alchemical")
 
-#: The lambda components an alchemical path moves. **Every component the Hamiltonian has**, which
-#: is what `AlchemicalHamiltonian.parameter_names` reports: a path that moves fewer is refused at
-#: run time by `windows.check_hamiltonian_matches_path`, because a component left out is not a
-#: component held at zero -- it is a parameter whose value nobody declared.
+#: The lambda components an alchemical path moves, and the NAMES ARE OPENFE'S -- `lambda_bonds`,
+#: `lambda_angles`, `lambda_torsions` beside the two nonbonded ones, as
+#: `openmmtools.alchemy.AlchemicalState` and OpenFE's `LambdaProtocol` name them. This package
+#: deliberately matches that vocabulary and imports nothing from it; see
+#: `docs/scientific-defaults.md` section 13.
 #:
-#: `lambda_bonded` was missing here until 0.7.0's X1, and the gap was invisible from either side:
-#: `build-md` accepted the configuration, the Hamiltonian refused the path, and nothing connected
-#: the two until a window tried to run. Measured rather than reasoned: the refusal names
-#: `Missing from the path: ['lambda_bonded']`.
-ALCHEMICAL_COMPONENTS = ("lambda_electrostatics", "lambda_sterics", "lambda_bonded")
+#: THIS TUPLE MUST BE COMPLETE. The bonded component was missing here until 0.7.0's X1, and the gap
+#: was invisible from either side: `build-md` accepted the configuration and the Hamiltonian refused
+#: the path, `Missing from the path: [...]`, only when a window tried to run. `md_tools.alchemy.paths`
+#: owns the rule that refuses a name it does not know; only the caller knows which names must all be
+#: present, which is why this is asserted against the Hamiltonian's own list in the suite.
+ALCHEMICAL_COMPONENTS = ("lambda_electrostatics", "lambda_sterics",
+                         "lambda_bonds", "lambda_angles", "lambda_torsions")
 
 
 def alchemical_path(resolved: dict[str, Any], *, endpoint_a: str = "A", endpoint_b: str = "B"):
@@ -69,15 +72,22 @@ def alchemical_path(resolved: dict[str, Any], *, endpoint_a: str = "A", endpoint
     block = dict(resolved.get("alchemical") or {})
     if block.get("lambda_path") == "staged":
         raise ConfigError(
-            "alchemical.lambda_path: `staged` is not implemented, and the missing piece is a "
-            "SCIENTIFIC decision rather than code.\n"
-            "  A staged path moves electrostatics and then sterics. This Hamiltonian also moves "
-            "`lambda_bonded` -- the common-core bonded terms that differ between the end states -- "
-            "and which stage carries it changes the path every window samples. Choosing one here "
-            "silently would be a convention nobody agreed to, recorded in results as though it "
-            "had been.\n"
-            "  Use `lambda_path: linear`, the Amber18 one-step diagonal where all three "
-            "components move together, until that decision is recorded.")
+            "alchemical.lambda_path: `staged` is not implemented.\n"
+            "  The question that used to block it -- where the bonded components go -- is now "
+            "SETTLED and is not the reason. OpenFE's reference schedule moves `lambda_bonds`, "
+            "`lambda_angles` and `lambda_torsions` linearly across the whole path, unstaged, and "
+            "this package adopts that (docs/scientific-defaults.md section 13). Staging exists to "
+            "avoid evaluating a Coulomb term on a particle whose repulsive core has gone; bonded "
+            "terms have no such singularity.\n"
+            "  What is missing is that a faithful staged path is DIRECTIONAL. OpenFE's default "
+            "discharges the disappearing region over the first half while growing the appearing "
+            "one's core, then removes the old core while charging the new -- which needs each "
+            "region labelled as inserting or deleting. This layer moves one "
+            "`lambda_electrostatics` and one `lambda_sterics` for both regions together, so a "
+            "two-stage split here would produce something that reads as OpenFE's default and is "
+            "not it, and would leave a charged region with no core at one end.\n"
+            "  Use `lambda_path: linear`, the Amber18 one-step diagonal on which every component "
+            "moves together.")
     return linear_path(ALCHEMICAL_COMPONENTS, endpoint_a=endpoint_a, endpoint_b=endpoint_b)
 
 

@@ -172,12 +172,33 @@ STAGED_PENDING = pytest.mark.xfail(
                         "places lambda_bonded relative to the knot (X1)")
 
 
-def test_staged_is_refused_and_names_the_decision_it_is_waiting_on():
-    """The refusal a person actually meets, and the only staged behaviour there is today."""
+def test_staged_is_refused_and_separates_what_is_settled_from_what_is_missing():
+    """The refusal a person actually meets, and the only staged behaviour there is today.
+
+    THE REASON CHANGED IN 0.6.4 and the test changed with it. `staged` used to be blocked on a
+    scientific decision -- where the bonded components go -- and that is now settled: OpenFE's
+    reference schedule moves them linearly across the whole path, unstaged, and this package
+    adopts it (docs/scientific-defaults.md section 13).
+
+    What blocks `staged` now is an implementation gap, and a different one: a faithful staged path
+    is DIRECTIONAL. OpenFE discharges the disappearing region while growing the appearing one's
+    core, then removes the old core while charging the new, which needs each region labelled as
+    inserting or deleting. This layer moves one `lambda_electrostatics` and one `lambda_sterics`
+    for both regions together, so a two-stage split would read as OpenFE's default without being
+    it -- and would leave a charged region with no core at one end, the singularity staging exists
+    to prevent.
+
+    A refusal that still named the old reason would send the next person to re-decide something
+    already decided, which is why this asserts the message does NOT name it.
+    """
     with pytest.raises(ConfigError) as refusal:
         _resolve(lambda_path="staged", staged_knot=0.5)
     message = str(refusal.value)
-    assert "lambda_bonded" in message and "not implemented" in message
+    assert "not implemented" in message
+    assert "SETTLED" in message and "scientific-defaults.md" in message
+    assert "DIRECTIONAL" in message
+    # The settled question must not still be presented as the blocker.
+    assert "lambda_bonded" not in message
     # It points at what to do instead rather than only at what is wrong.
     assert "lambda_path: linear" in message
 

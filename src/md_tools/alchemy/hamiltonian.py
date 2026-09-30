@@ -43,7 +43,8 @@ EXCEPTIONS AND BONDED TERMS ON THE BOUNDARY -- where Amber18 and its successors 
 * A bonded term touching a region is whatever the topology plan's end states say. Identical in
   both -- a term the plan RETAINS at the dummy end -- it is unscaled, the Amber18 rule. A term the
   plan REMOVES at the dummy end (force constant 0 there, every other parameter equal) is mixed
-  with lambda_bonded, as pmemd 20+'s `gti_bat_sc = 1` scales the junction terms it does not keep;
+  with the bonded lambdas, as pmemd 20+'s `gti_bat_sc = 1` scales the junction terms it does not
+  keep;
   that is what makes the plan's single-anchor dummy separable. Any other difference in a term
   touching a region is refused.
 
@@ -123,8 +124,36 @@ HAMILTONIAN_SCHEMA = "md-tools-alchemical-hamiltonian/1"
 
 LAMBDA_ELECTROSTATICS = "lambda_electrostatics"
 LAMBDA_STERICS = "lambda_sterics"
-LAMBDA_BONDED = "lambda_bonded"
-PUBLIC_PARAMETERS = (LAMBDA_ELECTROSTATICS, LAMBDA_STERICS, LAMBDA_BONDED)
+
+#: THE BONDED COMPONENTS ARE THREE, AND THE NAMES ARE OPENFE'S. Until 0.6.4 this layer had one
+#: `lambda_bonded` covering bonds, angles and torsions together. OpenFE -- and perses before it,
+#: and `openmmtools.alchemy.AlchemicalState` under both -- splits them, and this package deliberately
+#: matches that convention rather than inventing a coarser one:
+#:
+#:     lambda_bonds   lambda_angles   lambda_torsions
+#:
+#: Matching costs nothing here (each force kind already built its own mixing force) and buys two
+#: things. A reader who knows one package can read the other's records without a translation table.
+#: And OpenFE is the independent implementation this package is checked against, so a shared
+#: component vocabulary is what makes a per-component comparison possible at all -- a single
+#: `lambda_bonded` could only ever be compared against the sum of their three.
+#:
+#: MD-tools does NOT import OpenFE, and nothing here depends on it being installed. The convention
+#: is adopted; the code is ours. See `docs/scientific-defaults.md` section 13.
+LAMBDA_BONDS = "lambda_bonds"
+LAMBDA_ANGLES = "lambda_angles"
+LAMBDA_TORSIONS = "lambda_torsions"
+BONDED_PARAMETERS = (LAMBDA_BONDS, LAMBDA_ANGLES, LAMBDA_TORSIONS)
+
+#: Which parameter each mixable force kind moves with. The mapping is the one authority: a force
+#: kind that is mixable and has no entry here would silently get no parameter at all.
+BONDED_PARAMETER_FOR = {
+    "HarmonicBondForce": LAMBDA_BONDS,
+    "HarmonicAngleForce": LAMBDA_ANGLES,
+    "PeriodicTorsionForce": LAMBDA_TORSIONS,
+}
+
+PUBLIC_PARAMETERS = (LAMBDA_ELECTROSTATICS, LAMBDA_STERICS, *BONDED_PARAMETERS)
 
 # Derived Context parameters. Never set on their own; `context_parameters` is their one definition.
 _QSCALE = {"A": "mdt_alchemy_qscale_a", "B": "mdt_alchemy_qscale_b"}   # sqrt of the elec weight
@@ -150,7 +179,9 @@ _SIGMA_FOR_ZERO_EPSILON = 0.1
 #: platform `md_tools.openmm.platform_policy` chose.
 BUILD_PROBE_PLATFORM = "Reference"
 
-_MIXABLE_BONDED = ("HarmonicBondForce", "HarmonicAngleForce", "PeriodicTorsionForce")
+#: Derived from the parameter map so the two cannot disagree: a kind that is mixable but has
+#: no parameter would build a force nothing moves.
+_MIXABLE_BONDED = tuple(BONDED_PARAMETER_FOR)
 _REFUSED_NONBONDED = ("CustomNonbondedForce", "GBSAOBCForce", "CustomGBForce", "AmoebaMultipoleForce",
                       "AmoebaVdwForce", "DrudeForce", "ATMForce")
 
@@ -336,13 +367,13 @@ def build_hamiltonian(system_a, system_b, a_only: Iterable[int], b_only: Iterabl
                                             "physical",
             "boundary_14": settings.sc_boundary_14,
             "bonded_touching_softcore": "identical in both end states: unscaled; force constant 0 "
-                                        "at the dummy end only: mixed with lambda_bonded; "
+                                        "at the dummy end only: mixed with the bonded lambdas; "
                                         "anything else refused",
             "a_only_x_b_only": "excluded",
             "dispersion_correction": "each end state's own NonbondedForce correction, mixed "
                                      "linearly in lambda_sterics (pmemd per-region weighting); "
                                      "softcore tails not softened",
-            "amber18_path": "the diagonal lambda_electrostatics = lambda_sterics = lambda_bonded",
+            "amber18_path": "the diagonal on which every public lambda moves together",
         },
         "nonbonded": dict(settings_a, kappa_nm_inv=kappa,
                           pme_grid=list(pme[1:]) if pme else None),
@@ -735,24 +766,29 @@ def _bonded_terms(force) -> list[tuple[tuple[int, ...], tuple[float, ...]]]:
 
 def _mixed_bonded_force(kind, terms_a, terms_b, periodic):
     mm = _mm()
+    # ONE parameter per force KIND, named as OpenFE names it. The expression is built from that
+    # name rather than a literal, so the string in the energy expression and the global parameter
+    # are the same object by construction -- they were two literals before the split, which is
+    # exactly the shape that lets a rename break one and not the other.
+    lam = BONDED_PARAMETER_FOR[kind]
     if kind == "HarmonicBondForce":
-        f = mm.CustomBondForce("(1-lambda_bonded)*0.5*ka*(r-ra)^2 + lambda_bonded*0.5*kb*(r-rb)^2")
+        f = mm.CustomBondForce(f"(1-{lam})*0.5*ka*(r-ra)^2 + {lam}*0.5*kb*(r-rb)^2")
         for p in ("ra", "ka", "rb", "kb"):
             f.addPerBondParameter(p)
         add = lambda atoms, pa, pb: f.addBond(*atoms, [*pa, *pb])  # noqa: E731
     elif kind == "HarmonicAngleForce":
-        f = mm.CustomAngleForce("(1-lambda_bonded)*0.5*ka*(theta-ta)^2 + lambda_bonded*0.5*kb*(theta-tb)^2")
+        f = mm.CustomAngleForce(f"(1-{lam})*0.5*ka*(theta-ta)^2 + {lam}*0.5*kb*(theta-tb)^2")
         for p in ("ta", "ka", "tb", "kb"):
             f.addPerAngleParameter(p)
         add = lambda atoms, pa, pb: f.addAngle(*atoms, [*pa, *pb])  # noqa: E731
     else:
-        f = mm.CustomTorsionForce("(1-lambda_bonded)*ka*(1+cos(na*theta-pa))"
-                                  " + lambda_bonded*kb*(1+cos(nb*theta-pb))")
+        f = mm.CustomTorsionForce(f"(1-{lam})*ka*(1+cos(na*theta-pa))"
+                                  f" + {lam}*kb*(1+cos(nb*theta-pb))")
         for p in ("na", "pa", "ka", "nb", "pb", "kb"):
             f.addPerTorsionParameter(p)
         add = lambda atoms, pa, pb: f.addTorsion(*atoms, [*pa, *pb])  # noqa: E731
-    f.addGlobalParameter(LAMBDA_BONDED, 0.0)
-    f.addEnergyParameterDerivative(LAMBDA_BONDED)
+    f.addGlobalParameter(lam, 0.0)
+    f.addEnergyParameterDerivative(lam)
     for (atoms, pa), (_, pb) in zip(terms_a, terms_b):
         add(atoms, pa, pb)
     f.setUsesPeriodicBoundaryConditions(periodic)

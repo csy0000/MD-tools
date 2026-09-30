@@ -24,7 +24,10 @@ from md_tools.alchemy.cycles import Leg  # noqa: E402
 from md_tools.alchemy.paths import linear_path  # noqa: E402
 from md_tools.alchemy.windows import WindowError, WindowSettings, window_paths  # noqa: E402
 
-NAMES = ["lambda_bonded", "lambda_electrostatics", "lambda_sterics"]
+from md_tools.alchemy.hamiltonian import PUBLIC_PARAMETERS as NAMES  # noqa: E402
+#: Taken from the Hamiltonian, not restated. 0.6.4 split the single bonded component
+#: into `lambda_bonds`, `lambda_angles`, `lambda_torsions` (OpenFE's names); a test
+#: carrying its own copy of the list would have kept passing against a stale one.
 
 
 def _vacuum(a, b):
@@ -185,7 +188,7 @@ def test_a_dual_vacuum_leg_with_no_common_atoms_carries_no_information():
     from md_tools.alchemy.topology import build_topology_plan
 
     a, b = af.package(af.ETHANE), af.package(af.CHLOROETHANE)
-    diagonal = [dict(zip(NAMES, (v, v, v))) for v in (0.0, 0.25, 0.5, 0.75, 1.0)]
+    diagonal = [{n: v for n in NAMES} for v in (0.0, 0.25, 0.5, 0.75, 1.0)]
 
     def energies(environment):
         plan = build_topology_plan(a, b, af.core_map(a, b), environment, mode="dual")

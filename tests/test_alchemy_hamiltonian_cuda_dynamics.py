@@ -20,7 +20,10 @@ from md_tools.alchemy.hamiltonian import build_hamiltonian  # noqa: E402
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
-NAMES = ("lambda_electrostatics", "lambda_sterics", "lambda_bonded")
+from md_tools.alchemy.hamiltonian import PUBLIC_PARAMETERS as NAMES  # noqa: E402
+#: Taken from the Hamiltonian, not restated. 0.6.4 split the single bonded component
+#: into `lambda_bonds`, `lambda_angles`, `lambda_torsions` (OpenFE's names); a test
+#: carrying its own copy of the list would have kept passing against a stale one.
 
 
 def _cuda_context(system, x, integrator, precision="double"):
@@ -72,7 +75,7 @@ def test_nve_conserves_the_softcore_hamiltonian_on_cuda(lam):
     sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
     h = build_hamiltonian(sa, sb, a, b)
     plain = _nve_excursion(sa, x, lambda c: None)
-    state = dict(zip(NAMES, (lam, lam, lam)))
+    state = {n: lam for n in NAMES}
     softcore = _nve_excursion(h.system, x, lambda c: h.set_state(c, state))
     print(f"\nNVE lambda={lam}: Hamiltonian {softcore:.3f}, plain System A {plain:.3f} kJ/mol")
     assert softcore <= 2 * plain + 0.05, (lam, softcore, plain)
@@ -84,13 +87,13 @@ def test_set_state_reaches_a_live_cuda_context():
     sa, sb, a, b, x = fx.build(True, dispersion=True, tail=True)
     h = build_hamiltonian(sa, sb, a, b)
     live = _cuda_context(h.system, x, openmm.LangevinMiddleIntegrator(300.0, 1.0, 0.001), "mixed")
-    h.set_state(live, dict(zip(NAMES, (0.5, 0.5, 0.5))))
+    h.set_state(live, {n: 0.5 for n in NAMES})
     openmm.LocalEnergyMinimizer.minimize(live, 10.0, 200)
     live.getIntegrator().step(500)
     positions = live.getState(getPositions=True).getPositions(asNumpy=True)._value
     assert np.all(np.isfinite(positions))
     for t in ((0.0, 0.0, 0.0), (0.8, 0.3, 0.6), (1.0, 1.0, 1.0)):
-        state = dict(zip(NAMES, t))
+        state = dict(zip(NAMES, t)) if len(t) == len(NAMES) else {n: t[0] for n in NAMES}
         moved = h.energy(live, state)
         fresh = _cuda_context(h.system, positions, openmm.VerletIntegrator(0.001), "mixed")
         assert moved == pytest.approx(h.energy(fresh, state), rel=1e-6, abs=1e-3), t
@@ -120,7 +123,7 @@ def test_npt_on_cuda_leaves_nothing_stale(precision):
         s.addForce(openmm.MonteCarloBarostat(1.0, 300.0, 5))
     h = build_hamiltonian(sa, sb, a, b)
     live = _cuda_context(h.system, x, openmm.LangevinMiddleIntegrator(300.0, 1.0, 0.0005), precision)
-    state = dict(zip(NAMES, (0.5, 0.5, 0.5)))
+    state = {n: 0.5 for n in NAMES}
     h.set_state(live, state)
     openmm.LocalEnergyMinimizer.minimize(live, 1.0, 2000)
     start = live.getState(getEnergy=True).getPotentialEnergy()._value
@@ -136,10 +139,10 @@ def test_npt_on_cuda_leaves_nothing_stale(precision):
     def fresh_energy(t, vectors):
         fresh = _cuda_context(h.system, pos, openmm.VerletIntegrator(0.001), precision)
         fresh.setPeriodicBoxVectors(*vectors)
-        return h.energy(fresh, dict(zip(NAMES, t)))
+        return h.energy(fresh, dict(zip(NAMES, t)) if len(t) == len(NAMES) else {n: t[0] for n in NAMES})
     stale = [v._value for v in sa.getDefaultPeriodicBoxVectors()]
     for t in ((0.0, 0.0, 0.0), (0.25, 0.5, 0.75), (1.0, 1.0, 1.0)):
-        moved = h.energy(live, dict(zip(NAMES, t)))
+        moved = h.energy(live, dict(zip(NAMES, t)) if len(t) == len(NAMES) else {n: t[0] for n in NAMES})
         again = fresh_energy(t, box)
         tol = rel * max(1.0, abs(again)) + 1e-6
         assert moved == pytest.approx(again, abs=tol), (precision, t, moved, again, tol)

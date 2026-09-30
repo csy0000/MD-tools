@@ -53,7 +53,11 @@ _NO_ROOT = pytest.mark.skipif(
 pytestmark = [pytest.mark.slow, _NO_ROOT]          # CPU: no card, so not a gpu lane
 
 POLICIES = ("retain-all", "separable")
-NAMES = ["lambda_bonded", "lambda_electrostatics", "lambda_sterics"]
+from md_tools.alchemy.hamiltonian import (BONDED_PARAMETERS as BONDED,  # noqa: E402
+                                          PUBLIC_PARAMETERS as NAMES)
+#: Taken from the Hamiltonian, not restated. 0.6.4 split the single bonded component
+#: into `lambda_bonds`, `lambda_angles`, `lambda_torsions` (OpenFE's names); a test
+#: carrying its own copy of the list would have kept passing against a stale one.
 BASE = [k / 15 for k in range(16)]
 #: M2's placement exactly, so the POLICY is the only difference.
 S_VALUES = {"solvent_v2": BASE, "vacuum": sorted(BASE + [1 / 60, 1 / 30]),
@@ -181,9 +185,9 @@ def test_m3_analysis():
                 first, last = sorted(w)[0], sorted(w)[-1]
                 m34.append({"policy": p, "leg": leg, "repeat": r,
                             "dU_dlambda_bonded_at_s0":
-                                w[first]["mean_dU_dlambda_kJ_mol"]["lambda_bonded"],
+                                sum(w[first]["mean_dU_dlambda_kJ_mol"][n] for n in BONDED),
                             "dU_dlambda_bonded_at_s1":
-                                w[last]["mean_dU_dlambda_kJ_mol"]["lambda_bonded"]})
+                                sum(w[last]["mean_dU_dlambda_kJ_mol"][n] for n in BONDED)})
     out["rows"]["M3.2"], out["rows"]["M3.4"] = m32, m34
     # M3.3 the vacuum closure, per policy
     m33 = {}

@@ -37,7 +37,10 @@ from md_tools.build.md import build_scripts  # noqa: E402
 from md_tools.run.inputs import parse_run_input  # noqa: E402
 from md_tools.run.main import md_run_main  # noqa: E402
 
-NAMES = ["lambda_bonded", "lambda_electrostatics", "lambda_sterics"]
+from md_tools.alchemy.hamiltonian import PUBLIC_PARAMETERS as NAMES  # noqa: E402
+#: Taken from the Hamiltonian, not restated. 0.6.4 split the single bonded component
+#: into `lambda_bonds`, `lambda_angles`, `lambda_torsions` (OpenFE's names); a test
+#: carrying its own copy of the list would have kept passing against a stale one.
 
 #: Four windows of 2 ps. Small enough to run twice on the CPU inside a fast lane, and the numbers
 #: are never read: what is under test is the wiring, not a free energy.

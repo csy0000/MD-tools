@@ -28,15 +28,45 @@ from tests import alchemy_s3_fixture as fx3  # noqa: E402
 from md_tools.alchemy.hamiltonian import build_hamiltonian, from_plan  # noqa: E402
 from md_tools.alchemy.softcore import SoftcoreSettings  # noqa: E402
 
-NAMES = ("lambda_electrostatics", "lambda_sterics", "lambda_bonded")
+from md_tools.alchemy.hamiltonian import PUBLIC_PARAMETERS as NAMES  # noqa: E402
 #: Tolerance fixed before comparing: S2's end-state recovery holds these Systems to 1e-7 kJ/mol
 #: per force class on Reference (handoffs/S2.md), and the Hamiltonian adds float64 arithmetic
 #: over |E| ~ 1e4, ~1e-11 relative.
 ENDPOINT_TOL = 1e-7
 
 
+#: (electrostatics, sterics, bonded) -> the FIVE public parameters, with the three bonded
+#: components moving together. These tests were written when the bonded degrees of freedom were one
+#: parameter; 0.6.4 split them into `lambda_bonds`, `lambda_angles` and `lambda_torsions` to match
+#: OpenFE's vocabulary. Every case here drives them together, which is what the old single
+#: parameter meant, so the triples below keep their meaning exactly -- expanded here rather than
+#: rewritten at every call site, so the diff shows the convention change and not 200 edited tuples.
+def _expand(v):
+    elec, sterics, bonded = v
+    return {"lambda_electrostatics": elec, "lambda_sterics": sterics,
+            "lambda_bonds": bonded, "lambda_angles": bonded, "lambda_torsions": bonded}
+
+
 def _state(v):
-    return dict(zip(NAMES, v))
+    return _expand(v)
+
+
+def _bonded_parts(h, context, state):
+    """The three bonded components' derivative parts, merged as the old single one read.
+
+    `derivative_components` is keyed per public parameter, and since 0.6.4 the bonded degrees of
+    freedom are three parameters rather than one. A test that asked for the single old key would
+    now KeyError; a test that asked for only `lambda_bonds` would silently stop watching angles and
+    torsions, which is the worse failure because it still passes.
+    """
+    from md_tools.alchemy.hamiltonian import BONDED_PARAMETERS
+
+    parts = h.derivative_components(context, state)
+    merged = {}
+    for name in BONDED_PARAMETERS:
+        for group, value in parts[name].items():
+            merged[group] = merged.get(group, 0.0) + value
+    return merged
 
 
 def _context(system, x):
@@ -97,7 +127,7 @@ def test_retain_all_leaves_no_bonded_term_on_the_lambda_path():
     assert not any(f["differing_terms"] for f in h.record["bonded_mixed_forces"])
     x = plan.positions_nm
     c = _context(h.system, x)
-    parts = h.derivative_components(c, _state((0.5, 0.5, 0.5)))["lambda_bonded"]
+    parts = _bonded_parts(h, c, _state((0.5, 0.5, 0.5)))
     assert sum(parts.values()) == 0.0, parts
     box = plan.system_a.getDefaultPeriodicBoxVectors()[0][0]._value
     split = fx3.bonded_derivative_split(plan.system_a, plan.system_b, set(plan.a_only) | set(plan.b_only),
@@ -144,16 +174,22 @@ def test_derivatives_are_the_limit_of_the_energy_and_the_path_is_not_linear(plan
     c = _context(h.system, x)
     rest = set(FORCE_GROUPS.values()) - {FORCE_GROUPS[DISPERSION]}
 
-    def energy(t, groups):
-        h.set_state(c, _state(t))
+    def energy(state, groups):
+        h.set_state(c, state)
         return c.getState(getEnergy=True, groups=groups).getPotentialEnergy()._value
+
+    # ONE PARAMETER AT A TIME, over the full public set. Until 0.6.4 the bonded degrees of freedom
+    # were a single parameter and this loop walked a 3-vector; with them split three ways, moving
+    # "the bonded slot" would move bonds, angles and torsions together and compare that finite
+    # difference against the partial for ONE of them. On a plan whose torsions differ and whose
+    # bonds do not, that reads as dU/dlambda_bonds = 0 against a finite difference of ~660 kJ/mol.
+    # The split is what makes five independent partials checkable, so they are checked.
     for base in (0.0, 0.5, 1.0):
-        parts = h.derivative_components(c, _state((base,) * 3))
-        for k, name in enumerate(NAMES):
-            def f(v, k=k, groups=rest):
-                t = [base] * 3
-                t[k] = v
-                return energy(t, groups)
+        at_base = {n: base for n in NAMES}
+        parts = h.derivative_components(c, at_base)
+        for name in NAMES:
+            def f(v, name=name, groups=rest):
+                return energy({**at_base, name: v}, groups)
             want = sum(v for g, v in parts[name].items() if g != DISPERSION)
             # three steps and Richardson on each adjacent pair: S2 places a dummy group without a
             # clash check, so at its physical end it can overlap water (pentane's propyl gives
@@ -164,7 +200,7 @@ def test_derivatives_are_the_limit_of_the_energy_and_the_path_is_not_linear(plan
             best = min(abs(want - r) for r in richardson)
             assert best < 2e-5 * max(1.0, abs(want)), (base, name, want, richardson)
         def g(v):
-            return energy([base, v, base], {FORCE_GROUPS[DISPERSION]})
+            return energy({**at_base, "lambda_sterics": v}, {FORCE_GROUPS[DISPERSION]})
         grid = [k / 10 for k in range(11)]
         values = [g(v) for v in grid]
         residual = max(abs(e - ((1 - v) * values[0] + v * values[-1])) for v, e in zip(grid, values))
@@ -280,5 +316,4 @@ def test_the_tyk2_solvated_decoupling_leg(tmp_path):
     split = fx3.bonded_derivative_split(plan.system_a, plan.system_b, plan.a_only, x, box=box,
                                         policy=policy)
     assert split["unique_touching"] == 0.0, split      # a decoupling leg has no junction at all
-    assert h.derivative_components(c, _state((0.5, 0.5, 0.5)))["lambda_bonded"] == {} \
-        or sum(h.derivative_components(c, _state((0.5, 0.5, 0.5)))["lambda_bonded"].values()) == 0.0
+    assert sum(_bonded_parts(h, c, _state((0.5, 0.5, 0.5))).values()) == 0.0

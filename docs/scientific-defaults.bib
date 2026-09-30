@@ -543,3 +543,57 @@
   pages   = {125--139},
   doi     = {10.1023/A:1008923215028},
 }
+
+@misc{openfe_lambda_protocol,
+  author       = {{The Open Free Energy Consortium}},
+  title        = {{LambdaProtocol.default_functions} and the {RFE} alchemical settings},
+  year         = {2026},
+  howpublished = {\url{https://github.com/OpenFreeEnergy/openfe}},
+  note         = {SOFTWARE DOCUMENTATION, read from the SOURCE on 2026-09-30 --
+                  src/openfe/protocols/openmm_rfe/_rfe_utils/lambdaprotocol.py (vendored from
+                  perses) and equil_rfe_settings.py -- because the published API reference gives
+                  `lambda_functions: str = "default"` without the functions that key selects.
+                  default_functions: lambda_sterics_core = x; lambda_electrostatics_core = x;
+                  lambda_sterics_insert = 2x if x < 0.5 else 1; lambda_sterics_delete = 0 if
+                  x < 0.5 else 2(x-0.5); lambda_electrostatics_insert = 0 if x < 0.5 else 2(x-0.5);
+                  lambda_electrostatics_delete = 2x if x < 0.5 else 1; lambda_bonds = x;
+                  lambda_angles = x; lambda_torsions = x. LambdaSettings.lambda_windows = 11
+                  (LambdaProtocol.__init__ itself defaults windows=10); schedule
+                  np.linspace(0, 1, windows); _validate_schedule requires start 0 and end 1;
+                  _check_for_naked_charges refuses any window with charge but no LJ.
+                  AlchemicalSettings.softcore_LJ is Literal["gapsys", "beutler"], softcore_alpha
+                  0.85, use_dispersion_correction False, endstate_dispersion_correction False.},
+}
+
+@misc{openmmtools_alchemy,
+  author       = {{The Chodera Lab}},
+  title        = {{openmmtools.alchemy}: {AlchemicalState} and {AlchemicalRegion}},
+  year         = {2026},
+  howpublished = {\url{https://openmmtools.readthedocs.io/}},
+  note         = {SOFTWARE DOCUMENTATION. Read back from the INSTALLED openmmtools 0.26.0 rather
+                  than the web page: AlchemicalState exposes lambda_bonds, lambda_angles,
+                  lambda_torsions, lambda_electrostatics and lambda_sterics; AlchemicalRegion
+                  defaults alchemical_bonds, alchemical_angles and alchemical_torsions to None,
+                  so bonded alchemy is off unless asked for.},
+}
+
+@article{gapsys2012softcore,
+  author  = {Gapsys, Vytautas and Seeliger, Daniel and de Groot, Bert L.},
+  title   = {New Soft-Core Potential Function for Molecular Dynamics Based Alchemical Free Energy
+             Calculations},
+  journal = {J. Chem. Theory Comput.},
+  year    = {2012},
+  volume  = {8},
+  pages   = {2373--2382},
+}
+
+@article{beutler1994softcore,
+  author  = {Beutler, Thomas C. and Mark, Alan E. and van Schaik, Ren{\'e} C. and
+             Gerber, Paul R. and van Gunsteren, Wilfred F.},
+  title   = {Avoiding singularities and numerical instabilities in free energy calculations based
+             on molecular simulations},
+  journal = {Chem. Phys. Lett.},
+  year    = {1994},
+  volume  = {222},
+  pages   = {529--539},
+}

@@ -24,9 +24,22 @@ The chain runs end to end, and what is and is not implemented is worth stating e
   route through the same thermodynamics — see [validation.md](validation.md) and the
   [ethanol hydration tutorial](../../tutorial/ethanol/hydration.md).
 
-Not implemented, and refused by name rather than approximated: `lambda_path: staged` (a scientific
-decision about `lambda_bonded` is missing, not code), `mode: separated`, a decoupling of a ligand
-with a net formal charge (no finite-size correction), and atom mapping across a ring.
+The five λ components are named as OpenFE and `openmmtools` name them — `lambda_electrostatics`,
+`lambda_sterics`, `lambda_bonds`, `lambda_angles`, `lambda_torsions` — and the bonded three move
+linearly across the whole path, unstaged, as OpenFE's reference schedule does. That vocabulary is
+adopted deliberately so records are mutually readable and a cross-implementation comparison is
+possible; **nothing here imports OpenFE.** See
+[scientific defaults §13](../../scientific-defaults.md).
+
+Not implemented, and refused by name rather than approximated: `lambda_path: staged` (a faithful
+staged path is DIRECTIONAL — it needs each region labelled as inserting or deleting, which this
+layer does not do; the bonded placement it used to be blocked on is settled), `mode: separated`, a
+decoupling of a ligand with a net formal charge (no finite-size correction), and atom mapping
+across a ring.
+
+The **softcore is deliberately NOT OpenFE's**: this package implements the Amber18 form so that a
+comparison against `pmemd` is like-for-like, and refuses Gapsys and Beutler by name rather than
+mapping them onto it.
 
 ## The example file beside this README
 
