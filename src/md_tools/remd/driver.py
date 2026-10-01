@@ -107,6 +107,24 @@ def configuration_digest(configurations):
     return digest.hexdigest()
 
 
+def parent_chain_inheritance(manifest):
+    """The two fields an extension needs from its parent to total a CHAIN rather than a segment.
+
+    A chain total has to accumulate over the parent's chain. The parent manifest's own
+    `exchanges_committed` and completion report describe ONE segment, so building a cumulative
+    figure from them yields the last two segments of a chain however long it is -- which is what
+    the 125 ns ALA ladder's `restart_prod5.json` records as `segments: 2`.
+
+    The FORMAT travels with the chain because it is what says the totals can be added to: a v1
+    record's cumulative fields are the broken ones, so a v2 segment must be able to recognise one
+    and decline to build on it. It is a separate function from the caller so the test can inherit
+    exactly what the runtime inherits, instead of a second copy of this mapping that could agree
+    with the code while both disagreed with a real manifest.
+    """
+    extends = manifest.get("extends") or {}
+    return {"chain": extends.get("chain"), "extension_format": extends.get("format")}
+
+
 class _Interruption:
     """A termination request, recorded rather than raised.
 
@@ -976,6 +994,7 @@ class ReplicaRun:
                 "state_trajectories": _state_trajectory_digests(
                     parent, n_states=self.protocol.n_states),
                 "exchanges_committed": int(manifest["exchanges_committed"]),
+                **parent_chain_inheritance(manifest),
                 "steps_completed": int(checkpoint["step"]),
                 "whole_frames": int(manifest["whole_frames"]),
                 "production_ps": float(manifest["production_ps_per_replica"]),
@@ -2024,41 +2043,101 @@ class ReplicaRun:
 
         Section 14 allows a cumulative figure for the whole chain and requires the segment-local
         counts to stay distinguishable. Both are here, separately, and the chain figure is a
-        stated sum of two stated segments rather than a number whose provenance has to be
+        stated sum of stated segments rather than a number whose provenance has to be
         reconstructed.
+
+        A CHAIN TOTAL ACCUMULATES OVER THE PARENT'S CHAIN, NOT OVER THE PARENT'S OWN SEGMENT.
+        Every cumulative field here once read the parent's per-segment counts, so the record
+        described the last TWO segments of a chain however long it really was. On the 125 ns ALA
+        ladder -- five 25 ns segments -- `restart_prod5.json` says `segments: 2`,
+        `exchanges: 20000` against a true 50000, `first_exchange_number: 10001` against 40001,
+        and a chain acceptance over 50000 proposals against a true 125000.
+
+        It survived because the two fields that are DERIVED from the absolute step count --
+        `steps` and `production_ps` -- were right, so the record was self-consistent and only
+        disagreed with reality. The acceptance is the one that matters: 0.49378 is the mean over
+        segments 4 and 5, published under a name that says whole chain.
+
+        The sums below need the parent's chain totals, which is why `_extend_from` now inherits
+        them. When the parent is an ORIGINAL run its chain is itself -- one segment, its own
+        exchanges, its own report -- and those are the fallbacks. When the parent is a v1
+        extension its totals are the broken ones above, so they are not a base to add to and
+        every cumulative field is left EMPTY with `chain_totals` saying why. An empty field
+        invites the reader to go and count; a wrong one does not.
         """
         parent = dict(state["extends"])
         parent_report = parent.get("completion_report") or {}
         parent_overall = parent_report.get("overall") or {}
+        parent_chain = parent.get("chain") or {}
         segment = report["overall"]
 
-        accepted = int(segment["accepted"]) + int(parent_overall.get("accepted") or 0)
-        proposed = int(segment["proposed"]) + int(parent_overall.get("proposed") or 0)
-        chain = {"accepted": accepted, "proposed": proposed,
-                 "acceptance": (accepted / proposed) if proposed else None,
-                 "complete": bool(parent_overall)}
+        # Three cases, and the middle one is the whole reason this is not a one-line sum.
+        if not parent_chain:
+            # An original run: its chain is itself, exactly.
+            inherited_segments = 1
+            inherited_exchanges = int(parent["exchanges_committed"])
+            inherited_accepted = int(parent_overall.get("accepted") or 0)
+            inherited_proposed = int(parent_overall.get("proposed") or 0)
+            inherited_complete = bool(parent_overall)
+            totals = "parent is an original run"
+        elif parent.get("extension_format") == self.EXTENSION_FORMAT:
+            inherited_segments = int(parent_chain["segments"])
+            inherited_exchanges = int(parent_chain["exchanges"])
+            parent_acceptance = parent_chain.get("neighbouring_acceptance") or {}
+            inherited_accepted = int(parent_acceptance.get("accepted") or 0)
+            inherited_proposed = int(parent_acceptance.get("proposed") or 0)
+            inherited_complete = bool(parent_acceptance.get("complete"))
+            totals = "summed over the parent's chain"
+        else:
+            inherited_segments = inherited_exchanges = None
+            inherited_accepted = inherited_proposed = None
+            inherited_complete = False
+            totals = (f"unavailable: the parent's chain record is "
+                      f"{parent.get('extension_format') or 'an older format'}, whose cumulative "
+                      f"fields counted only its own last two segments. This segment's own counts "
+                      f"are exact; re-walk the chain to total it.")
+
+        this_exchanges = int(self.reporter.last_exchange()) + 1
+        if inherited_proposed is None:
+            chain = {"accepted": None, "proposed": None, "acceptance": None, "complete": False}
+        else:
+            accepted = int(segment["accepted"]) + inherited_accepted
+            proposed = int(segment["proposed"]) + inherited_proposed
+            chain = {"accepted": accepted, "proposed": proposed,
+                     "acceptance": (accepted / proposed) if proposed else None,
+                     "complete": inherited_complete}
         return {
-            "format": "md-tools-extension/v1",
+            "format": self.EXTENSION_FORMAT,
             "parent": parent,
             "segment": {
                 "steps": int(state["step"]) - int(parent["steps_completed"]),
                 "starts_after_step": int(parent["steps_completed"]),
-                "exchanges": int(self.reporter.last_exchange()) + 1,
-                "first_exchange_number": int(parent["exchanges_committed"]) + 1,
+                "exchanges": this_exchanges,
+                # Chain-global numbering, so it needs the chain's total and not the parent's.
+                "first_exchange_number": (None if inherited_exchanges is None
+                                          else inherited_exchanges + 1),
                 "production_ps": (state["schedule"].step_to_ps(state["step"])
                                   - float(parent["production_ps"])),
                 "neighbouring_acceptance": segment,
             },
             "chain": {
                 "steps": int(state["step"]),
-                "exchanges": int(parent["exchanges_committed"])
-                             + int(self.reporter.last_exchange()) + 1,
+                "exchanges": (None if inherited_exchanges is None
+                              else inherited_exchanges + this_exchanges),
                 "production_ps": state["schedule"].step_to_ps(state["step"]),
-                "segments": 2 if not parent.get("chain_length") else
-                            int(parent["chain_length"]) + 1,
+                "segments": (None if inherited_segments is None
+                             else inherited_segments + 1),
+                "chain_totals": totals,
                 "neighbouring_acceptance": chain,
             },
         }
+
+    #: The extension record's format, and the one thing that says a parent's CHAIN TOTALS can be
+    #: added to. v1 built every cumulative field from the parent's own segment, so its totals are
+    #: a two-segment sum whatever the chain's real length; v2 accumulates over the parent's chain.
+    #: The version therefore is not decoration -- a v2 segment reading a v1 parent leaves the
+    #: cumulative fields empty, and it needs this string to tell the two apart.
+    EXTENSION_FORMAT = "md-tools-extension/v2"
 
     #: What an interrupted OUT-OF-PLACE EXTENSION must be told, and why it is not `--resume`.
     #:
