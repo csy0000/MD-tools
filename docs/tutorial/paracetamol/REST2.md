@@ -120,9 +120,23 @@ atom is the centre of an unscaled improper; the numbers are the atom indices `sc
 
 ![paracetamol: unscaled torsions in red](images/paracetamol-rest2-unscaled.png)
 
-The amide (1–3) and the whole ring are protected. What REST2 *does* heat are the 18 torsion terms
-left: the methyl rotation, the ring's rotation about the N–C bond — the **1-3-4-5** torsion, in the
-atom numbering this picture and `scaler.yaml` use — and the O–H rotation.
+The amide (1–3) and the whole ring are protected — all six aromatic ring bonds, so the ring's own
+geometry is never heated and cannot distort.
+
+What REST2 *does* heat are the 18 torsion terms left, and every one of them is about a bond
+OUTSIDE the ring:
+
+| scaled bond | torsion | what moves |
+|---|---|---|
+| 3–4 | **1-3-4-5** | the acetamido group twists relative to the ring |
+| 7–8 | 6-7-8-17 | the phenol O–H rotates |
+| 0–1 | — | the acetyl methyl spins |
+
+**1-3-4-5 is an ordinary torsion, not a ring torsion.** Its central bond 3–4 joins the ring carbon
+to the amide nitrogen and is not part of the ring; it is exactly the kind of single bond between
+two groups that REST2 exists to heat. The ring's own six bonds are a separate matter and stay at
+tau = 0 in every state, which is what the red ring in the picture means and what `scaler.yaml`
+records as six `aromatic_ring` entries.
 
 ## 4. Generate the ladder
 

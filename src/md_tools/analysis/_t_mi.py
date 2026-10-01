@@ -39,6 +39,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
 
+from dataclasses import dataclass, field
+from itertools import combinations
+
 import numpy as np
 
 # THE TWO HELPERS THIS NEEDS, inlined rather than imported. hpREST2's `mi.py` also holds the
@@ -90,7 +93,7 @@ def mi_from_table(P: np.ndarray) -> float:
 # ---------------------------------------------------------------------------------------------
 
 
-__all__ = ["torsional_mi"]
+__all__ = ["t_mi", "torsional_mi", "mi_matrix", "dependence_graph", "mi_pair"]
 
 
 def _entropy_from_table(P: np.ndarray, axis: int) -> float:
@@ -229,3 +232,224 @@ def torsional_mi(torsions, *, weights=None, names: Optional[Sequence[str]] = Non
             "yourself, because where that line falls is a scientific choice and not the "
             "estimator's to make",
         ])
+
+
+
+# ------------------------------------------------------------------ correlation detection
+#
+# The PAIRWISE estimator above answers "are these two torsions dependent". Everything from here
+# answers the question a user actually arrives with -- WHICH torsions are coupled, across the
+# whole set -- and that is a different question statistically, because asking it of d torsions
+# means d(d-1)/2 simultaneous comparisons. Without a multiplicity correction, a handful of
+# "significant" pairs is the expected yield of pure noise, so `benjamini_hochberg` controls the
+# false discovery rate and the uncorrected values are kept beside the corrected ones.
+#
+# The verdicts are deliberately three-valued and NONE of them says "independent": a pairwise test
+# that does not detect dependence at this binning and this sample size has not shown independence,
+# and a vocabulary that let it say so would turn an underpowered comparison into a result.
+
+#: verdicts, and none of them says "independent"
+SUPPORTED = "supported_dependence"
+
+
+NOT_DETECTED = "no_dependence_detected_at_this_resolution"
+
+
+UNRESOLVED = "unresolved_sampling_or_estimator_sensitivity"
+
+
+def mi_pair(t1, t2, w=None, bins: int = 24, origin: float = -np.pi) -> float:
+    return mi_from_table(joint_table(t1, t2, w, bins, origin))
+
+
+def support_diagnostics(P: np.ndarray, n_frames: int, ess: float) -> dict:
+    """How much of the joint the sample actually covers. MI is meaningless without this."""
+    occ = int(np.sum(P > 0))
+    cells = int(P.size)
+    return {"cells": cells, "cells_occupied": occ, "frac_occupied": occ / cells,
+            "n_frames": int(n_frames), "ess_weight": float(ess),
+            "ess_per_occupied_cell": float(ess / max(occ, 1)),
+            "naive_bias_nats_estimate": float((np.sqrt(cells) - 1) ** 2 / (2.0 * max(ess, 1.0))),
+            "naive_bias_note": "(B-1)^2/(2*ESS), the leading independent-data histogram bias; "
+                               "an order-of-magnitude guide, not a correction"}
+
+
+# ----------------------------------------------------------------------------- the null
+def null_product_marginals(t1, t2, w=None, *, bins: int = 24, origin: float = -np.pi,
+                           n_draws: int, n_independent: float,
+                           seed: int = 0) -> np.ndarray:
+    """MI of samples drawn from `p_j (x) p_k`, the TARGET-ENSEMBLE independence null.
+
+    WHY NOT SHUFFLE A COLUMN. The obvious null -- permute one angular column and keep the weights
+    -- does not represent independence in the TARGET ensemble when the weights are
+    configuration-dependent. After the permutation, frame `t`'s weight was computed from a
+    configuration whose other coordinate is no longer present, so the weighted marginals of the
+    shuffled data are not the target marginals, and the null is a null for a different question.
+
+    WHAT THIS DOES INSTEAD. It draws independently from the two WEIGHTED marginals, which are
+    estimates of the target marginals, and so realises exactly "these two torsions, with their
+    real target-ensemble marginals, and no dependence". `tests/hprest2/test_mi.py` validates it
+    against constructions whose independence is known by design, including concentrated marginals.
+
+    ASSUMPTIONS, stated because they bound every p-value derived from this:
+      * the weighted marginals are well enough estimated to be resampled from -- if a marginal
+        rests on a handful of high-weight frames, so does the null;
+      * `n_independent` is the effective number of INDEPENDENT samples, which the caller must
+        supply from a block analysis. The weight ESS alone overstates it for an autocorrelated
+        trajectory, and the finite-sample MI bias scales like `1/N`, so using the wrong `N` moves
+        the whole null. This is the single largest assumption in the module.
+      * the null is unweighted by construction (draws are already from the target marginals), so
+        it does not reproduce weight-induced variance. That makes it mildly optimistic; the block
+        bootstrap on the real data is what carries the weight-variance information.
+    """
+    P = joint_table(t1, t2, w, bins, origin)
+    pj = P.sum(axis=1); pk = P.sum(axis=0)
+    rng = np.random.default_rng(seed)
+    n = int(max(2, round(n_independent)))
+    centres = np.linspace(origin, origin + TWO_PI, bins + 1)[:-1] + TWO_PI / (2 * bins)
+    out = np.empty(n_draws)
+    for d in range(n_draws):
+        a = rng.choice(bins, size=n, p=pj)
+        b = rng.choice(bins, size=n, p=pk)
+        out[d] = mi_pair(centres[a], centres[b], None, bins=bins, origin=origin)
+    return out
+
+
+# ----------------------------------------------------------------------------- matrix + verdicts
+@dataclass
+class MIResult:
+    names: List[str]
+    bins: int
+    origin: float
+    mi_raw: np.ndarray                                  # (n, n) nats, symmetric, diagonal = self
+    pairs: List[dict] = field(default_factory=list)     # ranked, diagonal excluded
+    provenance: Dict[str, object] = field(default_factory=dict)
+
+    def ranked(self, verdict: Optional[str] = None) -> List[dict]:
+        rows = [p for p in self.pairs if verdict is None or p["verdict"] == verdict]
+        return sorted(rows, key=lambda p: -p["mi_raw_nats"])
+
+
+def mi_matrix(theta: np.ndarray, w=None, bins: int = 24, origin: float = -np.pi) -> np.ndarray:
+    """Symmetric MI matrix. Diagonal holds the self-MI (the marginal entropy), never ranked."""
+    theta = np.asarray(theta, dtype=np.float64)
+    if theta.ndim != 2:
+        raise ValueError(f"expected (n_frames, n_torsions); got shape {theta.shape}")
+    n = theta.shape[1]
+    M = np.zeros((n, n))
+    for j in range(n):
+        M[j, j] = mi_pair(theta[:, j], theta[:, j], w, bins, origin)
+        for k in range(j + 1, n):
+            M[j, k] = M[k, j] = mi_pair(theta[:, j], theta[:, k], w, bins, origin)
+    return M
+
+
+def n_unique_pairs(n_torsions: int) -> int:
+    """`n(n-1)/2`. For 15 torsions that is 105; the count is derived, never hard-coded."""
+    return n_torsions * (n_torsions - 1) // 2
+
+
+def benjamini_hochberg(p: Sequence[float], alpha: float = 0.05) -> Tuple[np.ndarray, float]:
+    """BH step-up. Returns the reject mask and the adaptive threshold actually used.
+
+    Applied because a 15-torsion analysis tests 105 pairs at once: at alpha = 0.05 an uncorrected
+    scan expects about 5 false positives, which is the same order as the number of real couplings
+    this campaign has ever found.
+    """
+    p = np.asarray(p, dtype=np.float64)
+    m = p.size
+    if m == 0:
+        return np.zeros(0, dtype=bool), 0.0
+    order = np.argsort(p)
+    thresh = alpha * (np.arange(1, m + 1) / m)
+    passed = p[order] <= thresh
+    if not np.any(passed):
+        return np.zeros(m, dtype=bool), 0.0
+    kmax = int(np.max(np.nonzero(passed)[0]))
+    cut = float(p[order][kmax])
+    return p <= cut, cut
+
+
+def dependence_graph(res: MIResult) -> List[List[str]]:
+    """Connected components over SUPPORTED pairs. Overlapping membership is allowed.
+
+    A COMPONENT IS A CANDIDATE ANALYSIS GROUP, NOT PROOF OF IRREDUCIBLE MANY-BODY COUPLING, and a
+    MISSING edge rules nothing out: pairwise MI is blind to dependence that appears only in three
+    or more variables jointly, and a macrocycle closure constraint is exactly that kind of object.
+    Nothing here forces disjoint pairs.
+    """
+    edges = [(p["name_i"], p["name_j"]) for p in res.pairs if p["verdict"] == SUPPORTED]
+    adj: Dict[str, set] = {n: set() for n in res.names}
+    for a, b in edges:
+        adj[a].add(b); adj[b].add(a)
+    seen, comps = set(), []
+    for n in res.names:
+        if n in seen or not adj[n]:
+            continue
+        stack, comp = [n], []
+        while stack:
+            x = stack.pop()
+            if x in seen:
+                continue
+            seen.add(x); comp.append(x)
+            stack.extend(adj[x] - seen)
+        comps.append(sorted(comp))
+    return comps
+
+
+def normalised_fourier_correlation(t1, t2, m: int, n: int, w=None) -> dict:
+    """`R_mn = |C_mn| / sqrt((1-|a_m|^2)(1-|b_n|^2))`, a genuine correlation coefficient in [0,1].
+
+    `C_mn` is a COVARIANCE and so carries the marginals' own concentration: a pair whose marginals
+    are sharply peaked has small `Var(e^{i m theta}) = 1 - |a_m|^2`, and a modest covariance
+    between them then looks small on the raw scale while being nearly complete on the normalised
+    one. Dividing by the geometric mean of the two variances removes that, exactly as Pearson's
+    r does for real variables.
+
+    `R_mn = 0` iff the two Fourier components are uncorrelated at that order; `R_mn = 1` means one
+    determines the other. IT REMAINS AN ORDER-BY-ORDER STATEMENT: `R_mn = 0` for every small
+    `(m, n)` does NOT imply independence, which is why MI stays the dependence metric and this is
+    a descriptor of a chosen direction.
+
+    Degenerate case: a marginal with `|a_m| = 1` is a delta function at that order, its variance is
+    zero and `R_mn` is undefined; reported as `None` rather than divided through.
+    """
+    a = np.asarray(t1, dtype=np.float64).ravel()
+    b = np.asarray(t2, dtype=np.float64).ravel()
+    wn = (np.ones(a.size) / a.size) if w is None else \
+        np.asarray(w, dtype=np.float64).ravel() / np.sum(w)
+    am = complex(np.sum(wn * np.exp(1j * m * a)))
+    bn = complex(np.sum(wn * np.exp(1j * n * b)))
+    c = complex(np.sum(wn * np.exp(1j * (m * a + n * b))) - am * bn)
+    va, vb = 1.0 - abs(am) ** 2, 1.0 - abs(bn) ** 2
+    if va <= 1e-12 or vb <= 1e-12:
+        # m = 0 or n = 0 lands here by construction: <exp(i*0*x)> = 1, variance 0. A correlation
+        # with a constant is undefined, not zero, so the bare-torsion directions (1,0) and (0,1)
+        # have no R_mn -- which is correct and worth seeing rather than silently coercing.
+        return {"C_mn": c, "abs_C_mn": abs(c), "a_m": am, "b_n": bn,
+                "abs_a_m": abs(am), "abs_b_n": abs(bn), "R_mn": None,
+                "why": (f"a marginal variance is ~0 (|a_m|={abs(am):.6f}, |b_n|={abs(bn):.6f}); "
+                        "that Fourier component is deterministic and R_mn is undefined")}
+    return {"C_mn": c, "abs_C_mn": abs(c), "a_m": am, "b_n": bn,
+            "abs_a_m": abs(am), "abs_b_n": abs(bn),
+            "R_mn": float(abs(c) / np.sqrt(va * vb))}
+
+
+def centred_fourier_moment(t1, t2, m: int, n: int, w=None) -> complex:
+    """`C_mn = <e^{i(m t1 + n t2)}> - <e^{i m t1}><e^{i n t2}>`.
+
+    CENTRED, which is the whole point: the raw moment `<e^{i(m t1 + n t2)}>` is large for
+    INDEPENDENT concentrated marginals, and subtracting the product of the marginal moments
+    removes exactly that. Use it only to SUGGEST an interpretable sum or difference for a pair MI
+    has already flagged -- never as the dependence score, and never optimised over `m, n`.
+    """
+    a = np.asarray(t1, dtype=np.float64).ravel(); b = np.asarray(t2, dtype=np.float64).ravel()
+    wn = (np.ones(a.size) / a.size) if w is None else \
+        np.asarray(w, dtype=np.float64).ravel() / np.sum(w)
+    j = np.sum(wn * np.exp(1j * (m * a + n * b)))
+    return complex(j - np.sum(wn * np.exp(1j * m * a)) * np.sum(wn * np.exp(1j * n * b)))
+
+#: The name used at the call site, matching `t_hdbscan` and `t_symmetry`. `torsional_mi` is the
+#: original name and stays as an alias: it is what the hpREST2 session's own callers use, and
+#: breaking it would make the two trees disagree about a function they share.
+t_mi = torsional_mi

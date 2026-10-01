@@ -52,7 +52,7 @@ def test_the_mi_module_imports_without_sklearn_at_all():
     """`torsional_mi` is numpy-only and must stay that way: it is documented as needing no extra,
     so an environment with the extra uninstalled must still be able to use it."""
     assert _in_subprocess(
-        "import sys, md_tools.analysis._torsional_mi\n"
+        "import sys, md_tools.analysis._t_mi\n"
         "print('sklearn' in sys.modules, 'scipy' in sys.modules)") == "False False"
 
 
@@ -61,7 +61,7 @@ def test_neither_analysis_module_imports_the_other():
     seven functions instead of vendoring a 1600-line module. Asserted on the AST rather than by
     importing, so it holds even for an import added inside a function body.
     """
-    for name, forbidden in (("_t_hdbscan.py", "torsional_mi"), ("_torsional_mi.py", "t_hdbscan")):
+    for name, forbidden in (("_t_hdbscan.py", "_t_mi"), ("_t_mi.py", "_t_hdbscan")):
         tree = ast.parse((PACKAGE / name).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and forbidden in (node.module or ""):
@@ -74,7 +74,7 @@ def test_neither_analysis_module_imports_the_other():
 def test_the_extraction_left_the_mutual_information_framework_behind():
     """The metric layer must not reach an MI implementation. The extraction computed the
     transitive closure of seven functions and found the MI layer outside it; this says the result
-    did not drift back. `_torsional_mi.py` inlines the two helpers it needs and is exempt."""
+    did not drift back. `_t_mi.py` inlines the two helpers it needs and is exempt."""
     source = (PACKAGE / "_torsions.py").read_text(encoding="utf-8")
     for name in ("redundancy_matrix", "sensitivity_scan", "mi_pair", "_shift_surrogate_bias"):
         assert name not in source, (

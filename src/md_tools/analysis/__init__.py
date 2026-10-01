@@ -6,13 +6,19 @@ TWO PUBLIC ENTRY POINTS, deliberately independent of each other:
 from md_tools.analysis import t_hdbscan, torsional_mi
 ```
 
-* `t_hdbscan(torsions, ...)` -- a density partition of a torsional ensemble, as a fit/predict
-  estimator. Needs scikit-learn, which is the `analysis` extra.
-* `torsional_mi(torsions, ...)` -- mutual information between torsion pairs, with the plug-in
-  estimator's upward bias measured per pair against a shuffled null. numpy only.
+* `t_hdbscan(torsions, ...)` -- a density PARTITION of a torsional ensemble, as a fit/predict
+  estimator. Needs scikit-learn.
+* `t_mi(torsions, ...)` -- mutual information between torsion pairs (alias `torsional_mi`), with
+  the plug-in estimator's upward bias measured per pair against a shuffled null; plus
+  `mi_matrix` and `dependence_graph` for CORRELATION DETECTION across the whole set, with a
+  false-discovery-rate correction, because d torsions means d(d-1)/2 simultaneous comparisons.
+  numpy only.
+* `t_symmetry` / `TorsionSymmetry` -- which of those clusters are the SAME conformer seen through
+  a molecular symmetry, decided from RDKit graph automorphisms and a joint-distribution
+  comparison, never from equal populations. Needs rdkit.
 
-Neither imports the other, and this package imports neither at module load: both are reached
-lazily below, so `import md_tools.analysis` costs nothing and a missing extra is reported by
+None of them imports another's estimator, and this package imports none of them at module load:
+all are reached lazily below, so `import md_tools.analysis` costs nothing and a missing extra is reported by
 name rather than as a traceback from inside a fit.
 
 THREE THINGS THAT GOVERN EVERY USE OF THE CLUSTERING, and belong here rather than in a function's
@@ -34,13 +40,26 @@ the reasoning in their docstrings is theirs.
 """
 from __future__ import annotations
 
-__all__ = ["THDBSCAN", "t_hdbscan", "torsional_mi"]
+__all__ = ["THDBSCAN", "t_hdbscan",
+           "t_mi", "torsional_mi", "mi_matrix", "dependence_graph",
+           "t_symmetry", "TorsionSymmetry", "load_torsion_json", "load_cluster_torsion",
+           "draw_torsions", "verify_atom_mapping", "calibrate", "ComparisonTolerance"]
+
+_LAZY = {
+    "THDBSCAN": "._t_hdbscan", "t_hdbscan": "._t_hdbscan",
+    "t_mi": "._t_mi", "torsional_mi": "._t_mi",
+    "mi_matrix": "._t_mi", "dependence_graph": "._t_mi",
+    "t_symmetry": "._t_symmetry", "TorsionSymmetry": "._t_symmetry",
+    "load_torsion_json": "._t_symmetry", "load_cluster_torsion": "._t_symmetry",
+    "draw_torsions": "._t_symmetry", "verify_atom_mapping": "._t_symmetry",
+    "calibrate": "._t_symmetry", "ComparisonTolerance": "._t_symmetry",
+}
 
 
 def __getattr__(name):
     """Lazy, so neither sklearn nor the metric layer loads until something is actually used.
 
-    THE IMPLEMENTATION MODULES ARE PRIVATE (`_t_hdbscan`, `_torsional_mi`) and that is not a
+    THE IMPLEMENTATION MODULES ARE PRIVATE (`_t_hdbscan`, `_t_mi`, `_t_symmetry`) and that is not a
     style choice. A submodule named `t_hdbscan` beside a callable named `t_hdbscan` is a
     collision Python resolves in the submodule's favour: importing it BINDS it onto the package,
     after which this `__getattr__` is never consulted and `from md_tools.analysis import
@@ -49,15 +68,12 @@ def __getattr__(name):
     here. Calling it then fails with "'module' object is not callable", a long way from the
     import that caused it.
     """
-    if name in ("THDBSCAN", "t_hdbscan"):
-        from ._t_hdbscan import THDBSCAN, t_hdbscan
+    module_name = _LAZY.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
 
-        return {"THDBSCAN": THDBSCAN, "t_hdbscan": t_hdbscan}[name]
-    if name == "torsional_mi":
-        from ._torsional_mi import torsional_mi
-
-        return torsional_mi
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(importlib.import_module(module_name, __name__), name)
 
 
 def __dir__():

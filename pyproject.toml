@@ -44,7 +44,7 @@ alchemy = ["pymbar>=4,<5", "scipy"]
 # without it and a missing install is reported by name rather than as a traceback from inside a
 # fit. `md_tools.analysis.torsional_mi` is numpy-only and needs nothing here.
 # sklearn.cluster.HDBSCAN arrived in scikit-learn 1.3.
-analysis = ["scikit-learn>=1.3"]
+analysis = ["scikit-learn>=1.3", "rdkit"]
 
 # The ONLY entry point. Installing the wheel puts `md-openmm` on PATH, which is what lets a
 # consuming project run the whole pipeline with no source checkout and no component lock.

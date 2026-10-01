@@ -139,11 +139,30 @@ def test_the_metric_is_periodic_so_the_wrap_does_not_split_a_basin():
 def test_a_unimodal_ensemble_needs_allow_single_cluster_to_come_back_as_one_state():
     """A limitation worth pinning rather than discovering. sklearn's EOM selection refuses the
     root of the condensed tree unless allow_single_cluster is set, so one Gaussian blob is SPLIT
-    at the default. Both halves of this are measured."""
+    when it is off. Both halves of this are measured.
+
+    MIGRATED, not rewritten: this test was written when the flag defaulted to False and relied on
+    that default. md-tools defaults it to TRUE, so the off case now says so explicitly. The
+    behaviour being pinned is unchanged -- which is the point of making the flag explicit here
+    rather than deleting the half that used to come for free."""
     rng = np.random.default_rng(71)
     th = rng.normal(0.0, 0.15, size=(4000, 1))
-    assert t_hdbscan(th, mass_floor=0.02).fit().n_clusters_ > 1
+    assert t_hdbscan(th, mass_floor=0.02, allow_single_cluster=False).fit().n_clusters_ > 1
     assert t_hdbscan(th, mass_floor=0.02, allow_single_cluster=True).fit().n_clusters_ == 1
+
+
+@requires_sklearn
+def test_one_state_is_a_possible_answer_by_default():
+    """THE DEFAULT ITSELF, pinned. md-tools sets allow_single_cluster=True so that a rigid
+    molecule with one torsional basin is REPORTED as one state rather than split into a plausible
+    three. The upstream package defaults it to False; a silent change back would make every
+    unimodal result wrong in a way no caller could see, so the default is a test."""
+    rng = np.random.default_rng(71)
+    th = rng.normal(0.0, 0.15, size=(4000, 1))
+    fit = t_hdbscan(th, mass_floor=0.02).fit()
+    assert fit.allow_single_cluster is True, "md-tools defaults allow_single_cluster to True"
+    assert fit.n_clusters_ == 1, "a unimodal ensemble must come back as one state by default"
+    assert fit.summary()["single_cluster_excluded_by_construction"] is False
 
 
 # ------------------------------------------------------------------------------ the two paths
@@ -322,7 +341,7 @@ def test_summary_says_when_a_single_cluster_was_impossible_by_construction():
     as a FIELD, so a reader who gets 3 can see why 1 was excluded."""
     rng = np.random.default_rng(19)
     th = rng.normal(0.0, 0.15, size=(4000, 1))
-    off = t_hdbscan(th, mass_floor=0.02).fit().summary()
+    off = t_hdbscan(th, mass_floor=0.02, allow_single_cluster=False).fit().summary()
     on = t_hdbscan(th, mass_floor=0.02, allow_single_cluster=True).fit().summary()
     assert off["single_cluster_excluded_by_construction"] is True
     assert off["allow_single_cluster"] is False and off["n_clusters"] > 1

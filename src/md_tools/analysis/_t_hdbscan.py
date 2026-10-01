@@ -69,7 +69,7 @@ class THDBSCAN:
                  metric_weights=None, multiplicities=None,
                  min_samples_fraction: Optional[float] = None,
                  min_samples: Optional[int] = None, k: int = 15,
-                 allow_single_cluster: bool = False):
+                 allow_single_cluster: bool = True):
         self.theta_ = validate_angles(torsions, units)
         self.n_frames_, self.n_torsions_ = self.theta_.shape
         w = validate_frame_weights(weights, self.n_frames_)
@@ -99,12 +99,19 @@ class THDBSCAN:
         self.min_samples = min_samples
         self.min_samples_fraction = min_samples_fraction
         self.k = int(k)
-        # WITHOUT THIS A UNIMODAL ENSEMBLE CANNOT COME BACK AS ONE STATE. sklearn's EOM selection
-        # refuses the root of the condensed tree unless allow_single_cluster is set, so a single
-        # Gaussian blob is SPLIT rather than reported whole -- measured, a 4000-frame unimodal
-        # ensemble returns 3 clusters at the default. A caller who may be looking at one state has
-        # to be able to say so, and the default stays False because on a multi-state ensemble
-        # allowing the root lets everything collapse into it.
+        # TRUE BY DEFAULT HERE, which DIVERGES from the hpREST2 original. Without it a unimodal
+        # ensemble cannot come back as one state: sklearn's EOM selection refuses the root of the
+        # condensed tree, so a single Gaussian blob is SPLIT rather than reported whole --
+        # measured, a 4000-frame unimodal ensemble returns 3 clusters with the flag off.
+        #
+        # The upstream default was False on the ground that allowing the root lets a multi-state
+        # ensemble collapse into it. That risk is real but it is LOUD: one cluster holding
+        # everything is visible in the first line of any summary. The failure the other way is
+        # silent -- three clusters with a plausible mass split and nothing saying one state was
+        # never a candidate -- and a tutorial's reader is far more likely to meet a rigid molecule
+        # with one basin than a multi-state ensemble they cannot recognise. Decided by this
+        # package's owner on 2026-10-01; `single_cluster_excluded_by_construction` still reports
+        # which way the flag was set, so neither case is inferred.
         self.allow_single_cluster = bool(allow_single_cluster)
         self.fitted_ = False
 
