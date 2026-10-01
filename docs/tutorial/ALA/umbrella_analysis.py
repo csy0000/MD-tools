@@ -184,20 +184,100 @@ def load_window(directory: Path, cv_name: str | None = None,
     return window
 
 
-def overlap_fraction(left: Window, right: Window) -> float:
-    """Fraction of the sparser neighbour's samples inside the range the two share.
+def overlap_fraction(left: Window, right: Window, bin_width_deg: float = BIN_WIDTH_DEG) -> float:
+    """The histogram overlap of two windows: sum over bins of the smaller normalised count.
 
-    Ranges that touch while populations do not is the case this is written to catch, which is
-    why it is a fraction of SAMPLES rather than of span.
+    NOT a comparison of ranges. An earlier version took `max(min)` and `min(max)` of the two
+    windows' values and asked what fraction of each fell inside that interval. That is wrong on a
+    PERIODIC coordinate: a window straddling +/-180 holds samples at both -179 and +179, so its
+    linear range is the whole circle and it "overlaps" everything. Measured on this page's own
+    profile, four windows near +/-180 reported ranges of exactly -180.0 to 180.0 and mutual
+    overlaps of 99.2% -- the number was highest exactly where it meant least, which is the worst
+    way for a check to fail.
+
+    The overlap coefficient has none of that. It is computed per bin on a fixed grid covering the
+    circle, so -179 and +179 are neighbours only if the grid says so, and it lies in [0, 1] with
+    1 for identical distributions. It also still catches what the range version was written for:
+    two windows whose supports merely touch share no bin and score 0.
     """
-    low = max(left.values.min(), right.values.min())
-    high = min(left.values.max(), right.values.max())
-    if high <= low:
+    edges = np.arange(-180.0, 180.0 + bin_width_deg, bin_width_deg)
+    left_hist, _ = np.histogram(left.values, bins=edges)
+    right_hist, _ = np.histogram(right.values, bins=edges)
+    if left_hist.sum() == 0 or right_hist.sum() == 0:
         return 0.0
-    inside_left = float(np.mean((left.values >= low) & (left.values <= high)))
-    inside_right = float(np.mean((right.values >= low) & (right.values <= high)))
-    return min(inside_left, inside_right)
+    left_p = left_hist / left_hist.sum()
+    right_p = right_hist / right_hist.sum()
+    return float(np.minimum(left_p, right_p).sum())
 
+
+def coverage_report(windows, *, bin_width_deg=BIN_WIDTH_DEG, minimum_overlap=0.03,
+                    minimum_count=50):
+    """Does this set of windows support a PMF? Returns (lines, problems, thin).
+
+    ONE implementation, called by every script that computes a profile. It lived in two places
+    for about an hour and the second copy still held the superseded pairwise test, so the two
+    disagreed about the same windows -- one printed a PMF while the other refused it. Two readers
+    of one policy is the defect, whatever either one says.
+
+    WHAT WHAM ACTUALLY REQUIRES, and it is not pairwise adjacency. The first version walked the
+    windows sorted by CENTRE and demanded each neighbouring pair overlap. That breaks exactly
+    where a profile is hardest: a window on a steep slope slides off its centre by slope/k, so
+    "next by centre" stops meaning "next in sampled space". Measured here, a window centred at
+    120 deg sampled 89 deg, and the by-centre chain reported five gaps between windows that
+    overlap other windows perfectly well -- while the union covered every bin and formed one
+    connected graph.
+
+    So: the sampled range must be COVERED, and the overlap graph CONNECTED. An island of windows
+    joined to the rest by nothing has a free-energy offset no data constrains. Both tests are
+    independent of where the centres sit and of how far any window slid.
+    """
+    edges = np.arange(-180.0, 180.0 + bin_width_deg, bin_width_deg)
+    totals = np.zeros(len(edges) - 1, dtype=int)
+    for window in windows:
+        totals += np.histogram(window.values, bins=edges)[0]
+    centres = 0.5 * (edges[:-1] + edges[1:])
+    empty = [c for c, n in zip(centres, totals) if n == 0]
+    thin = [(c, n) for c, n in zip(centres, totals) if 0 < n < minimum_count]
+
+    neighbours = {i: set() for i in range(len(windows))}
+    for i in range(len(windows)):
+        for j in range(i + 1, len(windows)):
+            if overlap_fraction(windows[i], windows[j], bin_width_deg) >= minimum_overlap:
+                neighbours[i].add(j)
+                neighbours[j].add(i)
+    reached, stack = {0}, [0]
+    while stack:
+        here = stack.pop()
+        for other in neighbours[here] - reached:
+            reached.add(other)
+            stack.append(other)
+    islands = sorted(set(range(len(windows))) - reached)
+
+    lines = [
+        f"coverage: {int((totals > 0).sum())} of {len(totals)} bins sampled; thinnest sampled "
+        f"bin {int(totals[totals > 0].min()) if (totals > 0).any() else 0}, "
+        f"median {int(np.median(totals))}",
+        f"overlap graph: {len(windows)} windows, largest component {len(reached)}"
+        + ("  connected" if not islands else ""),
+    ]
+    problems = []
+    if empty:
+        problems.append(
+            f"{len(empty)} bin(s) inside the range have NO samples from any window, at phi = "
+            + ", ".join(f"{c:.1f}" for c in empty[:8]) + (" ..." if len(empty) > 8 else ""))
+    if islands:
+        problems.append("these windows are joined to the rest by nothing: "
+                        + ", ".join(windows[i].name for i in islands))
+    return lines, problems, thin
+
+
+REFUSAL_ADVICE = (
+    "  WHAM would still converge, to a curve whose offsets across the unsampled region no data\n"
+    "  constrains -- a smooth PMF with invented barrier heights and nothing in it saying which\n"
+    "  parts are unsupported. Add windows there, or stiffen them: a window on a slope sits\n"
+    "  slope/k away from its centre, so on a steep barrier a loose restraint slides off and\n"
+    "  leaves the top unsampled."
+)
 
 def wham(windows, temperature_k=300.0, bin_width_deg=BIN_WIDTH_DEG,
          tolerance=1e-7, max_iterations=100000):
@@ -314,7 +394,9 @@ def main(argv=None) -> int:
     parser.add_argument("--temperature", type=float, default=300.0, help="kelvin")
     parser.add_argument("--bin-width", type=float, default=BIN_WIDTH_DEG, help="degrees")
     parser.add_argument("--minimum-overlap", type=float, default=0.03,
-                        help="refuse a PMF if an adjacent pair shares less than this fraction")
+                        help="two windows count as joined above this histogram overlap")
+    parser.add_argument("--minimum-count", type=int, default=50,
+                        help="warn about a sampled bin holding fewer samples than this")
     parser.add_argument("--discard-fraction", type=float, default=0.1,
                         help="leading fraction of each window discarded as the relaxation into "
                              "the window rather than sampling of it (default 0.1)")
@@ -345,25 +427,21 @@ def main(argv=None) -> int:
     print("\na window's mean sits off its centre wherever the free energy has a slope; that is")
     print("expected at finite force constant, and is why windows are reweighted, not read.")
 
-    print("\nadjacent overlap (fraction of the sparser neighbour's samples in the shared range)")
-    gaps = []
-    for left, right in zip(windows, windows[1:]):
-        fraction = overlap_fraction(left, right)
-        flag = "" if fraction >= arguments.minimum_overlap else "   <-- GAP"
-        print(f"  {left.name:>10} : {right.name:<10}  {fraction:6.1%}{flag}")
-        if fraction < arguments.minimum_overlap:
-            gaps.append((left.name, right.name, fraction))
-
-    if gaps:
-        print(f"\nREFUSING a PMF: {len(gaps)} adjacent pair(s) do not overlap.", file=sys.stderr)
-        for left, right, fraction in gaps:
-            print(f"  {left} and {right} share {fraction:.1%} of the sparser one's samples",
-                  file=sys.stderr)
-        print("  WHAM would still converge, to a curve whose relative offsets across the gap no\n"
-              "  data constrains -- a smooth PMF with invented barrier heights and nothing in it\n"
-              "  saying which parts are unsupported. Add windows between the named pairs, widen\n"
-              "  them with a smaller force constant, or run them longer.", file=sys.stderr)
+    lines, problems, thin = coverage_report(
+        windows, bin_width_deg=arguments.bin_width, minimum_overlap=arguments.minimum_overlap,
+        minimum_count=arguments.minimum_count)
+    print()
+    for line in lines:
+        print(line)
+    if problems:
+        print("REFUSING a PMF.", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        print(REFUSAL_ADVICE, file=sys.stderr)
         return 2
+    if thin:
+        print(f"  WARNING: {len(thin)} sampled bin(s) hold fewer than {arguments.minimum_count} "
+              f"samples; the PMF there rests on very little", file=sys.stderr)
 
     centres, pmf = wham(windows, temperature_k=arguments.temperature,
                         bin_width_deg=arguments.bin_width)
