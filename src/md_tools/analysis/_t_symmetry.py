@@ -1417,8 +1417,11 @@ def _draw_sym_group(self, group, *, output, cluster_torsions=None,
     "which torsions are correlated" is a statement about the joint distribution and the scatter
     alone can hide a dependence that the marginals do not.
     """
-    import matplotlib
-    matplotlib.use("Agg")
+    # NO `matplotlib.use("Agg")` HERE. A library that switches the global backend hijacks the
+    # caller's session: inside a notebook it silently disables the inline backend, so every bare
+    # figure the user plots AFTERWARDS produces no image and no error. That is exactly what it did
+    # to the histogram cell of the clustering tutorial. `savefig` writes a file under any backend,
+    # so forcing one buys nothing, and on a headless machine the default is already Agg.
     import io
     import matplotlib.pyplot as plt
     import matplotlib.image as mpimg
@@ -1821,9 +1824,7 @@ def draw_representative_structures(trajectory, frames: Dict[str, int], *, output
     read on GitHub as often as it is run, and a JavaScript viewer renders as nothing there. The
     aligned coordinates are also returned so a caller can write them out for a real viewer.
     """
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    import matplotlib.pyplot as plt          # no backend switch: see draw_sym_group
 
     if not frames:
         raise ValueError("no frames given")
