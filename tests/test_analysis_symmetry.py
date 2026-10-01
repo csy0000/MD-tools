@@ -516,8 +516,8 @@ def test_coordinates_without_a_mapping_are_refused():
 # --------------------------------------------------------------------------------- drawings
 
 def test_draw_sym_group_writes_a_figure_and_reports_the_angles(tmp_path):
-    """The group-level drawing: who merged, under which operation, at which angles, and which
-    torsions move together. It must RETURN those numbers too -- a picture nobody can read back
+    """The group drawing: who merged, under which operation, at which angles, and which torsions
+    the operation actually moves. It must RETURN those numbers -- a picture nobody can read back
     as data is not evidence."""
     pytest.importorskip("matplotlib")
     torsions, labels = _merge_fixture()
@@ -535,6 +535,56 @@ def test_draw_sym_group_writes_a_figure_and_reports_the_angles(tmp_path):
         assert set(means) == set(defs.names)
 
 
+def test_the_group_drawing_shows_only_the_torsions_the_operation_moves():
+    """A torsion the operation maps to itself holds the same distribution in both clusters by
+    construction. Drawing it adds a panel that cannot distinguish anything and buries the one or
+    two that carry the relation."""
+    pytest.importorskip("matplotlib")
+    import tempfile
+
+    torsions, labels = _merge_fixture()
+    data = load_cluster_torsion(torsions, labels)
+    mol, defs = _para_system()
+    detector = TorsionSymmetry(mol, defs)
+    detector.fit(data)
+    with tempfile.TemporaryDirectory() as directory:
+        info = detector.draw_sym_group(0, output=f"{directory}/g.png", cluster_torsions=data)
+    relevant, invariant = info["relevant_torsions"], info["invariant_torsions"]
+    assert relevant, "a merged group must have at least one torsion the operation moves"
+    assert not (set(relevant) & set(invariant)), "a torsion cannot be both"
+    assert set(relevant) | set(invariant) == set(defs.names)
+
+
+def test_draw_operation_effect_refuses_to_guess_which_operation(tmp_path):
+    """It drew the FIRST non-identity operation, which is right only on a molecule that has one.
+    On any other it drew an operation relating nothing, with a legend that read correctly."""
+    pytest.importorskip("matplotlib")
+    mol, defs = _para_system()
+    detector = TorsionSymmetry(mol, defs)
+    assert len([op for op in detector.operations if not op.is_identity]) > 1, \
+        "this fixture must have several operations, or the test proves nothing"
+    with pytest.raises(ValueError, match="which one to draw"):
+        detector.draw_operation_effect(output=tmp_path / "x.png")
+
+    info = detector.draw_operation_effect(1, output=tmp_path / "one.png")
+    assert info["operation"] == 1 and (tmp_path / "one.png").exists()
+
+
+def test_draw_operation_effect_can_take_the_operation_from_a_group(tmp_path):
+    """`group=` draws the operation that actually related that group's members, which is the
+    question a reader of the merge has."""
+    pytest.importorskip("matplotlib")
+    torsions, labels = _merge_fixture()
+    data = load_cluster_torsion(torsions, labels)
+    mol, defs = _para_system()
+    detector = TorsionSymmetry(mol, defs)
+    detector.fit(data)
+    merged = next(i for i, g in enumerate(detector.cluster_groups) if len(g) > 1)
+    info = detector.draw_operation_effect(group=merged, output=tmp_path / "g.png")
+    assert info["operation"] in set(detector.group_operations.values())
+    assert info["swapped_atom_pairs"], "the drawn operation must actually move something"
+
+
 def test_draw_sym_group_and_draw_operation_are_indexed_differently(tmp_path):
     """A group is a set of clusters; an operation is a permutation of atoms. Sharing one index
     would make `1` mean two things, so each refuses an index the other would have accepted."""
@@ -549,7 +599,7 @@ def test_draw_sym_group_and_draw_operation_are_indexed_differently(tmp_path):
         detector.draw_sym_group(len(detector.cluster_groups), output=tmp_path / "x.png",
                                 cluster_torsions=data)
     with pytest.raises(IndexError, match="operation"):
-        detector.draw_operation(len(detector.operations), output=tmp_path / "y.svg")
+        detector.draw_operation(len(detector.operations), output=tmp_path / "y.png")
     assert detector.draw_symmetry is detector.draw_operation or True   # the documented alias
 
 
@@ -560,14 +610,16 @@ def test_an_operation_needing_coordinates_can_still_be_drawn(tmp_path):
     mol, both = _para_system()
     defs = _defs(mol, [both.quads[0]], names=("attach_a",))
     detector = TorsionSymmetry(mol, defs)
+    pytest.importorskip("matplotlib")
     needing = next(op for op in detector.operations if op.needs_coordinates)
-    out = tmp_path / "op.svg"
+    out = tmp_path / "op.png"
     info = detector.draw_operation(needing.index, output=out)
     assert out.exists() and out.stat().st_size > 0
 
     # Asserted on the RETURNED record, not on the file. RDKit renders a legend as glyph PATHS,
     # so the words are not in the SVG text and grepping for them would fail on a perfectly good
     # drawing -- a test of the wrong artifact. The record is what a reader can check.
-    assert info["operation"]["needs_coordinates"] is True
-    assert info["operation"]["unresolved_columns"], (
-        "an operation reported as needing coordinates must name which columns do")
+    assert info["operation"] == needing.index
+    assert info["changed_positions"], (
+        "an operation that moves a torsion must say which atom position changed")
+    assert any(pairs for pairs in info["changed_positions"].values())

@@ -1199,6 +1199,48 @@ def verify_atom_mapping(molecule, topology_bonds: Iterable[Tuple[int, int]],
 
 # ----------------------------------------------------------------------------------- drawing
 
+#: The two sides of a swap. Chosen to be distinguishable in greyscale as well as in colour, so a
+#: printed figure still shows which half maps to which.
+SWAP_COLOURS = ((0.85, 0.33, 0.10), (0.00, 0.45, 0.70))      # orange-red, blue
+#: An atom the operation leaves where it is.
+FIXED_COLOUR = (0.80, 0.80, 0.80)
+
+
+def permutation_colours(permutation: Sequence[int], *, include_fixed: bool = False):
+    """Colour the atoms by WHICH SIDE of the operation they are on.
+
+    A single highlight colour says "these atoms move" and stops there. For a two-fold flip the
+    useful statement is which atom goes to which: the permutation decomposes into cycles, and for
+    a flip every non-trivial cycle is a transposition {i, j}. One member gets the first colour and
+    its image the second, so the picture shows the two halves being exchanged rather than a single
+    undifferentiated blob.
+
+    Longer cycles (a three-fold axis, say) alternate through the same two colours by position, and
+    an odd-length cycle therefore repeats a colour -- unavoidable with two colours, and harmless,
+    because the pairing it would otherwise assert is not a pairing in that case.
+
+    Returns `{atom_index: (r, g, b)}`, covering only the atoms that MOVE unless `include_fixed`.
+    """
+    perm = [int(i) for i in permutation]
+    colours: Dict[int, Tuple[float, float, float]] = {}
+    seen = set()
+    for start in range(len(perm)):
+        if start in seen:
+            continue
+        cycle, current = [], start
+        while current not in seen:
+            seen.add(current)
+            cycle.append(current)
+            current = perm[current]
+        if len(cycle) == 1:
+            if include_fixed:
+                colours[cycle[0]] = FIXED_COLOUR
+            continue
+        for position, atom in enumerate(cycle):
+            colours[atom] = SWAP_COLOURS[position % 2]
+    return colours
+
+
 def _drawing_molecule(molecule, *, keep_hydrogens: bool):
     """A 2D-depicted copy. Hydrogens are KEPT by default because torsions often name them."""
     from rdkit import Chem
@@ -1270,56 +1312,17 @@ def draw_torsions(molecule, torsion_idx: TorsionDefinitions, *, output,
                                                            torsion_idx.quads))]}
 
 
-def draw_symmetry_operation(molecule, torsion_idx: TorsionDefinitions,
-                            operation: SymmetryOperation, *, output,
-                            keep_hydrogens: bool = True,
-                            panel: Tuple[int, int] = (340, 300)) -> Dict[str, Any]:
-    """An SVG of one operation: which atoms move where, and what it does to each torsion."""
-    from rdkit.Chem import Draw
-
-    mol = _drawing_molecule(molecule, keep_hydrogens=keep_hydrogens)
-    moved = [i for i, j in enumerate(operation.permutation) if i != j]
-    mols, legends, highlights = [], [], []
-
-    mols.append(mol)
-    legends.append(f"operation {operation.index}: {len(moved)} atoms move")
-    highlights.append(moved)
-
-    for k, (name, quad) in enumerate(zip(torsion_idx.names, torsion_idx.quads)):
-        image = operation.transformed_quads[k]
-        source = operation.column_source[k]
-        # NOT a dict lookup: a dict literal evaluates EVERY value before indexing, and
-        # `source[1]` does not exist for ("coordinates",). The lookup form raised IndexError on
-        # exactly the operations this drawing is most useful for -- the ones needing coordinates.
-        if source[0] == "column":
-            where = f"= column {source[1]}"
-        elif source[0] == "column_reversed":
-            where = f"= column {source[1]} reversed"
-        else:
-            where = "NOT in the table -- needs coordinates"
-        mols.append(mol)
-        legends.append(f"{name}: {'-'.join(map(str, quad))} -> "
-                       f"{'-'.join(map(str, image))}  {where}")
-        highlights.append(sorted({*map(int, quad), *map(int, image)}))
-
-    svg = Draw.MolsToGridImage(mols, molsPerRow=3, subImgSize=panel, legends=legends,
-                               highlightAtomLists=highlights, useSVG=True)
-    text = svg.data if hasattr(svg, "data") else str(svg)
-    Path(output).write_text(text, encoding="utf-8")
-    return {"output": str(output), "operation": operation.describe()}
-
-
 def _draw_operation(self, which: int = 1, *, output, **kwargs) -> Dict[str, Any]:
-    """Draw ONE symmetry OPERATION of the molecule: `detector.draw_operation(1, output=...)`.
+    """Draw ONE symmetry OPERATION: `detector.draw_operation(1, output=...)`.
 
-    This is the molecule-level view and needs no clusters, so it works before `fit`. For the
-    cluster-level view -- which clusters merged, their angles, and which torsions move together --
-    use `draw_sym_group`, which is what most callers want and is indexed differently.
+    A thin name over `draw_operation_effect`, kept because the original specification called this
+    `draw_symmetry`. There is ONE operation drawing, not two: an earlier version rendered a grid
+    with a panel per torsion, which showed the same facts in more space and drifted out of step
+    with the before/after one as soon as both existed.
 
-    INDEXING: operation 0 is the IDENTITY, always present and always first, so `1` is the first
-    non-identity operation -- which is what a caller asking to see "the symmetry" means. Asking
-    for an index the molecule does not have is refused with the count, rather than wrapping
-    around to the identity and drawing a picture in which nothing moves.
+    INDEXING: operation 0 is the IDENTITY, so `1` is the first non-identity operation. Asking for
+    an index the molecule does not have is refused with the count rather than wrapping around to
+    the identity and drawing a picture in which nothing moves.
     """
     if which >= len(self.operations):
         raise IndexError(
@@ -1327,8 +1330,7 @@ def _draw_operation(self, which: int = 1, *, output, **kwargs) -> Dict[str, Any]
             f"operations distinct on the selected torsions, index 0 being the identity"
             + (" -- so it has NO non-identity symmetry here" if len(self.operations) == 1 else
                f", so the valid non-identity indices are 1..{len(self.operations) - 1}"))
-    return draw_symmetry_operation(self.molecule, self.definitions, self.operations[which],
-                                   output=output, **kwargs)
+    return self.draw_operation_effect(which, output=output, **kwargs)
 
 
 #: The molecule-level drawing, by OPERATION index. `draw_symmetry` is kept as its original name
@@ -1343,15 +1345,36 @@ t_symmetry = TorsionSymmetry
 
 # -------------------------------------------------------------------- drawing a symmetry GROUP
 
-def _molecule_png(molecule, highlight_atoms, size=(420, 360)) -> bytes:
-    """A PNG of the molecule with `highlight_atoms` marked, for embedding in a figure."""
+#: One colour per drawn torsion, reused between the molecule panel and its histogram row so the
+#: two can be read against each other without counting.
+TORSION_COLOURS = ((0.85, 0.33, 0.10), (0.00, 0.45, 0.70), (0.47, 0.67, 0.19),
+                   (0.49, 0.18, 0.56), (0.93, 0.69, 0.13))
+
+
+def _molecule_png(molecule, highlight_atoms, size=(420, 360), colours=None,
+                  bonds=None, bond_colours=None, atom_indices=True) -> bytes:
+    """A PNG of the molecule with `highlight_atoms` marked, for embedding in a figure.
+
+    `colours` is the `{atom: rgb}` from `permutation_colours`, so the two sides of a swap are
+    drawn differently rather than as one undifferentiated highlight.
+    """
     from rdkit.Chem.Draw import rdMolDraw2D
 
     mol = _drawing_molecule(molecule, keep_hydrogens=True)
     drawer = rdMolDraw2D.MolDraw2DCairo(*size)
-    drawer.drawOptions().addAtomIndices = True
-    rdMolDraw2D.PrepareAndDrawMolecule(drawer, mol,
-                                       highlightAtoms=[int(i) for i in highlight_atoms])
+    options = drawer.drawOptions()
+    options.addAtomIndices = bool(atom_indices)
+    options.highlightBondWidthMultiplier = 18
+    atoms = [int(i) for i in highlight_atoms]
+    kwargs = {}
+    if colours:
+        kwargs["highlightAtomColors"] = {int(k): tuple(v) for k, v in colours.items()
+                                         if int(k) in atoms}
+    if bonds:
+        kwargs["highlightBonds"] = [int(b) for b in bonds]
+        if bond_colours:
+            kwargs["highlightBondColors"] = {int(k): tuple(v) for k, v in bond_colours.items()}
+    rdMolDraw2D.PrepareAndDrawMolecule(drawer, mol, highlightAtoms=atoms, **kwargs)
     drawer.FinishDrawing()
     return drawer.GetDrawingText()
 
@@ -1362,8 +1385,8 @@ def _circular_mean(theta: np.ndarray) -> float:
     return float(np.arctan2(np.sin(theta).mean(), np.cos(theta).mean()))
 
 
-def _draw_sym_group(self, group, *, output, cluster_torsions=None, merged=None,
-                    bins: int = 48, max_points: int = 4000) -> Dict[str, Any]:
+def _draw_sym_group(self, group, *, output, cluster_torsions=None,
+                    bins: int = 48) -> Dict[str, Any]:
     """THE MAIN DRAWING: one merged symmetry GROUP -- the operation relating its members, their
     angles, and which torsions move together.
 
@@ -1408,106 +1431,298 @@ def _draw_sym_group(self, group, *, output, cluster_torsions=None, merged=None,
             raise IndexError(
                 f"merged group {merged_label} does not exist: the fit produced "
                 f"{len(self.cluster_groups)} groups, {self.cluster_groups}. Note that this is the "
-                f"MERGED label, not an operation index -- draw_symmetry() takes the latter.")
+                f"MERGED label, not an operation index -- draw_operation() takes the latter.")
         members = list(self.cluster_groups[merged_label])
 
     if cluster_torsions is None:
         raise ValueError("pass cluster_torsions= so the member angles can be drawn")
 
     names = list(self.definitions.names)
-    n_torsions = len(names)
-    pairs = [(i, j) for i in range(n_torsions) for j in range(i + 1, n_torsions)]
     reference = members[0]
 
-    # the angles, before and after the operation that relates each member to the reference
     before, after, used = {}, {}, {}
     for member in members:
         entry = cluster_torsions.entries[member]
         before[member] = entry.torsions
         operation_index = self.group_operations.get(member)
         used[member] = operation_index
-        after[member] = (entry.torsions if operation_index in (None,) or member == reference
+        after[member] = (entry.torsions if operation_index is None or member == reference
                          else self.transform(entry.torsions, self.operations[operation_index],
                                              frames=entry.frames))
 
-    moved = []
+    operation = None
     for member in members:
-        index = used[member]
-        if index:
-            moved = [i for i, j in enumerate(self.operations[index].permutation) if i != j]
+        if used[member]:
+            operation = self.operations[used[member]]
             break
+    moved_atoms = ([i for i, j in enumerate(operation.permutation) if i != j]
+                   if operation is not None else [])
 
-    n_cols = max(len(pairs), 1)
-    figure, axes = plt.subplots(3, n_cols, figsize=(4.6 * n_cols, 12.4), squeeze=False)
+    # ONLY THE TORSIONS THE OPERATION ACTUALLY CHANGES. A column the operation maps to itself is
+    # invariant under it: both clusters hold the same distribution there by construction, so a
+    # panel for it shows two curves on top of each other and says nothing about the symmetry.
+    # Drawing every torsion -- or every PAIR of torsions -- buries the one or two that carry the
+    # relation among panels that cannot distinguish anything. So the panel count IS the number of
+    # torsions the operation moves: one for a single two-fold bond, two for a coupled pair.
+    if operation is None:
+        relevant = list(range(len(names)))
+        relevance = "single cluster: no operation, so every torsion is shown"
+    else:
+        relevant = [c for c, source in enumerate(operation.column_source)
+                    if source != ("column", c)]
+        relevance = (f"{len(relevant)} of {len(names)} torsions move under operation "
+                     f"{operation.index}")
+        if not relevant:
+            relevant = list(range(len(names)))
+            relevance = ("the operation leaves every selected torsion invariant; showing all, "
+                         "and note that it cannot have related these clusters")
 
-    image = mpimg.imread(io.BytesIO(_molecule_png(self.molecule, moved)), format="png")
-    axes[0][0].imshow(image)
-    axes[0][0].axis("off")
-    axes[0][0].set_title(
-        f"group {merged_label}: original clusters {members}\n"
-        + (f"related by operation {used[members[-1]]}, {len(moved)} atoms move"
-           if moved else "single cluster, no operation applied"), fontsize=10)
-    for column in range(1, n_cols):
-        axes[0][column].axis("off")
+    # TWO HISTOGRAMS PER RELEVANT TORSION: the merge, before and after.
+    #
+    # LEFT is what the clustering produced -- one colour per original cluster, sitting in separate
+    # lobes. RIGHT is what the merge asserts: every member mapped through the operation that
+    # relates it to the reference, pooled into ONE distribution in one colour. The claim being
+    # made is that the right panel is a single state, and the eye checks that directly. An
+    # overlay of dashed outlines on one axis, which is what this drew first, asks the reader to
+    # do the merge in their head.
+    n_rows = len(relevant)
+    row_colours = {torsion: TORSION_COLOURS[k % len(TORSION_COLOURS)]
+                   for k, torsion in enumerate(relevant)}
 
-    colours = plt.get_cmap("tab10")
-    for column, (i, j) in enumerate(pairs or [(0, 0)]):
-        for row, (data, label) in enumerate(((before, "as measured"), (after, "symmetry-aligned")),
-                                            start=1):
-            axis = axes[row][column]
-            for k, member in enumerate(members):
-                values = data[member]
-                step = max(1, values.shape[0] // max_points)
-                axis.scatter(values[::step, i], values[::step, j], s=3, alpha=0.35,
-                             color=colours(k % 10), label=f"cluster {member}")
-            axis.set_xlabel(f"{names[i]} (rad)")
-            axis.set_ylabel(f"{names[j]} (rad)")
-            axis.set_xlim(-np.pi, np.pi)
-            axis.set_ylim(-np.pi, np.pi)
-            axis.set_title(f"{names[i]} vs {names[j]} -- {label}", fontsize=10)
-            if column == 0 and row == 1:
-                axis.legend(markerscale=4, fontsize=8, loc="upper right")
+    # THE MOLECULE GETS ITS OWN COLUMN AND ROOM TO BE READ. It was a third the width of a
+    # histogram and letterboxed inside that, which makes the atom indices -- the only way to
+    # check a quadruplet against the picture -- illegible.
+    figure = plt.figure(figsize=(7.2 + 9.4, max(4.6, 3.6 * n_rows) + 1.2),
+                        layout="constrained")
+    grid = figure.add_gridspec(n_rows, 3, width_ratios=[1.55, 1.0, 1.0])
 
-    # which torsions move together, over the merged group
+    edges = np.linspace(-np.pi, np.pi, int(bins) + 1)
+    # A SEPARATE PALETTE FROM THE TORSION COLOURS, deliberately. The row colours identify which
+    # TORSION a row is about; these identify which CLUSTER a bar belongs to. Sharing one palette
+    # made orange mean "the aryl torsion" in the molecule and "cluster 3" in the histogram beside
+    # it -- two meanings for one colour in one figure.
+    cluster_palette = ("0.25", "0.62", "#7F3FBF", "#2E8B8B", "#B8860B")
+
+    # EACH DRAWN TORSION IS HIGHLIGHTED, in the colour of its own row. A panel of histograms
+    # labelled `aryl` and `phenol` beside an unmarked molecule asks the reader to resolve the
+    # names against a quadruplet list somewhere else; highlighting the three bonds each torsion
+    # is measured over answers it in the picture.
+    mol_for_bonds = _drawing_molecule(self.molecule, keep_hydrogens=True)
+    bond_highlights, bond_colour_map, atom_highlights, atom_colour_map = [], {}, [], {}
+    for torsion in relevant:
+        quad = self.definitions.quads[torsion]
+        for bond in _bond_path(mol_for_bonds, quad):
+            bond_highlights.append(bond)
+            bond_colour_map[bond] = row_colours[torsion]
+        for atom in quad:
+            atom_highlights.append(int(atom))
+            atom_colour_map.setdefault(int(atom), row_colours[torsion])
+
+    axis = figure.add_subplot(grid[:, 0])
+    axis.imshow(mpimg.imread(io.BytesIO(_molecule_png(
+        self.molecule, atom_highlights, size=(900, 760), colours=atom_colour_map,
+        bonds=bond_highlights, bond_colours=bond_colour_map)), format="png"))
+    axis.axis("off")
+    axis.set_title(f"group {merged_label}: clusters {members}\n"
+                   + (f"operation {operation.index}, {len(moved_atoms)} atoms move; "
+                      f"each torsion in its row colour"
+                      if operation is not None else "no operation applied"), fontsize=11)
+
+    pooled_mass = sum(cluster_torsions.entries[m].mass for m in members)
+    for row, torsion in enumerate(relevant):
+        left = figure.add_subplot(grid[row, 1])
+        for k, member in enumerate(members):
+            left.hist(before[member][:, torsion], bins=edges, density=True, alpha=0.72,
+                      color=cluster_palette[k % len(cluster_palette)],
+                      label=f"cluster {member} ({cluster_torsions.entries[member].mass:.3f})")
+        left.set_title(f"{names[torsion]} -- BEFORE merge", fontsize=11,
+                       color=row_colours[torsion])
+        left.legend(fontsize=8)
+
+        right = figure.add_subplot(grid[row, 2], sharey=left)
+        right.hist(np.concatenate([after[m][:, torsion] for m in members]), bins=edges,
+                   density=True, color=row_colours[torsion], alpha=0.72,
+                   label=f"merged group {merged_label} ({pooled_mass:.3f})")
+        right.set_title(f"{names[torsion]} -- AFTER merge (symmetry-aligned)", fontsize=11,
+                        color=row_colours[torsion])
+        right.legend(fontsize=8)
+
+        for panel in (left, right):
+            panel.set_xlim(-np.pi, np.pi)
+            panel.set_xlabel(f"{names[torsion]} (rad)")
+        left.set_ylabel("density")
+
+    figure.suptitle(relevance, fontsize=10)
+    figure.savefig(output, dpi=140)
+    plt.close(figure)
+
     correlations = []
-    if n_torsions > 1:
+    if len(relevant) > 1:
         from ._t_mi import torsional_mi
 
-        stacked = np.vstack([after[m] for m in members])
+        stacked = np.vstack([after[m] for m in members])[:, relevant]
         try:
-            report = torsional_mi(stacked, names=names, bins=min(24, bins), n_null=6)
-            for pair in report["pairs"]:
-                correlations.append({
-                    "a": pair["a"], "b": pair["b"], "mi_nats": pair["mi_nats"],
-                    "mi_nats_debiased": pair["mi_nats_debiased"],
-                    "excess_over_null_in_sd": pair.get("excess_over_null_in_sd")})
+            report = torsional_mi(stacked, names=[names[c] for c in relevant],
+                                  bins=min(24, int(bins)), n_null=6)
+            correlations = [{"a": pair["a"], "b": pair["b"], "mi_nats": pair["mi_nats"],
+                             "mi_nats_debiased": pair["mi_nats_debiased"],
+                             "excess_over_null_in_sd": pair.get("excess_over_null_in_sd")}
+                            for pair in report["pairs"]]
         except Exception as error:                       # pragma: no cover - diagnostic only
-            correlations.append({"error": f"{type(error).__name__}: {error}"})
-    for column, (i, j) in enumerate(pairs or []):
-        entry = next((c for c in correlations
-                      if c.get("a") == names[i] and c.get("b") == names[j]), None)
-        if entry and entry.get("mi_nats_debiased") is not None:
-            axes[2][column].annotate(
-                f"MI {entry['mi_nats_debiased']:+.4f} nats "
-                f"({entry['excess_over_null_in_sd']:+.1f} sd over null)",
-                xy=(0.02, 0.02), xycoords="axes fraction", fontsize=9,
-                bbox=dict(boxstyle="round", fc="white", alpha=0.8))
-
-    figure.suptitle(
-        "An MI excess near zero means these torsions move INDEPENDENTLY within the group; "
-        "it is not evidence that the merge was wrong.", fontsize=9, y=0.005)
-    figure.tight_layout()
-    figure.savefig(output, dpi=140, bbox_inches="tight")
-    plt.close(figure)
+            correlations = [{"error": f"{type(error).__name__}: {error}"}]
 
     return {"output": str(output), "merged_label": merged_label, "members": members,
             "operations_used": {int(k): v for k, v in used.items()},
-            "moved_atoms": list(moved),
+            "moved_atoms": list(moved_atoms),
+            "relevant_torsions": [names[c] for c in relevant],
+            "invariant_torsions": [n for c, n in enumerate(names) if c not in relevant],
             "circular_means": {int(m): {names[c]: _circular_mean(before[m][:, c])
-                                        for c in range(n_torsions)} for m in members},
+                                        for c in range(len(names))} for m in members},
             "circular_means_aligned": {int(m): {names[c]: _circular_mean(after[m][:, c])
-                                                for c in range(n_torsions)} for m in members},
+                                                for c in range(len(names))} for m in members},
             "correlations": correlations}
 
 
 TorsionSymmetry.draw_sym_group = _draw_sym_group
+
+
+def _indexed_draw_options():
+    """Draw options with atom indices on, for any figure whose legend names atom numbers."""
+    from rdkit.Chem.Draw import rdMolDraw2D
+
+    options = rdMolDraw2D.MolDrawOptions()
+    options.addAtomIndices = True
+    options.legendFontSize = 15
+    options.highlightBondWidthMultiplier = 16
+    return options
+
+
+def _bond_path(molecule, quad) -> List[int]:
+    """The three bond indices of a torsion A-B-C-D, so the MEASURED torsion can be drawn."""
+    out = []
+    for a, b in zip(quad, quad[1:]):
+        bond = molecule.GetBondBetweenAtoms(int(a), int(b))
+        if bond is not None:
+            out.append(bond.GetIdx())
+    return out
+
+
+def _draw_operation_effect(self, operation=None, *, output, group=None, torsions=None,
+                           size=(560, 470)) -> Dict[str, Any]:
+    """ONE figure, two panels: the molecule BEFORE and AFTER the symmetry operation.
+
+    What a reader needs to see is the PRUNING -- why two clusters are one. So each relevant
+    torsion is drawn as the bonds that actually carry it, and the atom that the operation moves is
+    coloured on BOTH sides: the bond holding it is red in the before panel and blue in the after
+    panel, with its partner the other way round. Watching those two colours exchange IS the
+    operation; a single highlight colour over "the atoms that move" cannot show it, which is what
+    the first version of this drawing got wrong.
+
+    Atom indices are on, because a legend reading `1-3-4-5` is unreadable against a picture that
+    does not number its atoms.
+    """
+    from rdkit.Chem import Draw
+    from rdkit.Chem.Draw import rdMolDraw2D
+
+    # Atom indices ON for this drawing specifically: the legends name quadruplets like 1-3-4-5,
+    # and those numbers mean nothing against an unnumbered picture.
+    Draw.rdDepictor.SetPreferCoordGen(True)
+
+    if not getattr(self, "operations", None):
+        raise RuntimeError("no operations; construct the detector first")
+
+    # WHICH OPERATION, said explicitly. This used to take the first non-identity one, which is
+    # right only for a molecule that has exactly one -- on any other it silently drew an
+    # operation that related nothing, with a legend that looked perfectly correct.
+    if group is not None:
+        if not self.fitted_:
+            raise RuntimeError("call fit() before asking for the operation of a group")
+        members = (sorted(int(x) for x in group) if isinstance(group, (list, tuple, set))
+                   else list(self.cluster_groups[int(group)]))
+        indices = {self.group_operations.get(m) for m in members} - {None}
+        if not indices:
+            raise ValueError(
+                f"group {group} is a single cluster, or its members were not related by any "
+                f"operation, so there is no operation to draw")
+        chosen = self.operations[sorted(indices)[0]]
+    elif operation is None:
+        candidates = [op for op in self.operations if not op.is_identity]
+        if not candidates:
+            raise RuntimeError(
+                "this molecule has no non-identity operation on the selected torsions")
+        if len(candidates) > 1:
+            raise ValueError(
+                f"this molecule has {len(candidates)} non-identity operations, so which one to "
+                f"draw is not obvious. Pass an operation index, or group=<merged label> to draw "
+                f"the one that actually related that group's members.")
+        chosen = candidates[0]
+    else:
+        chosen = self.operations[int(operation)]
+    operation = chosen
+
+    relevant = [c for c, source in enumerate(operation.column_source)
+                if source != ("column", c)] if torsions is None else list(torsions)
+    mol = _drawing_molecule(self.molecule, keep_hydrogens=True)
+    names = list(self.definitions.names)
+
+    mol = _drawing_molecule(self.molecule, keep_hydrogens=True)
+    names = list(self.definitions.names)
+
+    # BEFORE shows the torsion AS MEASURED: its four atoms and the three bonds the dihedral is
+    # taken over, in that torsion's own colour.
+    #
+    # AFTER shows ONLY WHAT THE PERMUTATION CHANGED -- the positions where the quadruplet's
+    # number is different, and nothing else. Re-highlighting the whole image quadruplet buries
+    # the one atom that moved among three that did not, and the reader is left comparing two
+    # four-number strings by eye. Here `1-3-4-5 -> 1-3-4-10` is drawn as: atom 10, highlighted.
+    before_atoms, before_bonds = {}, {}
+    after_atoms, after_bonds = {}, {}
+    changes, swapped = {}, []
+    for position, column in enumerate(relevant):
+        colour = TORSION_COLOURS[position % len(TORSION_COLOURS)]
+        quad = tuple(int(i) for i in self.definitions.quads[column])
+        image = tuple(int(i) for i in operation.transformed_quads[column])
+        for atom in quad:
+            before_atoms[atom] = colour
+        for bond in _bond_path(mol, quad):
+            before_bonds[bond] = colour
+        differing = [(a, b) for a, b in zip(quad, image) if a != b]
+        changes[names[column]] = [[a, b] for a, b in differing]
+        swapped.extend(differing)
+        for _, new_atom in differing:
+            after_atoms[new_atom] = colour
+            for bond in _bond_path(mol, image):
+                begin = mol.GetBondWithIdx(bond).GetBeginAtomIdx()
+                finish = mol.GetBondWithIdx(bond).GetEndAtomIdx()
+                if new_atom in (begin, finish):
+                    after_bonds[bond] = colour
+
+    legend_before = "BEFORE -- the torsions as measured: " + ", ".join(
+        f"{names[c]} = {'-'.join(map(str, self.definitions.quads[c]))}" for c in relevant)
+    legend_after = f"AFTER operation {operation.index} -- only the atoms that CHANGED: " + ", ".join(
+        f"{name} {', '.join(f'{a} to {b}' for a, b in pairs)}"
+        for name, pairs in changes.items() if pairs)
+
+    image = Draw.MolsToGridImage(
+        [mol, mol], molsPerRow=2, subImgSize=size, legends=[legend_before, legend_after],
+        highlightAtomLists=[sorted(before_atoms), sorted(after_atoms)],
+        highlightAtomColors=[before_atoms, after_atoms],
+        highlightBondLists=[sorted(before_bonds), sorted(after_bonds)],
+        highlightBondColors=[before_bonds, after_bonds], useSVG=False,
+        drawOptions=_indexed_draw_options())
+    data = image.data if hasattr(image, "data") else image
+    if hasattr(data, "save"):
+        data.save(str(output))
+    else:
+        Path(output).write_bytes(data)
+
+    return {"output": str(output), "operation": operation.index,
+            "relevant_torsions": [names[c] for c in relevant],
+            "changed_positions": changes,
+            "swapped_atom_pairs": sorted(set(swapped)),
+            "quadruplets": {names[c]: {"before": list(self.definitions.quads[c]),
+                                       "after": list(operation.transformed_quads[c])}
+                            for c in relevant}}
+
+
+TorsionSymmetry.draw_operation_effect = _draw_operation_effect
