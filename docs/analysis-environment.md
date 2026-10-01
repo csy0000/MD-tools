@@ -83,8 +83,25 @@ refusing to contain an estimator at all.
 
 ## Removing the analysis packages from `openmm-env`
 
-Not done unilaterally: `openmm-env` is shared by every session on this host. The audit, for
-whoever does it:
+Not done unilaterally: `openmm-env` is shared by every session on this host.
+
+!!! warning "This audit is a measurement with a date, not a property of the package"
+    Taken against **`58e4649c`**, by grepping `src/` and `tests/` for each import. It is true of that
+    tree and of no other, and the way it goes false is by someone adding an import — which is
+    silent from the audit's point of view.
+
+    **One such change is already proposed.** A torsional-HDBSCAN state classifier has been
+    requested as a public module, and it needs `sklearn.cluster.HDBSCAN`. Landed as an ordinary
+    import, `scikit-learn` stops being removable and becomes a hard dependency of the package —
+    in the very environment the table below proposes removing it from. The agreed shape is a
+    lazily-imported **extra** (`analysis = ["scikit-learn"]`), for the same reason as the CPU-only
+    jaxlib above: a dependency that drags a stack in for a user who wanted none of it belongs
+    behind an extra and a lazy import, so that `import md_tools` costs nothing to someone who
+    only wants to run a simulation.
+
+    So: re-run the grep before acting on any row. Do not act on this table's age.
+
+The audit, for whoever does it:
 
 | package | in `openmm-env` | needed there? |
 |---|---|---|
@@ -96,6 +113,22 @@ whoever does it:
 | `scipy` | yes | **YES, indirectly** — `mdtraj` requires it |
 | `rdkit`, `openff-toolkit` | yes | **YES** — ligand parameterisation, 10 and 4 modules |
 
-So `pymbar`, `jax`, `jaxlib`, `matplotlib`, `pandas` and `scikit-learn` are the removable set, and
-`mdtraj`, `netCDF4`, `scipy`, `rdkit` and `openff-toolkit` must stay. Removing anything from a
-shared environment should be agreed with the sessions using it first.
+So `pymbar`, `jax`, `jaxlib`, `matplotlib`, `pandas` and `scikit-learn` are the removable set as
+of the commit above, and `mdtraj`, `netCDF4`, `scipy`, `rdkit` and `openff-toolkit` must stay.
+
+`scikit-learn` is the row most likely to move, for the reason in the warning. `pandas` is listed as
+removable on the strength of its two hits being **comments** rather than imports — a distinction a
+coarser grep would miss, and one worth re-checking the same way.
+
+**Who should do it, and when.** Not three peer sessions agreeing among themselves. Removing a
+package from a shared, non-editable environment changes what every session's `import md_tools`
+resolves to, so it waits until 0.6.4 is tagged, needs the sign-off of the sessions using the
+environment, and should be run by whoever owns it. Both other sessions on this host independently
+reached the same answer, on partly different grounds: one that an installed-config failure reads
+as a defect when it is really install lag, the other that a reallocation nobody's user asked for
+is not a peer's to make.
+
+**The environment's name lives in documentation only.** No committed file names an environment or
+a machine path — that is a project rule, and it also prevents a near-miss from becoming load
+bearing: this environment was referred to elsewhere as `openmm-analysis`, which does not exist on
+this host. The real path is at the top of this page.
