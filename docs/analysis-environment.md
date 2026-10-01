@@ -93,13 +93,38 @@ Not done unilaterally: `openmm-env` is shared by every session on this host.
     **One such change is already proposed.** A torsional-HDBSCAN state classifier has been
     requested as a public module, and it needs `sklearn.cluster.HDBSCAN`. Landed as an ordinary
     import, `scikit-learn` stops being removable and becomes a hard dependency of the package —
-    in the very environment the table below proposes removing it from. The agreed shape is a
+    in the very environment the table below proposes removing it from. The shape to use is a
     lazily-imported **extra** (`analysis = ["scikit-learn"]`), for the same reason as the CPU-only
     jaxlib above: a dependency that drags a stack in for a user who wanted none of it belongs
     behind an extra and a lazy import, so that `import md_tools` costs nothing to someone who
     only wants to run a simulation.
 
+    **There is a working precedent, verified at `0349c9e4`:** `md_tools.alchemy.estimators` is the
+    only module mentioning pymbar, and `_pymbar()` is a function-level import raising a named
+    `MissingAnalysisDependency` when the extra is absent. Two details in it are worth copying:
+
+    * it sets `PYMBAR_DISABLE_JAX` before importing pymbar, and deliberately does **not** touch
+      `JAX_PLATFORMS`, which would be a process-wide device decision imposed on every other JAX
+      user in the process;
+    * it RECORDS which solver ran, as `pymbar_backend`, because an earlier import elsewhere in
+      the same process may already have chosen JAX. A guard that cannot promise a backend should
+      report the one it got rather than assert the one it wanted.
+
     So: re-run the grep before acting on any row. Do not act on this table's age.
+
+!!! danger "Do not check an import's ABSENCE through `openmm-env`'s interpreter"
+    `openmm-env`'s python imports the **installed** `md_tools` from site-packages, not the tree you
+    are standing in, and the installed copy lags. Asking it whether a module imports `sklearn`
+    answers a question about site-packages.
+
+    The asymmetry is the trap. Checking for an import's PRESENCE fails loudly when you are pointed
+    at the wrong copy; checking for its ABSENCE **succeeds** — the module really is not there, in
+    that copy — and reads as confirmation. A sibling session hit exactly this while verifying the
+    guard above, getting `ModuleNotFoundError` for a module that exists on its own branch.
+
+    The rows in the table below were grepped over `src/` and `tests/` as FILES, so they are not
+    exposed. Any import-time check is. Use `PYTHONPATH=src` and print `md_tools.__file__` in the
+    same breath, so the answer says which copy it came from.
 
 The audit, for whoever does it:
 
