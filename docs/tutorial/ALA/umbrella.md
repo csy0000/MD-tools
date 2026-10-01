@@ -5,16 +5,29 @@ block of output on this page comes from a run executed as written: 36 windows an
 unbiased reference, implicit GBn2, on one NVIDIA RTX A5000. **Total GPU time: about 2 hours**, of
 which the reference is 1.9 h and all 36 windows together are 11 minutes.
 
-The profile is checked three ways, and the first is the one that matters — an independent
-measurement of the same quantity in the **same** Hamiltonian:
+The profile is checked against an unbiased 200 ns run of the **same** Hamiltonian. Which number
+is the method's error takes some care, because not every check is a prediction:
 
-| check | result |
-|---|---|
-| against an unbiased 200 ns run of the same system | **rms 0.15 kJ/mol** over 38 bins, max 0.37 |
-| against `pymbar` MBAR as an independent estimator | **rms 0.13 kJ/mol**, within MBAR's own 0.23 uncertainty |
-| the estimator against a known synthetic double well | max 0.77 kJ/mol |
+| check | result | what it is worth |
+|---|---|---|
+| the **ψ** marginal vs the unbiased run | **rms 0.23 kJ/mol**, max 0.76 | **the method's error** — ψ was never biased, so this is a genuine prediction |
+| the φ marginal vs the unbiased run | rms 0.15 kJ/mol, max 0.37 | a consistency check: the windows were biased *along* φ, so reproducing it is nearly circular |
+| `pymbar` MBAR on the same samples | rms 0.13 kJ/mol | the estimator, not the sampling — two estimators over one dataset |
+| the estimator vs a known synthetic double well | max 0.77 kJ/mol | arithmetic only; no simulation involved |
 
-`kT` at 300 K is 2.49 kJ/mol, so the agreement with the unbiased run is about `kT`/17.
+**So quote 0.23, not 0.15.** `kT` at 300 K is 2.49 kJ/mol, so the method's error here is about
+`kT`/11. The φ agreement is reported because a *disagreement* there would have been damning, not
+because agreeing proves much.
+
+!!! warning "What two agreeing marginals cannot tell you"
+    A marginal integrates over the other coordinate, so it is insensitive to exactly the failure a
+    joint density partition catches: getting both basin populations right while putting the wrong
+    joint structure between them. A reference can look converged in every 1D projection and still
+    be several percentage points out in a cluster population — measured elsewhere on this host at
+    6.27 pp spread for a density partition against 1.05 pp for a single-CV arc on the same runs.
+
+    The full 2D φ–ψ surface is the honest target for this molecule and **it is not computed here**.
+    Two 1D marginals agreeing is weaker, and is all this page claims.
 
 Umbrella sampling here is **conventional MD with a bias on named collective variables**, and those
 variables reported as the run goes. It produces a biased trajectory and the CV series that goes
@@ -267,7 +280,7 @@ phi      PMF (kJ/mol)   feature
 +127.5       60.13       the highest barrier on the circle
 ```
 
-**The check that could have failed.** A separate **unbiased** 200 ns run of the same system, same
+**The checks that could have failed.** A separate **unbiased** 200 ns run of the same system, same
 implicit GBn2 Hamiltonian, no bias anywhere: its φ histogram gives `F = −kT ln p` directly, with
 no reweighting to get wrong. It crosses φ = 0 sixty-six times, so it is a reference rather than
 another under-sampled run, and it spends 1.92% of its time in the αL basin.
@@ -283,6 +296,20 @@ comparable bins (>= 50 unbiased samples): 38 of 72
   max deviation   0.37 kJ/mol at phi = 72.5 deg
   (kT at 300 K is 2.49 kJ/mol)
 ```
+
+**The ψ marginal is the half that was a prediction.** The windows biased φ and merely *reported*
+ψ, so reweighting the same samples to the unbiased ensemble and binning on ψ asks the windows
+about a dimension they never controlled. If ψ relaxed slowly against a 5 ns window, this is where
+it would show:
+
+```text
+psi marginal, reweighted from the phi-biased windows vs the unbiased run
+  30 comparable bins, rms 0.23 kJ/mol, max 0.76 at psi = -145 deg
+```
+
+It passed, so ψ relaxation within a 5 ns window was adequate at this force constant. Had only the
+φ comparison been run, this page would have quoted 0.15 kJ/mol for a profile whose other
+coordinate had never been checked at all.
 
 **Only 38 of 72 bins are comparable, and that is the point rather than a shortfall.** The unbiased
 run is silent exactly where the profile is most valuable — it never visits the top of a 60 kJ/mol

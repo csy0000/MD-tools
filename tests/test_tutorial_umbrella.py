@@ -237,8 +237,19 @@ def test_the_page_quotes_the_agreement_it_claims_consistently():
     text = PAGE.read_text(encoding="utf-8")
     rms = sorted(set(re.findall(r"rms(?: deviation)?\s+(?:\*\*)?([0-9.]+)(?:\*\*)? kJ/mol",
                                 text)))
-    assert "0.15" in rms, f"the unbiased-reference agreement should appear as 0.15; found {rms}"
+    assert "0.23" in rms, f"the PSI agreement -- the method's error -- should appear; found {rms}"
+    assert "0.15" in rms, f"the phi consistency check should appear as 0.15; found {rms}"
     assert "0.13" in rms, f"the MBAR agreement should appear as 0.13; found {rms}"
+
+    # AND THE ACCOUNTING, not just the numbers. A phi marginal from phi-biased windows is nearly
+    # circular, so a page that leads with it flatters the method. The page must say which number
+    # is the error and which is the consistency check.
+    lowered = text.lower()
+    assert "the method's error" in lowered, "the page must name which number is the method's error"
+    assert "consistency check" in lowered, (
+        "the page must label the phi agreement as a consistency check rather than a prediction")
+    assert "not computed here" in lowered, (
+        "the page must say the 2D surface is not computed, since two marginals are weaker")
 
     # kT must be quoted correctly, since every agreement is judged against it.
     assert "2.49" in text, "kT at 300 K is 2.49 kJ/mol and the page compares its errors to it"
