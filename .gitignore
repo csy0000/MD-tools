@@ -89,3 +89,7 @@ src/md_tools/_commit.py
 # --- agent worktrees and settings, never committed ---
 /.claude/
 
+
+# mkdocs output. Root-anchored: a bare `site/` would match any directory of that name at any
+# depth, which is how `src/md_tools/build/` was once silently excluded from every commit.
+/site/
