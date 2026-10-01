@@ -120,6 +120,49 @@ md-openmm --version
 command -v sqm mpiexec        # both must resolve inside the environment
 ```
 
+## 5. Optional: the analysis environment
+
+**Nothing in the package requires this**, and a machine that only runs simulations should skip it.
+It exists because analysis and plotting do not belong in the environment that integrates
+trajectories:
+
+```bash
+micromamba create -f environment-analysis.yml
+micromamba activate analysis-env
+```
+
+It carries `pymbar`, `scikit-learn`, `mdtraj`, `matplotlib`, `pandas` and `seaborn` — none of
+which the five work commands import — and it is a SEPARATE environment rather than additions to
+`openmm-env` for one measurable reason:
+
+**`pymbar` 4 imports JAX when it can, and JAX preallocates most of the memory of every visible
+device at import.** A stray `import pymbar` in the run environment, on a machine whose cards are
+busy, takes memory on all of them for an analysis that needs no accelerator at all. So this
+environment pins the **CPU build** of jaxlib, which makes the guarantee a property of the
+environment rather than something a person has to remember:
+
+```python
+>>> import jax; jax.devices()
+[CpuDevice(id=0)]
+```
+
+**JAX is still imported** — pymbar announces that it will use 64-bit JAX, and that is expected.
+What changed is that there is no device for it to claim: the CPU build reports one `CpuDevice` on
+a machine with nine GPUs, so the import cannot cost a colleague their memory. Verified in
+`analysis-env` as shipped, not inferred from the package list.
+
+What needs it today, and what will:
+
+| | needs the analysis environment |
+|---|---|
+| the five work commands | **no** — `pyyaml`, `numpy`, `pydantic` only |
+| `md_tools.alchemy.estimators` — EXP, BAR, TI | no, numpy only |
+| the same module's **MBAR** | yes (`pymbar`, `scipy`) — or `pip install '.[alchemy]'` |
+| `md_tools.analysis` — torsional clustering and MI | **0.6.5**, not in this release |
+
+MBAR is reached through a lazy, function-level import, so `import md_tools` costs nothing in an
+environment without pymbar and fails by name — not by traceback — if you ask for MBAR there.
+
 ## Upgrading
 
 **A `git pull` alone changes nothing you run.** `pip install --no-deps .` copies the package into
@@ -159,8 +202,11 @@ micromamba install -y -p ~/software/md-stack/envs/openmm-env -c conda-forge pyte
 
 Running simulations needs none of this — it matters only for the suite.
 
-**The environment files were merged in 0.5.3.** There is one `environment.yml` now;
-`environment-ci.yml` and `environment-cuda.yml` are gone, so any script naming them needs updating.
+**The environment files were merged in 0.5.3.** `environment-ci.yml` and
+`environment-cuda.yml` are gone, so any script naming them needs updating. `environment.yml` is
+the only file describing the environment you RUN in; 0.6.4 adds `environment-analysis.yml`, which
+is not a variant of it — it shares no purpose with it and the two are allowed to disagree about
+numpy, because a trajectory passes between them through NetCDF rather than through memory.
 
 ## Next
 

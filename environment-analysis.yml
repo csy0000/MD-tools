@@ -1,0 +1,47 @@
+# The OPTIONAL analysis environment. Nothing in the package requires it.
+#
+#   micromamba create -f environment-analysis.yml
+#   micromamba activate analysis-env
+#
+# WHY THIS IS A SECOND FILE WHEN `environment.yml` ARGUES AGAINST SECOND FILES. That warning is
+# about a VARIANT: `environment-ci.yml` once described the same environment minus CUDA and MPI,
+# and five tests existed for no purpose except to stop the two lists drifting apart. This is not a
+# variant. It shares no purpose with the run environment -- no OpenMM, no AmberTools, no mpi4py,
+# nothing that integrates anything -- so there is no corresponding list to drift from and no test
+# to write. The two files overlap only in numpy, and they are allowed to disagree about its
+# version: a trajectory written by one is read by the other through NetCDF, not through memory.
+#
+# AND WHY IT IS SEPARATE AT ALL, which is the substantive reason. `pymbar` 4 imports JAX when it
+# can, and JAX preallocates most of the memory of EVERY visible device at import. A stray
+# `import pymbar` inside the run environment, on a machine whose cards are busy, takes memory on
+# all of them for an analysis that needs no accelerator. So the jaxlib here is the CPU build, and
+# that is a property of the environment rather than a discipline anyone has to remember:
+#
+#   >>> import jax; jax.devices()
+#   [CpuDevice(id=0)]
+#
+# `md_tools.alchemy.estimators` also sets pymbar's own backend switch before importing it and
+# RECORDS which backend it got, because an earlier import in the same process may already have
+# chosen JAX. Belt and braces, on purpose: the guard cannot promise the backend, only report it.
+name: analysis-env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  # The estimators md-tools itself calls: MBAR and statistical inefficiency come from pymbar,
+  # EXP/BAR/TI need only numpy. Capped below 5 because the API the code calls is pymbar 4's.
+  - numpy
+  - scipy
+  - pymbar>=4,<5
+  # CPU-ONLY, and this is the point of the file. conda-forge will otherwise resolve a CUDA
+  # jaxlib as a pymbar dependency; see the note above.
+  - jaxlib=*=cpu*
+  # Clustering, for `md_tools.analysis.t_hdbscan` (0.6.5). `sklearn.cluster.HDBSCAN` needs
+  # scikit-learn >= 1.3; it is imported lazily, so a run environment without it is unaffected.
+  - scikit-learn>=1.3
+  # Reading what a run wrote, and plotting it. Neither is imported by the package.
+  - mdtraj
+  - netcdf4
+  - matplotlib
+  - pandas
+  - seaborn

@@ -46,11 +46,47 @@ def _dependencies(path: Path) -> dict[str, str]:
     return found
 
 
-def test_the_environment_file_exists_and_is_the_only_one():
-    """One file. A second would be the thing this module used to spend five tests policing."""
+#: What makes a file a VARIANT of the run environment rather than a separate thing: anything that
+#: integrates a trajectory, parameterises a molecule, or picks a GPU. A second file naming any of
+#: these is the situation that once cost five tests to police.
+RUN_STACK = ("openmm", "openmmforcefields", "openff-toolkit", "ambertools", "parmed", "rdkit",
+             "mpi4py", "openmpi", "cuda-version")
+
+
+def test_there_is_exactly_one_file_describing_the_RUN_environment():
+    """One run environment. A second would be the thing this module used to spend five tests on.
+
+    The rule is not "one file in the repository" -- that was a proxy, and 0.6.4 broke it honestly
+    by adding `environment-analysis.yml` for analysis and plotting. The rule it stood for is that
+    no file may describe a VARIANT of the environment you run in, because two such lists drift and
+    nothing notices. So any other `environment-*.yml` is allowed exactly as long as it names
+    nothing from the run stack.
+    """
     assert ENVIRONMENT.is_file()
-    strays = sorted(p.name for p in ROOT.glob("environment-*.yml"))
-    assert not strays, f"a second environment file is back: {strays}"
+    for path in sorted(ROOT.glob("environment-*.yml")):
+        overlap = sorted(set(_dependencies(path)) & set(RUN_STACK))
+        assert not overlap, (
+            f"{path.name} names {overlap} from the run stack, which makes it a VARIANT of "
+            f"environment.yml rather than a separate environment. Two lists describing one "
+            f"environment drift apart silently; fold it back into environment.yml instead.")
+
+
+def test_the_analysis_environment_pins_a_CPU_jaxlib():
+    """The one thing `environment-analysis.yml` exists to guarantee.
+
+    pymbar 4 imports JAX, and a CUDA jaxlib preallocates most of the memory of EVERY visible
+    device at import -- on a shared machine that is a colleague's run, taken by an analysis that
+    needs no accelerator. The CPU build makes that a property of the environment rather than a
+    discipline. Without this test the pin is one `conda update` from being lost, and the loss is
+    invisible until someone else's job fails for memory.
+    """
+    path = ROOT / "environment-analysis.yml"
+    if not path.is_file():
+        return                            # the file is optional; the pin is not, when it exists
+    spec = _dependencies(path).get("jaxlib")
+    assert spec is not None, "environment-analysis.yml must pin jaxlib; pymbar pulls one anyway"
+    assert "cpu" in spec, f"jaxlib must be the CPU build; got {spec!r}"
+    assert "cuda-version" not in _dependencies(path)
 
 
 def test_it_pins_cuda_version():
