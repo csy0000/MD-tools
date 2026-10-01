@@ -90,10 +90,18 @@ Not done unilaterally: `openmm-env` is shared by every session on this host.
     tree and of no other, and the way it goes false is by someone adding an import — which is
     silent from the audit's point of view.
 
-    **One such change is already proposed.** A torsional-HDBSCAN state classifier has been
-    requested as a public module, and it needs `sklearn.cluster.HDBSCAN`. Landed as an ordinary
-    import, `scikit-learn` stops being removable and becomes a hard dependency of the package —
-    in the very environment the table below proposes removing it from. The shape to use is a
+    **It has already happened once, exactly as predicted — and this is the mechanism working.**
+    A torsional-HDBSCAN classifier landed in **v0.6.4** (`8516c12a`) as `md_tools.analysis`, and
+    it needs `sklearn.cluster.HDBSCAN`. So the `scikit-learn` row below has moved: it IS now a
+    declared dependency of the package, but **only of the `analysis` extra**, and every `sklearn`
+    import in it is function-level (`_torsions.py`, `_t_symmetry.py`), so nothing pulls it in at
+    module load. An ordinary simulation install acquires neither scikit-learn nor rdkit through it.
+
+    What that means for the table: `scikit-learn` is still absent from the import path of a plain
+    `import md_tools`, so removing it from a SIMULATION environment remains safe — but it is no
+    longer true that it "appears nowhere", and anyone running the analysis extra needs it present.
+    Re-grep, and note that the row's wording changed while its practical answer did not. That
+    distinction is the whole reason this box exists. The shape to use is a
     lazily-imported **extra** (`analysis = ["scikit-learn"]`), for the same reason as the CPU-only
     jaxlib above: a dependency that drags a stack in for a user who wanted none of it belongs
     behind an extra and a lazy import, so that `import md_tools` costs nothing to someone who
@@ -132,7 +140,8 @@ The audit, for whoever does it:
 |---|---|---|
 | `pymbar`, `jax`, `jaxlib` | yes | **no** — appear nowhere in `src/` or `tests/` |
 | `matplotlib` | yes | **no** — appears nowhere in `src/` or `tests/`; the scaler's `<RESNAME>-unscaled.png` is drawn by rdkit |
-| `pandas`, `scikit-learn` | yes | **no** — named only in comments |
+| `pandas` | yes | **no** — named only in comments |
+| `scikit-learn` | yes | **not at module load** — since v0.6.4 it is a dependency of the `analysis` EXTRA, imported inside functions in `md_tools.analysis`. Safe to remove from a simulation environment; required wherever the extra is used |
 | `mdtraj` | yes | **YES** — imported by `md_tools` itself (`openmm/trajectory.py`, `ais/source_ensemble.py`, `ais/run.py`) and by 20 test files |
 | `netCDF4` | yes | **YES** — imported by 6 modules and 7 test files |
 | `scipy` | yes | **YES, indirectly** — `mdtraj` requires it |
