@@ -402,12 +402,27 @@ jobs:
                       assert forbidden not in body, f"{name}/{script.name} contains {forbidden}"
               print(f"{name}: {len(written)} files, all compile, compact, no absolute path")
 
-          ais = {p.name for p in (Path("AIS") / "AIS-run1").iterdir()}
-          # AIS consumes an ensemble that already exists, so it generates no chain of its own.
-          # Checked on the RUN directory: the dataset root beside it legitimately carries the
-          # `build/` this step put there.
-          assert not any(n.startswith(("min", "eq_")) for n in ais), ais
-          print("AIS carries no equilibration chain")
+          run_dir = Path("AIS") / "AIS-run1"
+          ais = {p.name for p in run_dir.iterdir()}
+          # AIS consumes an ensemble that already exists, so it generates no chain of its OWN.
+          #
+          # THIS CHECK'S PREMISE EXPIRED AND THE CHECK OUTLIVED IT. It used to read "no entry
+          # named min or eq_*", which was equivalent to "no chain" until 0.6.4 made every run
+          # directory LINK its shared inputs relatively -- `build -> ../build`, `input -> ../input`,
+          # `min -> ../min`. From that commit a correct AIS directory contains `min`, and this
+          # step failed for three days across two releases while the contract it was testing was
+          # being honoured. A true statement that stops being equivalent to the thing it stands
+          # for is harder to catch than a false one, because nothing about it reads as wrong.
+          #
+          # So test what it was FOR: AIS must generate no equilibration of its own. A `min` that
+          # is a symlink is the shared chain, which is the contract; a `min` that is a real
+          # directory would be AIS having built one.
+          own = sorted(n for n in ais
+                       if n.startswith("eq_")
+                       or (n == "min" and not (run_dir / n).is_symlink()))
+          assert not own, f"AIS generated its own equilibration: {own} (all entries: {sorted(ais)})"
+          linked = sorted(n for n in ("build", "input", "min") if (run_dir / n).is_symlink())
+          print(f"AIS carries no equilibration chain of its own; shared links present: {linked}")
           PY
 
       - name: dataset and extension schemas
