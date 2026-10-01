@@ -117,9 +117,11 @@ nav:
           - cMD: tutorial/ALA/cMD.md
           - REST2: tutorial/ALA/REST2.md
           - AIS: tutorial/ALA/AIS.md
+          - Analysis: tutorial/ALA/analysis/index.md
       - Ethanol:
           - The system: tutorial/ethanol/index.md
           - Hydration free energy: tutorial/ethanol/hydration.md
+          - Analysis: tutorial/ethanol/analysis/index.md
       - Ethane + chloroethane:
           - The system: tutorial/ethane-chloroethane/index.md
           - Relative hydration free energy: tutorial/ethane-chloroethane/relative.md
@@ -128,6 +130,7 @@ nav:
           - cMD: tutorial/paracetamol/cMD.md
           - REST2: tutorial/paracetamol/REST2.md
           - AIS: tutorial/paracetamol/AIS.md
+          - Analysis: tutorial/paracetamol/analysis/index.md
       - Chignolin:
           - The system: tutorial/chignolin/index.md
           - cMD: tutorial/chignolin/cMD.md
@@ -182,6 +185,8 @@ nav:
       - Free energy:
           - Alchemical topology: openmm_methods/alchemy/README.md
           - What the runtime computes: openmm_methods/alchemy/validation.md
+      - Analysis:
+          - openmm_methods/analysis/README.md
   - Reference:
       - Scientific defaults: scientific-defaults.md
       - Support matrix: support-matrix.md

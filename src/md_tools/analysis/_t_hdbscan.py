@@ -102,7 +102,8 @@ class THDBSCAN:
         # TRUE BY DEFAULT HERE, which DIVERGES from the hpREST2 original. Without it a unimodal
         # ensemble cannot come back as one state: sklearn's EOM selection refuses the root of the
         # condensed tree, so a single Gaussian blob is SPLIT rather than reported whole --
-        # measured, a 4000-frame unimodal ensemble returns 3 clusters with the flag off.
+        # measured here, a 4000-frame unimodal ensemble SPLITS with the flag off (into 2 on this
+        # scikit-learn; the count is fixture- and version-dependent, the splitting is not).
         #
         # The upstream default was False on the ground that allowing the root lets a multi-state
         # ensemble collapse into it. That risk is real but it is LOUD: one cluster holding
@@ -263,7 +264,7 @@ class THDBSCAN:
             out.append(
                 "allow_single_cluster is False, so a UNIMODAL ensemble cannot be reported as one "
                 "state: EOM refuses the root of the condensed tree and the blob is split instead. "
-                "Measured: a 4000-frame single Gaussian returns 3 clusters. Pass "
+                "Measured: a 4000-frame single Gaussian is SPLIT rather than reported whole. Pass "
                 "allow_single_cluster=True if one state is a possible answer.")
         if not self.weights_uniform_ and self.resampling is False:
             out.append(
