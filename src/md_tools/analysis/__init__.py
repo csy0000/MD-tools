@@ -43,7 +43,9 @@ from __future__ import annotations
 __all__ = ["THDBSCAN", "t_hdbscan",
            "t_mi", "torsional_mi", "mi_matrix", "dependence_graph",
            "t_symmetry", "TorsionSymmetry", "load_torsion_json", "load_cluster_torsion",
-           "draw_torsions", "verify_atom_mapping", "calibrate", "ComparisonTolerance"]
+           "draw_torsions", "verify_atom_mapping", "calibrate", "ComparisonTolerance",
+           "group_name", "representative_by_vote", "strip_nonpolar_hydrogens",
+           "draw_representative_structures"]
 
 _LAZY = {
     "THDBSCAN": "._t_hdbscan", "t_hdbscan": "._t_hdbscan",
@@ -53,6 +55,9 @@ _LAZY = {
     "load_torsion_json": "._t_symmetry", "load_cluster_torsion": "._t_symmetry",
     "draw_torsions": "._t_symmetry", "verify_atom_mapping": "._t_symmetry",
     "calibrate": "._t_symmetry", "ComparisonTolerance": "._t_symmetry",
+    "group_name": "._t_symmetry", "representative_by_vote": "._t_symmetry",
+    "strip_nonpolar_hydrogens": "._t_symmetry",
+    "draw_representative_structures": "._t_symmetry",
 }
 
 

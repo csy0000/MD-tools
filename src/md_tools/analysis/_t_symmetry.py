@@ -1204,6 +1204,10 @@ def verify_atom_mapping(molecule, topology_bonds: Iterable[Tuple[int, int]],
 SWAP_COLOURS = ((0.85, 0.33, 0.10), (0.00, 0.45, 0.70))      # orange-red, blue
 #: An atom the operation leaves where it is.
 FIXED_COLOUR = (0.80, 0.80, 0.80)
+#: An atom whose INDEX changed under the operation. Marked inside the transformed torsion rather
+#: than instead of it. Gold rather than black: a dark fill hides the atom INDEX printed on it, and
+#: the index is the only way to check a quadruplet against the picture.
+CHANGED_COLOUR = (0.98, 0.78, 0.12)
 
 
 def permutation_colours(permutation: Sequence[int], *, include_fixed: bool = False):
@@ -1689,17 +1693,24 @@ def _draw_operation_effect(self, operation=None, *, output, group=None, torsions
         differing = [(a, b) for a, b in zip(quad, image) if a != b]
         changes[names[column]] = [[a, b] for a, b in differing]
         swapped.extend(differing)
+
+        # THE WHOLE TRANSFORMED TORSION, in the same colour as the BEFORE panel, so the two
+        # panels show the SAME OBJECT in two places rather than a torsion beside a fragment.
+        # Drawing only the atoms that changed left the reader with nothing to compare: a lone
+        # atom says which number moved but not what the measured torsion became.
+        for atom in image:
+            after_atoms[atom] = colour
+        for bond in _bond_path(mol, image):
+            after_bonds[bond] = colour
+        # ...and the atoms whose NUMBER changed are then marked out of that torsion, so the
+        # difference is still immediately visible inside the whole.
         for _, new_atom in differing:
-            after_atoms[new_atom] = colour
-            for bond in _bond_path(mol, image):
-                begin = mol.GetBondWithIdx(bond).GetBeginAtomIdx()
-                finish = mol.GetBondWithIdx(bond).GetEndAtomIdx()
-                if new_atom in (begin, finish):
-                    after_bonds[bond] = colour
+            after_atoms[new_atom] = CHANGED_COLOUR
 
     legend_before = "BEFORE -- the torsions as measured: " + ", ".join(
         f"{names[c]} = {'-'.join(map(str, self.definitions.quads[c]))}" for c in relevant)
-    legend_after = f"AFTER operation {operation.index} -- only the atoms that CHANGED: " + ", ".join(
+    legend_after = (f"AFTER operation {operation.index} -- the transformed torsions; "
+                    f"GOLD marks the atom whose index changed: ") + ", ".join(
         f"{name} {', '.join(f'{a} to {b}' for a, b in pairs)}"
         for name, pairs in changes.items() if pairs)
 
@@ -1726,3 +1737,140 @@ def _draw_operation_effect(self, operation=None, *, output, group=None, torsions
 
 
 TorsionSymmetry.draw_operation_effect = _draw_operation_effect
+
+
+# -------------------------------------------------------------- representative configurations
+
+#: Groups are named A, B, C ... in `cluster_groups` order. A merged group is no longer "cluster 2"
+#: -- it is a set of original labels -- so reusing an integer for it invites the two to be
+#: confused in exactly the place where the difference matters.
+def group_name(index: int) -> str:
+    """`0 -> 'A'`, `1 -> 'B'`, ... `26 -> 'AA'`."""
+    index = int(index)
+    if index < 0:
+        raise ValueError("group index must be non-negative")
+    letters = ""
+    while True:
+        letters = chr(ord("A") + index % 26) + letters
+        index = index // 26 - 1
+        if index < 0:
+            return letters
+
+
+def representative_by_vote(fit, labels=None) -> Dict[int, int]:
+    """The frame of each cluster with the HIGHEST classifier vote margin; first one on a tie.
+
+    THE REPRESENTATIVE IS AN ACTUAL FRAME, never an average. The mean of two Cartesian structures
+    is not a structure, and the circular mean of a bimodal torsion points at the barrier between
+    its basins -- the one place the molecule is never found.
+
+    "Highest vote" means the k-NN margin `classify_to_clusters` reports: the frame its neighbours
+    agree about most strongly, which is the one furthest from any boundary. Ties are broken by
+    taking the FIRST, deterministically, because the alternative -- picking arbitrarily among
+    equals -- makes a figure that changes between runs of the same analysis.
+    """
+    from ._torsions import classify_to_clusters
+
+    labels = fit.labels_ if labels is None else np.asarray(labels)
+    out = classify_to_clusters(fit.train_theta_, fit.train_labels_, fit.theta_, units="radians",
+                               metric_weights=fit.metric_weights,
+                               multiplicities=fit.multiplicities, k=fit.k,
+                               min_vote_margin=fit.min_vote)
+    margins = np.asarray(out["vote_margin"], dtype=np.float64)
+    representatives = {}
+    for cluster in sorted({int(c) for c in np.unique(labels) if int(c) >= 0}):
+        members = np.flatnonzero(labels == cluster)
+        if members.size == 0:
+            continue
+        best = margins[members]
+        representatives[cluster] = int(members[int(np.argmax(best))])   # argmax -> first on ties
+    return representatives
+
+
+def strip_nonpolar_hydrogens(trajectory):
+    """Atom indices of everything except hydrogens bonded to CARBON.
+
+    POLAR hydrogens are kept: an O-H or N-H orientation is part of the conformation a reader is
+    being shown, and dropping it would hide the phenol rotation this analysis is partly about.
+    Nonpolar hydrogens are removed because they trebles the line count of a picture without
+    adding a degree of freedom anyone is looking at.
+    """
+    topology = trajectory.topology
+    drop = set()
+    for atom in topology.atoms:
+        if atom.element.symbol != "H":
+            continue
+        heavy = [b[0] if b[1].index == atom.index else b[1]
+                 for b in topology.bonds if atom.index in (b[0].index, b[1].index)]
+        if heavy and heavy[0].element.symbol == "C":
+            drop.add(atom.index)
+    return [a.index for a in topology.atoms if a.index not in drop]
+
+
+def draw_representative_structures(trajectory, frames: Dict[str, int], *, output,
+                                   atom_indices=None, align: bool = True,
+                                   label_atoms: bool = True) -> Dict[str, Any]:
+    """Draw one ACTUAL frame per group, PRE-ALIGNED, as a static 3D figure.
+
+    `frames` maps a group name to a frame index. The structures are superposed on each other
+    before drawing, so what differs between the panels is CONFORMATION rather than the arbitrary
+    position and orientation the box happened to leave the molecule in. Without that, two
+    identical conformers look different and two different ones can look alike.
+
+    Static matplotlib rather than an interactive viewer, deliberately: an executed notebook is
+    read on GitHub as often as it is run, and a JavaScript viewer renders as nothing there. The
+    aligned coordinates are also returned so a caller can write them out for a real viewer.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if not frames:
+        raise ValueError("no frames given")
+    indices = (list(range(trajectory.n_atoms)) if atom_indices is None
+               else [int(i) for i in atom_indices])
+    subset = trajectory.atom_slice(indices)
+
+    ordered = list(frames.items())
+    picked = subset[[int(i) for _, i in ordered]]
+    if align:
+        picked.superpose(picked, 0)          # onto the FIRST group, so panels share a frame
+
+    topology = picked.topology
+    bonds = [(b[0].index, b[1].index) for b in topology.bonds]
+    colours = {"C": "0.35", "N": "#2060C0", "O": "#C02020", "H": "0.70", "S": "#C0A020"}
+
+    figure = plt.figure(figsize=(4.8 * len(ordered), 4.4), layout="constrained")
+    for position, (name, frame) in enumerate(ordered):
+        axis = figure.add_subplot(1, len(ordered), position + 1, projection="3d")
+        xyz = picked.xyz[position] * 10.0                      # nm -> angstrom
+        for i, j in bonds:
+            axis.plot(*zip(xyz[i], xyz[j]), color="0.45", lw=2.0, zorder=1)
+        for atom in topology.atoms:
+            element = atom.element.symbol
+            axis.scatter(*xyz[atom.index], s=(90 if element != "H" else 40),
+                         color=colours.get(element, "0.5"), depthshade=False, zorder=2,
+                         edgecolors="k", linewidths=0.4)
+            if label_atoms and element != "H":
+                axis.text(*xyz[atom.index], f" {atom.name}", fontsize=7, color="0.2")
+        axis.set_title(f"group {name}  (frame {frame})", fontsize=12)
+        axis.set_axis_off()
+        # ONE cubic box around the molecule, sized from the structure rather than left to
+        # matplotlib: a 3D axes defaults to a lot of padding, and three independently scaled
+        # axes would stretch the geometry differently in each panel -- which is the one thing a
+        # figure comparing CONFORMATIONS must not do.
+        centre = xyz.mean(axis=0)
+        span = float(np.abs(xyz - centre).max()) * 1.02
+        for setter, value in ((axis.set_xlim, centre[0]), (axis.set_ylim, centre[1]),
+                              (axis.set_zlim, centre[2])):
+            setter(value - span, value + span)
+        axis.set_box_aspect((1, 1, 1), zoom=1.45)
+
+    figure.suptitle("Representative structures, superposed. Nonpolar hydrogens removed; "
+                    "polar H kept because its orientation IS part of the conformation.",
+                    fontsize=9)
+    figure.savefig(output, dpi=140)
+    plt.close(figure)
+    return {"output": str(output), "frames": dict(frames),
+            "n_atoms_drawn": int(picked.n_atoms), "aligned": bool(align),
+            "aligned_xyz_nm": picked.xyz}
