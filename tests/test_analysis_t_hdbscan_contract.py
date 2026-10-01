@@ -152,6 +152,18 @@ def test_a_unimodal_ensemble_needs_allow_single_cluster_to_come_back_as_one_stat
 
 
 @requires_sklearn
+def test_the_default_still_separates_a_genuinely_multi_state_ensemble():
+    """The cost of allow_single_cluster=True is the OPPOSITE error -- a real multi-state ensemble
+    collapsing into one cluster when the between-basin density does not beat the root's stability.
+    This pins that it does not happen on well-separated basins, which is what makes the default
+    safe to take rather than merely convenient."""
+    rng = np.random.default_rng(72)
+    c = t_hdbscan(three_blobs(rng)).fit()
+    assert c.allow_single_cluster is True
+    assert c.n_clusters_ == 3
+
+
+@requires_sklearn
 def test_one_state_is_a_possible_answer_by_default():
     """THE DEFAULT ITSELF, pinned. md-tools sets allow_single_cluster=True so that a rigid
     molecule with one torsional basin is REPORTED as one state rather than split into a plausible

@@ -449,6 +449,208 @@ def centred_fourier_moment(t1, t2, m: int, n: int, w=None) -> complex:
     j = np.sum(wn * np.exp(1j * (m * a + n * b)))
     return complex(j - np.sum(wn * np.exp(1j * m * a)) * np.sum(wn * np.exp(1j * n * b)))
 
+
+# --------------------------------------------- the orchestrator, and the weighting it needs
+#
+# `analyse` is what makes `dependence_graph` and `benjamini_hochberg` REACHABLE. Without it the
+# port had both of them as public names that nothing could call: `dependence_graph` takes an
+# `MIResult` and no function in the module produced one. That is dead public API -- accepted,
+# importable, and inert -- which is the same defect as a flag that does nothing, and it also made
+# this module's own comment about controlling the false discovery rate false, since nothing
+# applied the correction.
+#
+# The block bootstrap below comes with it because `analyse` needs it: a correlated trajectory has
+# far fewer independent samples than frames, and an error bar computed as if every frame were
+# independent is too small by the square root of the correlation time.
+
+def logsumexp(a: np.ndarray) -> float:
+    """Stable log(sum(exp(a))). Local so this module has no scipy dependency."""
+    a = np.asarray(a, dtype=np.float64).ravel()
+    if a.size == 0:
+        return -np.inf
+    m = float(np.max(a))
+    if not np.isfinite(m):
+        return m
+    return m + float(np.log(np.sum(np.exp(a - m))))
+
+
+def normalized_weights(log_w) -> np.ndarray:
+    """`exp(log_w - logsumexp(log_w))`, summing to 1 and never overflowing.
+
+    Large-but-finite log weights are handled by the subtraction, so `log_w = 700` is fine where
+    `exp(700)` would not be.
+    """
+    lw = np.asarray(log_w, dtype=np.float64).ravel()
+    if lw.size == 0:
+        return lw.copy()
+    if not np.all(np.isfinite(lw)):
+        raise ValueError(
+            f"{int(np.sum(~np.isfinite(lw)))} of {lw.size} log weights are not finite. A "
+            "non-finite weight is a bug upstream (an empty bias table, a NaN CV), not something "
+            "to normalise away.")
+    return np.exp(lw - logsumexp(lw))
+
+
+def ess_weight(log_w) -> float:
+    """`1 / sum_t w_t^2` on NORMALISED weights -- the weight-only effective sample size.
+
+    THIS IS NOT THE NUMBER OF INDEPENDENT CONFIGURATIONS. It measures only how unevenly the
+    weights are spread and is blind to temporal autocorrelation: a trajectory stuck in one basin
+    for its whole length can have `ess_weight` equal to its frame count. Treating it as a sample
+    count is a documented error of this campaign -- it was used for a kappa uncertainty and gave
+    an answer a visit-block bootstrap contradicted. Pair it with `block_bootstrap` or with
+    between-run spread, always.
+    """
+    w = normalized_weights(log_w)
+    return float(1.0 / np.sum(w ** 2)) if w.size else 0.0
+
+
+def block_bootstrap(n_frames: int, n_blocks: int, n_resamples: int = 500,
+                    seed: int = 0) -> np.ndarray:
+    """Indices for a moving-block bootstrap over COMPLETE RECORDS.
+
+    Returns `(n_resamples, n_frames)` integer indices. The caller applies them to coordinates AND
+    weights with the same array, which is the point: resampling a frame must carry its weight with
+    it. Bootstrapping isolated frames as if independent is the error this replaces -- it treats an
+    autocorrelated trajectory as `n_frames` independent draws and shrinks every error bar.
+
+    A block count this small is normal for MD and is itself a limit on what can be claimed: with
+    fewer than ~10 blocks the percentile interval is not trustworthy and the honest verdict is
+    `unresolved`, not a tight interval.
+    """
+    if n_frames <= 0:
+        raise ValueError("n_frames must be positive")
+    n_blocks = int(max(1, min(n_blocks, n_frames)))
+    L = n_frames // n_blocks
+    if L < 1:
+        raise ValueError(f"{n_blocks} blocks do not fit in {n_frames} frames")
+    rng = np.random.default_rng(seed)
+    starts = rng.integers(0, n_frames - L + 1, size=(n_resamples, n_blocks))
+    offs = np.arange(L)
+    idx = (starts[:, :, None] + offs[None, None, :]).reshape(n_resamples, -1)
+    if idx.shape[1] < n_frames:            # keep length exact for aligned application
+        pad = np.repeat(idx[:, -1:], n_frames - idx.shape[1], axis=1)
+        idx = np.concatenate([idx, pad], axis=1)
+    return idx[:, :n_frames] % n_frames
+
+
+def enough_blocks(n_blocks: int, minimum: int = 10) -> bool:
+    """Whether a percentile interval over this many blocks should be quoted at all."""
+    return int(n_blocks) >= int(minimum)
+
+def analyse(theta: np.ndarray, names: Sequence[str], *, w=None,
+            bins_sweep: Sequence[int] = (18, 24, 36),
+            origin_sweep: Sequence[float] = (-np.pi, -np.pi + np.pi / 24),
+            n_blocks: int = 20, n_boot: int = 300, n_null: int = 300,
+            alpha: float = 0.05, seed: int = 0,
+            n_independent: Optional[float] = None,
+            target_ensemble: str = "unspecified",
+            phase: str = "unspecified") -> MIResult:
+    """Full pairwise analysis with uncertainty, null, correction and explicit verdicts.
+
+    `n_independent` should come from a block analysis or from between-run spread. Left `None` it
+    falls back to the WEIGHT ESS and the provenance records that this is an upper bound, because
+    the weight ESS is blind to autocorrelation.
+    """
+    theta = np.asarray(theta, dtype=np.float64)
+    names = list(names)
+    if theta.ndim != 2 or theta.shape[1] != len(names):
+        raise ValueError(f"theta {theta.shape} does not match {len(names)} names")
+    nF, nT = theta.shape
+    wn = (np.ones(nF) / nF) if w is None else normalized_weights(np.log(
+        np.maximum(np.asarray(w, dtype=np.float64).ravel(), 1e-300)))
+    ess = float(1.0 / np.sum(wn ** 2))
+    n_ind = float(ess if n_independent is None else n_independent)
+
+    base_bins, base_origin = bins_sweep[0], origin_sweep[0]
+    M = mi_matrix(theta, wn, base_bins, base_origin)
+    boot_idx = block_bootstrap(nF, n_blocks, n_boot, seed=seed)
+    blocks_ok = enough_blocks(n_blocks)
+
+    rows = []
+    for j, k in combinations(range(nT), 2):
+        tj, tk = theta[:, j], theta[:, k]
+        raw = float(M[j, k])
+
+        # --- robustness across resolution AND bin origin -----------------------------------
+        sweep = [mi_pair(tj, tk, wn, b, o) for b in bins_sweep for o in origin_sweep]
+        sweep = np.asarray(sweep)
+
+        # --- uncertainty: block bootstrap over COMPLETE records ----------------------------
+        # coordinates and weights are indexed by the SAME array, so a resampled frame keeps its
+        # own weight. Bootstrapping frames independently would treat an autocorrelated trajectory
+        # as nF independent draws and shrink this interval to nothing.
+        bs = np.empty(n_boot)
+        for r in range(n_boot):
+            ix = boot_idx[r]
+            bs[r] = mi_pair(tj[ix], tk[ix], wn[ix], base_bins, base_origin)
+        lo, hi = (np.percentile(bs, [2.5, 97.5]) if blocks_ok else (np.nan, np.nan))
+
+        # --- null, then a corrected score kept as its OWN field ----------------------------
+        nul = null_product_marginals(tj, tk, wn, bins=base_bins, origin=base_origin,
+                                     n_draws=n_null, n_independent=n_ind, seed=seed + j * 97 + k)
+        p_emp = float((1.0 + np.sum(nul >= raw)) / (1.0 + len(nul)))
+        corrected = float(raw - np.mean(nul))
+        P = joint_table(tj, tk, wn, base_bins, base_origin)
+        rows.append({
+            "i": j, "j": k, "name_i": names[j], "name_j": names[k],
+            "mi_raw_nats": raw,
+            "mi_null_mean_nats": float(np.mean(nul)),
+            "mi_null_p97_5_nats": float(np.percentile(nul, 97.5)),
+            "mi_corrected_nats": corrected,
+            "mi_boot_lo_nats": float(lo), "mi_boot_hi_nats": float(hi),
+            "mi_sweep_min_nats": float(sweep.min()), "mi_sweep_max_nats": float(sweep.max()),
+            "mi_sweep_spread_nats": float(sweep.max() - sweep.min()),
+            "p_empirical": p_emp,
+            "support": support_diagnostics(P, nF, ess),
+        })
+
+    pvals = [r["p_empirical"] for r in rows]
+    reject, cut = benjamini_hochberg(pvals, alpha)
+    for r, rej in zip(rows, reject):
+        # A pair is SUPPORTED only if it survives the null AFTER correction, its bootstrap
+        # interval is quotable, and the whole resolution/origin sweep stays above the null.
+        sweep_above = r["mi_sweep_min_nats"] > r["mi_null_p97_5_nats"]
+        if not blocks_ok or np.isnan(r["mi_boot_lo_nats"]):
+            r["verdict"] = UNRESOLVED
+            r["why"] = (f"only {n_blocks} blocks; a percentile interval over that few is not "
+                        "trustworthy, so neither is any significance statement")
+        elif rej and sweep_above and r["mi_boot_lo_nats"] > r["mi_null_mean_nats"]:
+            r["verdict"] = SUPPORTED
+            r["why"] = "survives the null after BH correction, and across the whole sweep"
+        elif rej and not sweep_above:
+            r["verdict"] = UNRESOLVED
+            r["why"] = (f"significant at the base resolution but the sweep spans "
+                        f"{r['mi_sweep_min_nats']:.4f}-{r['mi_sweep_max_nats']:.4f} nats and "
+                        "crosses the null; histogram MI is not origin-invariant at finite bins")
+        else:
+            r["verdict"] = NOT_DETECTED
+            r["why"] = ("not distinguishable from the independence null at this resolution and "
+                        "sample size. THIS IS NOT PROVEN INDEPENDENCE -- a coupling below the "
+                        "resolution of this estimator, or needing more samples, would look "
+                        "identical")
+    return MIResult(
+        names=names, bins=base_bins, origin=float(base_origin), mi_raw=M, pairs=rows,
+        provenance={
+            "estimator": "weighted periodic histogram, nats, marginals from the joint table",
+            "n_frames": int(nF), "n_torsions": int(nT),
+            "n_unique_pairs": n_unique_pairs(nT), "n_pairs_analysed": len(rows),
+            "bins_sweep": list(bins_sweep), "origin_sweep": [float(o) for o in origin_sweep],
+            "base_bins": int(base_bins), "base_origin": float(base_origin),
+            "ess_weight": ess,
+            "ess_weight_note": "weights only; excludes temporal autocorrelation",
+            "n_independent_used": n_ind,
+            "n_independent_source": ("weight ESS (UPPER BOUND -- autocorrelation ignored)"
+                                     if n_independent is None else "caller-supplied"),
+            "n_blocks": int(n_blocks), "blocks_sufficient_for_interval": bool(blocks_ok),
+            "n_boot": int(n_boot), "n_null": int(n_null),
+            "multiple_testing": f"Benjamini-Hochberg at alpha={alpha}",
+            "bh_threshold_used": cut,
+            "target_ensemble": target_ensemble, "phase": phase,
+            "no_universal_cutoff": "MI has no absolute significance threshold; verdicts come "
+                                   "from the calibrated null, not from a fixed value",
+        })
+
 #: The name used at the call site, matching `t_hdbscan` and `t_symmetry`. `torsional_mi` is the
 #: original name and stays as an alias: it is what the hpREST2 session's own callers use, and
 #: breaking it would make the two trees disagree about a function they share.

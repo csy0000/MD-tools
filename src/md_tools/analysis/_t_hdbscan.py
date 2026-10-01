@@ -246,6 +246,19 @@ class THDBSCAN:
             "noise it recalls about 7 %",
             "a cluster is a density basin, NOT a metastable state; nothing here looks at time",
         ]
+        if self.allow_single_cluster and self.n_clusters_ == 1:
+            # THE COST OF THE DEFAULT, stated where the result is read. True buys protection from
+            # over-splitting a unimodal ensemble and pays for it with the OPPOSITE error: a
+            # genuinely multi-state ensemble can collapse into one cluster when the between-basin
+            # density does not beat the root's stability. True is still the better default because
+            # the two errors are not equally visible -- one state reported where there are three
+            # is a single population that looks wrong and prompts a check, whereas three reported
+            # where there is one is several plausible populations that look like a result.
+            out.append(
+                "n_clusters is 1 and allow_single_cluster is True, so the root of the condensed "
+                "tree was a candidate. Check it against the torsion marginals before believing "
+                "it: this is the configuration in which a genuinely multi-state ensemble can "
+                "collapse into one cluster.")
         if not self.allow_single_cluster:
             out.append(
                 "allow_single_cluster is False, so a UNIMODAL ensemble cannot be reported as one "
