@@ -43,10 +43,40 @@ import numpy as np
 
 from ._torsions import (MIN_CLUSTER_FRACTION_DEFAULT, MIN_SAMPLES_FRACTION_DEFAULT,
                          MIN_VOTE_MARGIN_DEFAULT, N_SEED_DEFAULT, classify_to_clusters,
-                         cluster_mass, cluster_torsions, validate_angles,
-                         validate_frame_weights, weighted_resample)
+                         cluster_mass, cluster_torsions, embed, validate_angles,
+                         validate_frame_weights, validate_metric_weights,
+                         weighted_resample)
 
-__all__ = ["THDBSCAN", "t_hdbscan"]
+#: DEFAULT TRUE since 2026-10-01, which is NOT sklearn's default and is the one place this
+#: estimator deliberately departs from it.
+#:
+#: sklearn's EOM selection refuses the root of the condensed tree unless this is set, so with it
+#: False a UNIMODAL ensemble cannot be reported as one state -- the blob is split instead, and the
+#: failure is silent and confident: measured, a 4000-frame single Gaussian returns 2-3 clusters
+#: with a plausible mass split and nothing in the output saying one state was never a candidate.
+#: For a torsional ensemble at 300 K, and especially for a molecule with few rotatable bonds,
+#: unimodal is an ordinary answer, so a default that cannot express it invents structure in a
+#: common case.
+#:
+#: THE COST OF TRUE IS REAL AND POINTS THE OTHER WAY: allowing the root lets a genuinely
+#: multi-state ensemble collapse into one cluster when the between-basin density is not low enough
+#: to beat the root's stability. That is a false negative where False gives a false positive. The
+#: trade was decided deliberately: a merged partition reports ONE population, which is visibly
+#: wrong and prompts a check, whereas a split unimodal blob reports several plausible populations
+#: that look like a result. Over-splitting is the harder error to notice, so it is the one the
+#: default avoids. `summary()` records the flag either way.
+ALLOW_SINGLE_CLUSTER_DEFAULT = True
+
+#: Label for a frame the DENSITY test excludes: its neighbourhood is thinner than that of any
+#: frame the fit put in a cluster. "Nowhere in particular."
+NOISE_LABEL = -2
+
+#: Label for a frame the VOTE gate declines: its neighbours disagree about which cluster it belongs
+#: to. "Between two somewheres" -- a barrier frame.
+BARRIER_LABEL = -1
+
+__all__ = ["ALLOW_SINGLE_CLUSTER_DEFAULT", "BARRIER_LABEL", "NOISE_LABEL", "THDBSCAN",
+           "t_hdbscan"]
 
 
 class THDBSCAN:
@@ -69,7 +99,7 @@ class THDBSCAN:
                  metric_weights=None, multiplicities=None,
                  min_samples_fraction: Optional[float] = None,
                  min_samples: Optional[int] = None, k: int = 15,
-                 allow_single_cluster: bool = True):
+                 allow_single_cluster: bool = ALLOW_SINGLE_CLUSTER_DEFAULT):
         self.theta_ = validate_angles(torsions, units)
         self.n_frames_, self.n_torsions_ = self.theta_.shape
         w = validate_frame_weights(weights, self.n_frames_)
@@ -99,20 +129,6 @@ class THDBSCAN:
         self.min_samples = min_samples
         self.min_samples_fraction = min_samples_fraction
         self.k = int(k)
-        # TRUE BY DEFAULT HERE, which DIVERGES from the hpREST2 original. Without it a unimodal
-        # ensemble cannot come back as one state: sklearn's EOM selection refuses the root of the
-        # condensed tree, so a single Gaussian blob is SPLIT rather than reported whole --
-        # measured here, a 4000-frame unimodal ensemble SPLITS with the flag off (into 2 on this
-        # scikit-learn; the count is fixture- and version-dependent, the splitting is not).
-        #
-        # The upstream default was False on the ground that allowing the root lets a multi-state
-        # ensemble collapse into it. That risk is real but it is LOUD: one cluster holding
-        # everything is visible in the first line of any summary. The failure the other way is
-        # silent -- three clusters with a plausible mass split and nothing saying one state was
-        # never a candidate -- and a tutorial's reader is far more likely to meet a rigid molecule
-        # with one basin than a multi-state ensemble they cannot recognise. Decided by this
-        # package's owner on 2026-10-01; `single_cluster_excluded_by_construction` still reports
-        # which way the flag was set, so neither case is inferred.
         self.allow_single_cluster = bool(allow_single_cluster)
         self.fitted_ = False
 
@@ -169,8 +185,10 @@ class THDBSCAN:
 
         self.train_theta_, self.train_labels_ = train_theta, canon
         self.n_clusters_ = len(remap)
+        self._fit_density_threshold()
         self.cluster_names_ = [f"state_{i}" for i in range(self.n_clusters_)]
         self.noise_name_ = "noise"
+        self.barrier_name_ = "barrier"
         # populations of the FULL ensemble under this partition, with the weights
         idx_all, _ = self._assign(self.theta_)
         cm = cluster_mass(idx_all, frame_weights=self.weights_)
@@ -180,7 +198,67 @@ class THDBSCAN:
         self.fitted_ = True
         return self
 
+    def _fit_density_threshold(self) -> None:
+        """The density scale a query frame must meet to be eligible for a cluster at all.
+
+        WHY A PROXY IS NEEDED. HDBSCAN's noise label is a statement about the condensed tree: a
+        frame is noise if it fell out below the birth lambda of every selected cluster. That is
+        defined only for frames that were IN the fit. `predict` must judge frames the fit never
+        saw, so it needs a density criterion computable against the training set.
+
+        THE CRITERION: a query frame's distance to its `min_samples`-th nearest TRAINING neighbour,
+        compared against the largest such distance among training frames the fit put in a cluster.
+        Denser than the sparsest clustered frame means eligible. It is the same quantity HDBSCAN's
+        core distance uses, measured the same way, which is what makes the comparison meaningful.
+
+        IT IS NOT HDBSCAN'S CRITERION AND DOES NOT REPRODUCE IT. A threshold on one core distance
+        cannot express a tree. `density_agreement_` records how often it agrees with HDBSCAN's own
+        verdict on the training frames, so the proxy's quality is a measured number rather than an
+        assumption.
+        """
+        X = embed(self.train_theta_, validate_metric_weights(self.metric_weights,
+                                                             self.n_torsions_),
+                  self.multiplicities)
+        ms = int(self.settings_.get("min_samples") or 5)
+        ms = max(1, min(ms, X.shape[0] - 1))
+        W = float(np.sum(validate_metric_weights(self.metric_weights, self.n_torsions_)))
+        d = np.empty(X.shape[0])
+        for lo in range(0, X.shape[0], 4096):
+            hi = min(lo + 4096, X.shape[0])
+            D2 = np.maximum((2.0 * W) - 2.0 * (X[lo:hi] @ X.T), 0.0)
+            # ms-th nearest EXCLUDING self, so index ms in the sorted row
+            part = np.partition(D2, ms, axis=1)[:, ms]
+            d[lo:hi] = np.sqrt(part)
+        self._train_core_ = d
+        self._core_k_ = ms
+        inc = self.train_labels_ >= 0
+        self.density_threshold_ = (float(d[inc].max()) if inc.any() else float("inf"))
+        # how well the proxy reproduces HDBSCAN's own verdict on the frames it DID judge
+        proxy_noise = d > self.density_threshold_
+        hdb_noise = self.train_labels_ < 0
+        self.density_agreement_ = float(np.mean(proxy_noise == hdb_noise))
+        self.density_proxy_note_ = (
+            f"a query frame is NOISE_LABEL ({NOISE_LABEL}) if its distance to its {ms}-th nearest "
+            f"training neighbour exceeds {self.density_threshold_:.6g}, the largest such distance "
+            f"among clustered training frames. This is a PROXY for HDBSCAN's tree criterion, not "
+            f"that criterion: it agrees with HDBSCAN's own verdict on "
+            f"{100 * self.density_agreement_:.2f} % of the training frames.")
+
     # ------------------------------------------------------------------------------ prediction
+
+    def _query_core(self, theta) -> np.ndarray:
+        """Distance from each query frame to its `min_samples`-th nearest TRAINING neighbour."""
+        w = validate_metric_weights(self.metric_weights, self.n_torsions_)
+        Xt = embed(self.train_theta_, w, self.multiplicities)
+        Xq = embed(theta, w, self.multiplicities)
+        W = float(np.sum(w))
+        ms = max(1, min(self._core_k_, Xt.shape[0] - 1))
+        out = np.empty(Xq.shape[0])
+        for lo in range(0, Xq.shape[0], 4096):
+            hi = min(lo + 4096, Xq.shape[0])
+            D2 = np.maximum((2.0 * W) - 2.0 * (Xq[lo:hi] @ Xt.T), 0.0)
+            out[lo:hi] = np.sqrt(np.partition(D2, ms - 1, axis=1)[:, ms - 1])
+        return out
 
     def _assign(self, theta) -> Tuple[np.ndarray, np.ndarray]:
         out = classify_to_clusters(
@@ -188,8 +266,15 @@ class THDBSCAN:
             metric_weights=self.metric_weights, multiplicities=self.multiplicities,
             k=self.k, min_vote_margin=self.min_vote)
         idx = np.asarray(out["labels"], dtype=np.int64)
-        names = np.array([self.noise_name_ if i < 0 else self.cluster_names_[i] for i in idx],
-                         dtype=object)
+        # The gate's refusals are BARRIER frames: neighbours disagree about which cluster.
+        idx[idx < 0] = BARRIER_LABEL
+        # DENSITY TAKES PRECEDENCE. "Nowhere in particular" is the stronger statement than
+        # "between two somewheres": a frame too sparse to belong anywhere is not meaningfully on a
+        # barrier between clusters it is not near. So NOISE_LABEL overwrites BARRIER_LABEL.
+        idx[self._query_core(theta) > self.density_threshold_] = NOISE_LABEL
+        names = np.array([self.noise_name_ if i == NOISE_LABEL
+                          else self.barrier_name_ if i == BARRIER_LABEL
+                          else self.cluster_names_[i] for i in idx], dtype=object)
         return idx, names
 
     def predict(self, test_torsions, *, units: str = "radians") -> Tuple[np.ndarray, np.ndarray]:
@@ -229,6 +314,10 @@ class THDBSCAN:
             # this job, because the failure is silent and confident: a plausible mass split and
             # nothing saying the root was never a candidate.
             single_cluster_excluded_by_construction=(not self.allow_single_cluster),
+            noise_label=NOISE_LABEL, barrier_label=BARRIER_LABEL,
+            density_threshold=float(self.density_threshold_),
+            density_proxy_agreement=float(self.density_agreement_),
+            density_proxy_note=self.density_proxy_note_,
             weights_uniform=self.weights_uniform_, settings=self.settings_,
             n_clusters_per_draw=list(self.n_clusters_per_draw_),
             draw_agreement=float(self.draw_agreement_),
@@ -246,26 +335,27 @@ class THDBSCAN:
             "min_vote is a BOUNDARY detector, not a density test: against a direct fit's own "
             "noise it recalls about 7 %",
             "a cluster is a density basin, NOT a metastable state; nothing here looks at time",
+            f"two kinds of unassigned, and they are different claims: {NOISE_LABEL} is DENSITY "
+            f"noise (the neighbourhood is thinner than any clustered frame's -- nowhere in "
+            f"particular) and {BARRIER_LABEL} is a BARRIER frame (the neighbours disagree about "
+            f"which cluster -- between two somewheres). Measured on a two-basin fixture they "
+            f"overlap only partly: a frame can be sparse yet unanimous, or dense yet split. "
+            f"Density takes precedence where both apply.",
+            self.density_proxy_note_,
         ]
-        if self.allow_single_cluster and self.n_clusters_ == 1:
-            # THE COST OF THE DEFAULT, stated where the result is read. True buys protection from
-            # over-splitting a unimodal ensemble and pays for it with the OPPOSITE error: a
-            # genuinely multi-state ensemble can collapse into one cluster when the between-basin
-            # density does not beat the root's stability. True is still the better default because
-            # the two errors are not equally visible -- one state reported where there are three
-            # is a single population that looks wrong and prompts a check, whereas three reported
-            # where there is one is several plausible populations that look like a result.
-            out.append(
-                "n_clusters is 1 and allow_single_cluster is True, so the root of the condensed "
-                "tree was a candidate. Check it against the torsion marginals before believing "
-                "it: this is the configuration in which a genuinely multi-state ensemble can "
-                "collapse into one cluster.")
         if not self.allow_single_cluster:
             out.append(
                 "allow_single_cluster is False, so a UNIMODAL ensemble cannot be reported as one "
                 "state: EOM refuses the root of the condensed tree and the blob is split instead. "
-                "Measured: a 4000-frame single Gaussian is SPLIT rather than reported whole. Pass "
+                "Measured: a 4000-frame single Gaussian returns 2-3 clusters. Pass "
                 "allow_single_cluster=True if one state is a possible answer.")
+        else:
+            out.append(
+                "allow_single_cluster is True (this module's default, NOT sklearn's): a unimodal "
+                "ensemble CAN be reported as one state. The cost is the opposite error -- a "
+                "genuinely multi-state ensemble can collapse into one cluster if the "
+                "between-basin density does not beat the root's stability. If n_clusters is 1, "
+                "check it against the torsion marginals before believing it.")
         if not self.weights_uniform_ and self.resampling is False:
             out.append(
                 "NON-UNIFORM weights with resampling=False: the partition was fitted on the "

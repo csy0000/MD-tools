@@ -19,7 +19,8 @@ requires_sklearn = pytest.mark.skipif(
     importlib.util.find_spec("sklearn") is None,
     reason="sklearn (which ships HDBSCAN) is an analysis-only dependency")
 
-from md_tools.analysis._t_hdbscan import THDBSCAN, t_hdbscan
+from md_tools.analysis._t_hdbscan import (ALLOW_SINGLE_CLUSTER_DEFAULT, BARRIER_LABEL, NOISE_LABEL,
+                               THDBSCAN, t_hdbscan)
 
 
 def three_blobs(rng, n=(6000, 3000, 1000), s=0.2):
@@ -79,8 +80,8 @@ def test_cluster_idx_is_integer_one_dimensional_and_matches_the_query_length():
 
 @requires_sklearn
 def test_labels_start_at_zero_and_are_contiguous_with_noise_at_minus_one():
-    """The contract: noise is -1, clusters are 0, 1, 2, ... A gap in the numbering, or a cluster
-    labelled -1, would break any caller indexing an array by cluster id."""
+    """The contract: clusters are 0, 1, 2, ... contiguous. A gap in the numbering, or a cluster
+    with a negative label, would break any caller indexing an array by cluster id."""
     rng = np.random.default_rng(4)
     c = t_hdbscan(three_blobs(rng)).fit()
     idx, _ = c.predict(np.vstack([three_blobs(rng, n=(40, 30, 20)),
@@ -88,7 +89,8 @@ def test_labels_start_at_zero_and_are_contiguous_with_noise_at_minus_one():
     present = sorted(set(idx.tolist()))
     clusters = [v for v in present if v >= 0]
     assert clusters == list(range(len(clusters))), f"not contiguous from 0: {present}"
-    assert all(v >= -1 for v in present), f"a label below -1 appeared: {present}"
+    assert all(v in (NOISE_LABEL, BARRIER_LABEL) or v >= 0 for v in present), \
+        f"an unexpected negative label appeared: {present}"
 
 
 @requires_sklearn
@@ -110,7 +112,9 @@ def test_cluster_names_align_with_the_indices_frame_by_frame():
     c = t_hdbscan(three_blobs(rng)).fit()
     idx, names = c.predict(rng.uniform(-np.pi, np.pi, size=(200, 2)))
     for i, nm in zip(idx, names):
-        assert nm == (c.noise_name_ if i < 0 else c.cluster_names_[i])
+        want = (c.noise_name_ if i == NOISE_LABEL else
+                c.barrier_name_ if i == BARRIER_LABEL else c.cluster_names_[i])
+        assert nm == want
 
 
 @requires_sklearn
@@ -136,19 +140,16 @@ def test_the_metric_is_periodic_so_the_wrap_does_not_split_a_basin():
 
 
 @requires_sklearn
-def test_a_unimodal_ensemble_needs_allow_single_cluster_to_come_back_as_one_state():
-    """A limitation worth pinning rather than discovering. sklearn's EOM selection refuses the
-    root of the condensed tree unless allow_single_cluster is set, so one Gaussian blob is SPLIT
-    when it is off. Both halves of this are measured.
-
-    MIGRATED, not rewritten: this test was written when the flag defaulted to False and relied on
-    that default. md-tools defaults it to TRUE, so the off case now says so explicitly. The
-    behaviour being pinned is unchanged -- which is the point of making the flag explicit here
-    rather than deleting the half that used to come for free."""
+def test_a_unimodal_ensemble_comes_back_as_ONE_state_by_default():
+    """The reason this module's default departs from sklearn's. With allow_single_cluster False,
+    EOM refuses the root of the condensed tree and one Gaussian blob is SPLIT -- a silent,
+    confident error that reports several plausible populations where the truth is one state. Both
+    directions are measured, because the default is only defensible if the False behaviour is
+    actually wrong on this fixture."""
     rng = np.random.default_rng(71)
     th = rng.normal(0.0, 0.15, size=(4000, 1))
+    assert t_hdbscan(th, mass_floor=0.02).fit().n_clusters_ == 1, "the default must allow one state"
     assert t_hdbscan(th, mass_floor=0.02, allow_single_cluster=False).fit().n_clusters_ > 1
-    assert t_hdbscan(th, mass_floor=0.02, allow_single_cluster=True).fit().n_clusters_ == 1
 
 
 @requires_sklearn
@@ -163,20 +164,6 @@ def test_the_default_still_separates_a_genuinely_multi_state_ensemble():
     assert c.n_clusters_ == 3
 
 
-@requires_sklearn
-def test_one_state_is_a_possible_answer_by_default():
-    """THE DEFAULT ITSELF, pinned. md-tools sets allow_single_cluster=True so that a rigid
-    molecule with one torsional basin is REPORTED as one state rather than split into a plausible
-    three. The upstream package defaults it to False; a silent change back would make every
-    unimodal result wrong in a way no caller could see, so the default is a test."""
-    rng = np.random.default_rng(71)
-    th = rng.normal(0.0, 0.15, size=(4000, 1))
-    fit = t_hdbscan(th, mass_floor=0.02).fit()
-    assert fit.allow_single_cluster is True, "md-tools defaults allow_single_cluster to True"
-    assert fit.n_clusters_ == 1, "a unimodal ensemble must come back as one state by default"
-    assert fit.summary()["single_cluster_excluded_by_construction"] is False
-
-
 # ------------------------------------------------------------------------------ the two paths
 
 
@@ -186,6 +173,8 @@ def test_resampling_is_off_by_default():
     c = t_hdbscan(three_blobs(rng))
     assert c.resampling is False
     assert c.mass_floor == 0.01 and c.min_vote == 0.9 and c.seed == 5
+    # NOT sklearn's default, deliberately: see ALLOW_SINGLE_CLUSTER_DEFAULT
+    assert c.allow_single_cluster is ALLOW_SINGLE_CLUSTER_DEFAULT is True
 
 
 @requires_sklearn
@@ -285,14 +274,27 @@ def test_a_planted_one_percent_cluster_is_actually_found():
 
 
 @requires_sklearn
-def test_min_vote_zero_commits_every_frame_and_a_high_gate_abstains():
+def test_min_vote_controls_BARRIER_frames_only_not_density_noise():
+    """min_vote=0 abstains from nothing, so no BARRIER frames -- but density noise is a separate
+    verdict from separate machinery and must survive. Before the two codes were split this test
+    asserted "nothing negative", which silently also asserted that HDBSCAN's noise had been
+    overwritten."""
+    # THE FIXTURE MATTERS AND THE OBVIOUS ONE IS WRONG. Well-separated blobs with empty space
+    # between them produce NO barrier frames at all: every frame the gate would refuse is also
+    # sparse, so density precedence claims it as -2. A barrier frame must be DENSE and SPLIT, which
+    # needs a populated region between basins -- here a uniform background that bridges them.
     rng = np.random.default_rng(16)
-    th = three_blobs(rng)
-    q = np.vstack([three_blobs(rng, n=(50, 50, 50)), rng.uniform(-np.pi, np.pi, size=(150, 2))])
-    open_idx, _ = t_hdbscan(th, min_vote=0.0).fit().predict(q)
-    gated_idx, _ = t_hdbscan(th, min_vote=0.9).fit().predict(q)
-    assert (open_idx < 0).sum() == 0
-    assert (gated_idx < 0).sum() > (open_idx < 0).sum()
+    th = np.concatenate([rng.normal(np.deg2rad(-90), np.deg2rad(8), 2000),
+                         rng.normal(np.deg2rad(90), np.deg2rad(8), 2000),
+                         rng.uniform(-np.pi, np.pi, 200)])[:, None]
+    open_idx, _ = t_hdbscan(th, mass_floor=0.02, min_vote=0.0).fit().predict(th)
+    gated_idx, _ = t_hdbscan(th, mass_floor=0.02, min_vote=0.9).fit().predict(th)
+    assert (open_idx == BARRIER_LABEL).sum() == 0
+    assert (gated_idx == BARRIER_LABEL).sum() > 0
+    # density noise is a separate verdict and appears under BOTH gates, unchanged by min_vote
+    assert (open_idx == NOISE_LABEL).sum() > 0
+    assert (gated_idx == NOISE_LABEL).sum() > 0
+    assert (open_idx == NOISE_LABEL).sum() == (gated_idx == NOISE_LABEL).sum()
 
 
 @pytest.mark.parametrize("bad", [0.0, 1.0, -0.1, 2.0])
@@ -354,10 +356,80 @@ def test_summary_says_when_a_single_cluster_was_impossible_by_construction():
     rng = np.random.default_rng(19)
     th = rng.normal(0.0, 0.15, size=(4000, 1))
     off = t_hdbscan(th, mass_floor=0.02, allow_single_cluster=False).fit().summary()
-    on = t_hdbscan(th, mass_floor=0.02, allow_single_cluster=True).fit().summary()
+    on = t_hdbscan(th, mass_floor=0.02).fit().summary()
     assert off["single_cluster_excluded_by_construction"] is True
     assert off["allow_single_cluster"] is False and off["n_clusters"] > 1
     assert on["single_cluster_excluded_by_construction"] is False
     assert on["n_clusters"] == 1
     assert any("UNIMODAL" in c for c in off["caveats"])
     assert not any("UNIMODAL" in c for c in on["caveats"])
+
+
+# ---------------------------------------------------- the two unassigned codes (user, 2026-10-01)
+
+
+@requires_sklearn
+def test_noise_is_minus_two_and_barrier_is_minus_one():
+    """The two kinds of unassigned are DIFFERENT CLAIMS and must not share a code: -2 density
+    noise ("nowhere in particular"), -1 barrier ("between two somewheres"). Collapsing them
+    discarded one verdict -- the single-code version silently committed most of HDBSCAN's noise
+    frames to clusters."""
+    assert NOISE_LABEL == -2 and BARRIER_LABEL == -1
+    rng = np.random.default_rng(20)
+    th = np.concatenate([rng.normal(np.deg2rad(-90), np.deg2rad(8), 2000),
+                         rng.normal(np.deg2rad(90), np.deg2rad(8), 2000),
+                         rng.uniform(-np.pi, np.pi, 200)])[:, None]
+    c = t_hdbscan(th, mass_floor=0.02, min_vote=0.9).fit()
+    idx, names = c.predict(th)
+    present = set(idx.tolist())
+    assert NOISE_LABEL in present, "a uniform background must produce density noise"
+    assert BARRIER_LABEL in present, "two basins must produce some barrier frames"
+    assert set(names[idx == NOISE_LABEL]) == {"noise"}
+    assert set(names[idx == BARRIER_LABEL]) == {"barrier"}
+
+
+@requires_sklearn
+def test_density_takes_precedence_over_the_barrier_code():
+    """Where both apply, -2 wins: a frame too sparse to belong anywhere is not meaningfully on a
+    barrier between clusters it is not near. Pinned because the opposite precedence would report
+    isolated frames as barriers, which reads as a transition state."""
+    rng = np.random.default_rng(21)
+    th = np.concatenate([rng.normal(np.deg2rad(-90), np.deg2rad(8), 1500),
+                         rng.normal(np.deg2rad(90), np.deg2rad(8), 1500),
+                         rng.uniform(-np.pi, np.pi, 300)])[:, None]
+    c = t_hdbscan(th, mass_floor=0.02, min_vote=0.9).fit()
+    idx, _ = c.predict(th)
+    sparse = c._query_core(th) > c.density_threshold_
+    assert np.all(idx[sparse] == NOISE_LABEL), "a sparse frame must be -2 whatever the vote said"
+
+
+@requires_sklearn
+def test_min_vote_zero_still_reports_density_noise():
+    """Turning the gate off must remove BARRIER frames and leave NOISE frames: the two codes come
+    from independent machinery, so one switch must not silence the other."""
+    rng = np.random.default_rng(22)
+    th = np.concatenate([rng.normal(np.deg2rad(-90), np.deg2rad(8), 1500),
+                         rng.normal(np.deg2rad(90), np.deg2rad(8), 1500),
+                         rng.uniform(-np.pi, np.pi, 300)])[:, None]
+    idx, _ = t_hdbscan(th, mass_floor=0.02, min_vote=0.0).fit().predict(th)
+    assert (idx == BARRIER_LABEL).sum() == 0
+    assert (idx == NOISE_LABEL).sum() > 0
+
+
+@requires_sklearn
+def test_the_density_proxy_reports_its_own_agreement_with_hdbscan():
+    """`predict` must judge frames the fit never saw, but HDBSCAN's noise label is a statement
+    about the condensed tree and exists only for fitted frames. So -2 uses a core-distance PROXY,
+    and the result must report how well that proxy reproduces the real verdict rather than imply
+    it is the same criterion."""
+    rng = np.random.default_rng(23)
+    th = np.concatenate([rng.normal(np.deg2rad(-90), np.deg2rad(8), 2000),
+                         rng.normal(np.deg2rad(90), np.deg2rad(8), 2000),
+                         rng.uniform(-np.pi, np.pi, 200)])[:, None]
+    s = t_hdbscan(th, mass_floor=0.02).fit().summary()
+    assert s["noise_label"] == -2 and s["barrier_label"] == -1
+    assert 0.0 < s["density_threshold"] < np.inf
+    assert 0.0 <= s["density_proxy_agreement"] <= 1.0
+    assert s["density_proxy_agreement"] > 0.95
+    assert "PROXY" in s["density_proxy_note"]
+    assert any("different claims" in c for c in s["caveats"])

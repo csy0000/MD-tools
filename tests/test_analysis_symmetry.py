@@ -623,3 +623,69 @@ def test_an_operation_needing_coordinates_can_still_be_drawn(tmp_path):
     assert info["changed_positions"], (
         "an operation that moves a torsion must say which atom position changed")
     assert any(pairs for pairs in info["changed_positions"].values())
+
+
+# ------------------------------------------------------- two kinds of unassigned frame
+
+def _two_code_fixture(seed=4):
+    """A partition carrying BOTH unassigned codes, as `t_hdbscan` now returns them.
+
+    Hand-built rather than fitted, so the test states what it expects instead of depending on
+    which frames a density estimate happens to reject. The point it must exercise is that -2 and
+    -1 are BOTH unassigned: a fixture using only one of them passes whatever the other code does,
+    which is what the suite did before this was added.
+    """
+    rng = np.random.default_rng(seed)
+    a, b = 0.6, -1.9
+    blocks = [np.column_stack([rng.normal(a, 0.1, 200), rng.normal(b, 0.1, 200)]),
+              np.column_stack([rng.normal(b, 0.1, 200), rng.normal(a, 0.1, 200)])]
+    noise = rng.uniform(-np.pi, np.pi, (11, 2))       # -2, nowhere in particular
+    barrier = rng.uniform(-0.3, 0.3, (7, 2))          # -1, between two somewheres
+    torsions = wrap(np.vstack(blocks + [noise, barrier]))
+    labels = np.array([5] * 200 + [9] * 200 + [-2] * 11 + [-1] * 7)
+    return torsions, labels
+
+
+def test_neither_unassigned_code_becomes_a_cluster():
+    """THE DEFECT THIS GUARDS. `load_cluster_torsion` excluded ONE label, so when the estimator
+    began returning two, the other would have been read as a cluster -- acquiring a population, a
+    representative and a place in the symmetry comparison, for frames the estimator explicitly
+    declined to place."""
+    torsions, labels = _two_code_fixture()
+    data = load_cluster_torsion(torsions, labels, noise_label=-2)
+    assert data.cluster_labels == [5, 9], data.cluster_labels
+    assert set(data.unassigned) == {-2, -1}
+    assert data.unassigned[-2].n_frames == 11 and data.unassigned[-1].n_frames == 7
+
+
+def test_both_codes_count_toward_the_ensemble_and_survive_a_merge():
+    """Conservation must include EVERY unassigned code. Summing only `noise` would fail on a
+    correct merge -- or pass on an incorrect one, if the other code happened to be empty, which
+    is exactly the fixture hole this file had."""
+    pytest.importorskip("matplotlib")
+    torsions, labels = _two_code_fixture()
+    data = load_cluster_torsion(torsions, labels, noise_label=-2)
+    table = data.mass_table()
+    assert math.isclose(table["sum"], 1.0, abs_tol=1e-12)
+    assert set(table["unassigned"]) == {-2, -1}
+
+    mol, defs = _para_system()
+    detector = TorsionSymmetry(mol, defs)
+    detector.fit(data)
+    merged = detector.deduplicate(data)
+
+    assert math.isclose(sum(merged.masses.values()) + merged.noise_mass, 1.0, abs_tol=1e-12)
+    # and each code keeps its OWN value in the per-frame array
+    assert int((merged.labels == -2).sum()) == 11
+    assert int((merged.labels == -1).sum()) == 7
+
+
+def test_a_fixture_using_one_code_cannot_speak_for_the_other():
+    """The lesson, pinned. `_merge_fixture` uses only -1, so every assertion it makes about
+    unassigned frames is silent about -2. If someone deletes the two-code fixture above, this
+    says why it existed rather than leaving the gap to be rediscovered."""
+    _, labels = _merge_fixture()
+    assert set(np.unique(labels)) & {-2} == set(), (
+        "_merge_fixture now carries -2; fold its assertions into the two-code tests")
+    _, two = _two_code_fixture()
+    assert {-2, -1} <= set(np.unique(two).tolist())

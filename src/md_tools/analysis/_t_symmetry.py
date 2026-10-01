@@ -283,6 +283,7 @@ class ClusterTorsions:
 
     entries: Dict[int, ClusterEntry]
     noise: ClusterEntry
+    unassigned: Dict[int, ClusterEntry]
     labels: np.ndarray
     torsions: np.ndarray
     weights: np.ndarray
@@ -296,9 +297,18 @@ class ClusterTorsions:
         return sorted(self.entries)
 
     def mass_table(self) -> Dict[str, Any]:
+        """Clusters, every UNASSIGNED code separately, and the total.
+
+        The unassigned codes are reported one by one rather than pooled, because -2 (nowhere in
+        particular) and -1 (between two somewheres) are different statements and a reader deciding
+        whether a partition is trustworthy needs to know which kind they have.
+        """
         return {"clusters": {int(k): float(v.mass) for k, v in sorted(self.entries.items())},
                 "noise": float(self.noise.mass),
-                "sum": float(sum(v.mass for v in self.entries.values()) + self.noise.mass)}
+                "unassigned": {int(k): float(v.mass)
+                               for k, v in sorted(self.unassigned.items())},
+                "sum": float(sum(v.mass for v in self.entries.values())
+                             + sum(v.mass for v in self.unassigned.values()))}
 
 
 def load_cluster_torsion(torsions, cluster_idx, *, noise_label: int = -1,
@@ -354,11 +364,22 @@ def load_cluster_torsion(torsions, cluster_idx, *, noise_label: int = -1,
         return ClusterEntry(label=int(label), frames=frames, torsions=th[frames],
                             weights=w[frames], mass=float(w[frames].sum() / total))
 
-    entries = {int(c): _entry(int(c), lab == c)
-               for c in np.unique(lab) if int(c) != int(noise_label)}
+    # EVERY NEGATIVE LABEL IS UNASSIGNED, not just `noise_label`. `t_hdbscan` returns TWO such
+    # codes -- -2 density noise, -1 the vote gate's refusal -- and they are different claims about
+    # a frame. Excluding only one of them would turn the other into a CLUSTER: a set of frames the
+    # estimator explicitly declined to place would acquire a population, a representative and a
+    # place in the symmetry comparison. `noise_label` still names the one whose mass is reported
+    # as `noise`, so an older two-label-free caller is unaffected.
+    entries = {int(c): _entry(int(c), lab == c) for c in np.unique(lab) if int(c) >= 0}
     if not entries:
-        raise ValueError(f"every frame carries the noise label {noise_label}; nothing to compare")
-    return ClusterTorsions(entries=entries, noise=_entry(int(noise_label), lab == noise_label),
+        raise ValueError(
+            f"no frame carries a cluster label (>= 0); every one is unassigned. Labels present: "
+            f"{sorted(int(c) for c in np.unique(lab))}")
+    unassigned = {int(c): _entry(int(c), lab == c) for c in np.unique(lab) if int(c) < 0}
+    return ClusterTorsions(entries=entries,
+                           noise=unassigned.get(int(noise_label),
+                                                _entry(int(noise_label), lab == noise_label)),
+                           unassigned=unassigned,
                            labels=lab, torsions=th, weights=w, names=column_names,
                            noise_label=int(noise_label), total_weight=total)
 
@@ -1025,22 +1046,29 @@ class TorsionSymmetry:
             aligned[merged_label] = np.concatenate(aligned_parts)[order]
             masses[merged_label] = float(mass)
 
-        merged_labels = np.full(cluster_torsions.labels.shape, cluster_torsions.noise_label,
-                                dtype=np.int64)
+        # Unassigned frames keep their OWN code through the merge. Collapsing -2 onto -1 would
+        # lose the distinction the estimator was changed to make, in the one array most readers
+        # will actually index with.
+        merged_labels = np.array(cluster_torsions.labels, dtype=np.int64, copy=True)
         for original, merged in original_to_merged.items():
             merged_labels[cluster_torsions.labels == original] = merged
 
-        total = sum(masses.values()) + cluster_torsions.noise.mass
+        # EVERY unassigned code counts toward the total, not only `noise`. With two codes the
+        # old check added one of them and would have failed on a correct merge -- or, worse,
+        # passed on an incorrect one had the other code been empty.
+        unassigned_mass = sum(entry.mass for entry in cluster_torsions.unassigned.values())
+        total = sum(masses.values()) + unassigned_mass
         if not math.isclose(total, 1.0, rel_tol=0, abs_tol=1e-9):
             raise RuntimeError(
-                f"merged masses plus noise come to {total!r}, not 1. The ensemble normalisation "
-                f"must be preserved exactly by a relabelling.")
+                f"merged masses plus unassigned come to {total!r}, not 1. The ensemble "
+                f"normalisation must be preserved exactly by a relabelling. Unassigned codes: "
+                f"{ {k: round(v.mass, 6) for k, v in cluster_torsions.unassigned.items()} }")
         return MergedClusters(
             groups=[list(g) for g in groups], original_to_merged=original_to_merged,
             labels=merged_labels, original_labels=cluster_torsions.labels.copy(),
             entries=entries, noise=cluster_torsions.noise, aligned=aligned,
             operations_used=operations_used, masses=masses,
-            noise_mass=float(cluster_torsions.noise.mass))
+            noise_mass=float(unassigned_mass))
 
     # ----------------------------------------------------------------------------------- report
 
