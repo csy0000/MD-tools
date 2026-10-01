@@ -22,9 +22,9 @@ because agreeing proves much.
 !!! warning "What two agreeing marginals cannot tell you"
     A marginal integrates over the other coordinate, so it is insensitive to exactly the failure a
     joint density partition catches: getting both basin populations right while putting the wrong
-    joint structure between them. A reference can look converged in every 1D projection and still
-    be several percentage points out in a cluster population — measured elsewhere on this host at
-    6.27 pp spread for a density partition against 1.05 pp for a single-CV arc on the same runs.
+    joint structure between them. A set of runs can look converged in every 1D projection and be
+    markedly less converged in a joint observable such as a cluster population, because the
+    projections average away the structure the partition resolves.
 
     The full 2D φ–ψ surface is the honest target for this molecule and **it is not computed here**.
     Two 1D marginals agreeing is weaker, and is all this page claims.
