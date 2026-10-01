@@ -194,14 +194,62 @@ def test_the_profile_loop_gives_each_window_its_own_restraint_file():
         f"the page's configuration reads {umbrella_file!r} while its loop writes umbrella.yaml")
 
 
-def test_the_page_says_its_measured_numbers_are_missing():
-    """The page's honesty is part of its contract, and is asserted rather than trusted.
+def test_the_page_does_not_offer_a_different_hamiltonian_as_its_reference():
+    """The error this page nearly shipped, pinned so it cannot come back.
 
-    While the profile is unmeasured, the page must SAY so. If someone fills in the numbers they
-    should have to change this test deliberately, rather than quietly inheriting a version line
-    that claims more than the page can show.
+    An earlier draft promised to check an IMPLICIT GBn2 profile against this system's 1 microsecond
+    EXPLICIT TIP3P run, because both are "the ALA phi distribution". They are two different
+    Hamiltonians with different free-energy surfaces: agreement would have been luck and
+    disagreement uninterpretable, so the check could not have failed for the right reason. A check
+    that cannot fail correctly is worse than none, because it reads as validation.
+
+    The page may still LINK the explicit run -- it is the right thing to point at for what a short
+    unbiased run misses -- but it must not present it as this profile's reference, and it must say
+    which Hamiltonian the reference it does use was run in.
     """
+    import re
+
     text = PAGE.read_text(encoding="utf-8")
-    assert "not measured" in text or "not run" in text, (
-        "the page no longer marks its unmeasured sections; if they have been measured, update "
-        "this test and the version line together")
+    # Emphasis markers removed before matching: the page is free to bold a word inside a phrase
+    # ("the **same** Hamiltonian") and a test that breaks on formatting teaches authors to write
+    # for the test instead of the reader.
+    lowered = re.sub(r"[*_`]", "", text.lower())
+
+    assert "do not compare this against the explicit-solvent runs" in lowered, (
+        "the page must warn against comparing an implicit profile with the explicit runs")
+    assert "same hamiltonian" in lowered, (
+        "the page must say its reference is the SAME Hamiltonian, which is the whole point")
+    assert "implicit gbn2" in lowered
+
+    # The reference must be described as UNBIASED. A profile checked against another biased
+    # calculation shares whatever the bias got wrong.
+    assert "unbiased" in lowered
+
+
+def test_the_page_quotes_the_agreement_it_claims_consistently():
+    """The three checks are quoted in the header and again in section 6; they must match.
+
+    A number repeated in two places in one document is two statements of one fact, and the second
+    one rots. These are small enough to compare directly.
+    """
+    import re
+
+    text = PAGE.read_text(encoding="utf-8")
+    rms = sorted(set(re.findall(r"rms(?: deviation)?\s+(?:\*\*)?([0-9.]+)(?:\*\*)? kJ/mol",
+                                text)))
+    assert "0.15" in rms, f"the unbiased-reference agreement should appear as 0.15; found {rms}"
+    assert "0.13" in rms, f"the MBAR agreement should appear as 0.13; found {rms}"
+
+    # kT must be quoted correctly, since every agreement is judged against it.
+    assert "2.49" in text, "kT at 300 K is 2.49 kJ/mol and the page compares its errors to it"
+
+
+def test_the_page_explains_why_some_windows_are_stiffer():
+    """The slide is slope/k, and a reader following this page on a steep barrier will hit it."""
+    text = PAGE.read_text(encoding="utf-8")
+    assert "slope / k" in text or "slope/k" in text, (
+        "the page must give the displacement of a window on a slope, which is what sent two "
+        "windows 30 degrees off their centres")
+    assert "Energy is NaN" in text, (
+        "the page must say that a stiff window launched from an unbiased equilibration blows up, "
+        "because 7 of 12 did")

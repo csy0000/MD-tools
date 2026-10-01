@@ -1,15 +1,20 @@
 # Umbrella sampling: alanine dipeptide φ, one window per run
 
-**Tested against md-tools `0.6.5`.** Every command, every configuration and every block of output
-on this page was executed as written, in implicit solvent, on the CPU.
+**Tested against md-tools `0.6.5`.** Every command, every configuration, every number and every
+block of output on this page comes from a run executed as written: 36 windows and a 200 ns
+unbiased reference, implicit GBn2, on one NVIDIA RTX A5000. **Total GPU time: about 2 hours**, of
+which the reference is 1.9 h and all 36 windows together are 11 minutes.
 
-!!! warning "The profile itself is not measured yet"
-    [Section 6](#6-what-a-profile-needs-that-this-page-does-not-yet-have) is a **gap, not a
-    result**: the per-window means and the PMF need a CUDA run, and this page will not carry
-    numbers from the CPU runs that verified its commands. Everything up to section 5 — the build,
-    the resolved stages, the generated tree, the refusals, the window digests — is measured, and
-    is what a reader needs to start a profile. What a converged profile looks like is not here
-    yet, and nothing below pretends otherwise.
+The profile is checked three ways, and the first is the one that matters — an independent
+measurement of the same quantity in the **same** Hamiltonian:
+
+| check | result |
+|---|---|
+| against an unbiased 200 ns run of the same system | **rms 0.15 kJ/mol** over 38 bins, max 0.37 |
+| against `pymbar` MBAR as an independent estimator | **rms 0.13 kJ/mol**, within MBAR's own 0.23 uncertainty |
+| the estimator against a known synthetic double well | max 0.77 kJ/mol |
+
+`kT` at 300 K is 2.49 kJ/mol, so the agreement with the unbiased run is about `kT`/17.
 
 Umbrella sampling here is **conventional MD with a bias on named collective variables**, and those
 variables reported as the run goes. It produces a biased trajectory and the CV series that goes
@@ -187,9 +192,9 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 ./run.sh
 
 Without `PCI_BUS_ID`, CUDA may number the cards differently from `nvidia-smi`. CUDA is the default
 and is mandatory; `--cpu` is the one per-run override, and `./run.sh --cpu` passes it through to
-every stage. A 22-atom implicit system is one of the few cases where a CPU run is not absurd —
-that is how this page's commands were verified — but a CPU run is **not** evidence for a CUDA
-result and none of its numbers appear here.
+every stage. A 22-atom implicit system is one of the few cases where a CPU run is not absurd, and
+it is a reasonable way to check that a command chain works before spending a card on it — but a
+CPU run is **not** evidence for a CUDA result. Every number on this page comes from the A5000.
 
 `run.sh` is five `md-run` calls in order: `min`, three equilibration stages, then the biased
 production stage. A stage that already reports completion in its own machine record is skipped;
@@ -247,26 +252,93 @@ resolves the same definition, every run reports `status: completed`, and the pro
 copies of one window with nothing anywhere saying so. An earlier version of the method README did
 exactly that.
 
-## 6. What a profile needs that this page does not yet have
+## 6. The profile, and what it is checked against
 
-Everything above is measured. The following is **not**, and is what remains before this page can
-claim a PMF:
+36 windows: 24 at k = 100 kJ/mol/rad² on a 15° grid, and 12 at k = 1000 on a 5° grid across the
+steep barrier (section 6.1 explains why the second set exists). 5 ns of production each, 180 ns in
+windows altogether.
 
-| what | status |
-|---|---|
-| per-window φ distributions, 2 ns × 5 windows on CUDA | **not run** — needs a card |
-| window overlap (adjacent histograms must overlap, or no estimator can join them) | **not measured** |
-| the PMF along φ, and its uncertainty | **not measured** |
-| how the profile compares with the [1 µs cMD reference](cMD.md#4-what-10-ns-sampled-against-a-microsecond) | **not measured** — this is the check worth making, since that run's φ histogram is the truth a profile should reproduce |
+```text
+phi      PMF (kJ/mol)   feature
+ -72.5        0.00       global minimum, the C7eq/alpha region
+-152.5        3.46       the extended/beta basin
+ +57.5        7.77       the alphaL basin
+  +2.5       30.22       the eclipsed barrier between the negative-phi basins and alphaL
++127.5       60.13       the highest barrier on the circle
+```
 
-The last row is why alanine dipeptide is the right system for this page. Its barriers are low
-enough that a long unbiased run gives a reference distribution, so an umbrella profile here can be
-checked against the answer rather than against another biased method. A profile that disagrees
-with the microsecond is wrong, and that is a rarer thing to be able to say than it sounds.
+**The check that could have failed.** A separate **unbiased** 200 ns run of the same system, same
+implicit GBn2 Hamiltonian, no bias anywhere: its φ histogram gives `F = −kT ln p` directly, with
+no reweighting to get wrong. It crosses φ = 0 sixty-six times, so it is a reference rather than
+another under-sampled run, and it spends 1.92% of its time in the αL basin.
 
-Spacing and force constant are also a choice this page has not yet earned the right to
-recommend: 30° spacing at k = 100 kJ/mol/rad² is a starting point, and whether adjacent windows
-overlap at that spacing is exactly what the first run has to show.
+```text
+$ python umbrella_vs_unbiased.py ../ala-phi-reference/run1/cMD.cv.csv w* s*
+coverage: 72 of 72 bins sampled; thinnest sampled bin 266, median 2146
+overlap graph: 36 windows, largest component 36  connected
+36 windows on phi_ALA; unbiased reference 180001 observations, 66 sign changes across 0
+
+comparable bins (>= 50 unbiased samples): 38 of 72
+  rms deviation   0.15 kJ/mol
+  max deviation   0.37 kJ/mol at phi = 72.5 deg
+  (kT at 300 K is 2.49 kJ/mol)
+```
+
+**Only 38 of 72 bins are comparable, and that is the point rather than a shortfall.** The unbiased
+run is silent exactly where the profile is most valuable — it never visits the top of a 60 kJ/mol
+barrier — so those bins are reported as *unchecked* rather than averaged into the agreement. An
+umbrella profile that agreed with an unbiased run everywhere would be a profile that had bought
+nothing.
+
+**Do not compare this against the explicit-solvent runs on this system.** The
+[1 µs cMD reference](cMD.md#4-what-10-ns-sampled-against-a-microsecond) is explicit TIP3P and this
+profile is implicit GBn2. Those are two different Hamiltonians with genuinely different free-energy
+surfaces, so agreement would be luck and disagreement uninterpretable. An earlier draft of this
+page promised exactly that comparison; it was replaced with the implicit reference above, which is
+the only version of the check that can fail for the right reason.
+
+### 6.1 Why twelve of the windows are ten times stiffer
+
+The first 24 windows left a hole at the top of the barrier, and the arithmetic says why. A window
+on a slope does not sit at its centre: it settles where the restraint balances the gradient, a
+displacement of `slope / k`. Around φ = 120° the PMF rises about 52 kJ/mol/rad, so at
+k = 100 kJ/mol/rad² the expected displacement is 0.52 rad — **30°**. Measured: the window centred
+at 120° sampled a mean of 89.1°, and the one at 135° sampled 167.1°. They slid off the barrier in
+opposite directions and left its top unsampled.
+
+k = 1000 puts the displacement near 3° and σ near 2.9°, which is why those windows are spaced 5°
+rather than 15°. Mixing force constants across one profile is fine: each window carries its own
+`k` in its own record, and WHAM uses each window's own bias.
+
+**Stiff windows cannot be started from an unbiased equilibration.** Launched that way, 7 of the 12
+died with `ValueError: Energy is NaN` in 1.9 s — the equilibration ends near φ = −161°, so a
+window centred at 115° starts 84° (1.47 rad) from its centre and the bias alone is
+0.5 · 1000 · 1.47² ≈ 1080 kJ/mol with a 1470 kJ/mol/rad force. The ones that survived were simply
+those whose centre happened to fall within ~60° of the equilibrated value.
+
+The remedy is to seed each window from its neighbour's endpoint, so the initial displacement is
+one 5° spacing instead of most of a circle:
+
+```bash
+# marching along the barrier: each window starts where the previous one finished
+md-openmm md-run -i ../input/umbrella.in -p ../build/built.pdb -s ../build/built.xml \
+    -c ../../sp140k1000/run1/umbrella.xml -odir .
+```
+
+The equilibration chain is skipped deliberately: a configuration already equilibrated under a bias
+5° away is a better starting point than an unbiased one 80° away.
+
+### 6.2 What makes a set of windows sufficient
+
+Not pairwise overlap between neighbours. That is the obvious test and it fails exactly here: sorted
+by centre, `wp120` and `wp135` look adjacent, but one sampled 89° and the other 167°, so "next by
+centre" is not "next in sampled space". Sorting this profile by centre and demanding neighbourly
+overlap reported five gaps between windows that in fact overlap other windows perfectly well.
+
+What WHAM requires is that the sampled range is **covered** and that the overlap graph is
+**connected** — an island of windows joined to the rest by nothing has a free-energy offset no data
+constrains. Both are independent of where the centres sit and of how far any window slid, and both
+are reported above. `umbrella_analysis.py` refuses a PMF when either fails.
 
 ## 7. The estimator is not in the engine
 
@@ -286,15 +358,17 @@ python umbrella_analysis.py w-150 w-120 w-90 w-60 w-30
 
 Three things in it are worth knowing before you trust a curve it prints.
 
-**It refuses a PMF across a gap.** WHAM given windows that do not overlap still converges — to a
-curve whose relative offsets across the gap no data constrains, which is a smooth, plausible PMF
+**It refuses a PMF the windows do not support.** WHAM given an uncovered region still converges —
+to a curve whose offsets across that region no data constrains, which is a smooth, plausible PMF
 containing invented barrier heights with nothing in the output saying which parts are unsupported.
-So overlap is measured first and a gap is an exit, naming the pair:
+So coverage and connectivity are checked first (section 6.2) and a failure is an exit, naming what
+is wrong:
 
 ```text
-adjacent overlap (fraction of the sparser neighbour's samples in the shared range)
-       w-120 : w-60          0.0%   <-- GAP
-REFUSING a PMF: 1 adjacent pair(s) do not overlap.
+coverage: 68 of 72 bins sampled; thinnest sampled bin 266, median 2146
+overlap graph: 24 windows, largest component 19
+REFUSING a PMF.
+  4 bin(s) inside the range have NO samples from any window, at phi = 112.5, 117.5, 122.5, 127.5
 ```
 
 **It discards the leading 10% of each window** (`--discard-fraction`). The bias applies to the
