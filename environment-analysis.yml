@@ -39,6 +39,11 @@ dependencies:
   # Clustering, for `md_tools.analysis.t_hdbscan` (0.6.5). `sklearn.cluster.HDBSCAN` needs
   # scikit-learn >= 1.3; it is imported lazily, so a run environment without it is unaffected.
   - scikit-learn>=1.3
+  # The notebooks. The analysis tutorials are `.ipynb`, so an environment that cannot open one
+  # cannot run them; `ipykernel` is what registers this environment as a kernel a notebook can
+  # select, and without it a reader with jupyterlab elsewhere still cannot execute these.
+  - jupyterlab
+  - ipykernel
   # Reading what a run wrote, and plotting it. Neither is imported by the package.
   - mdtraj
   - netcdf4
