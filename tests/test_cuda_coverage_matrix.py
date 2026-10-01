@@ -1567,8 +1567,33 @@ def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_
 
     if shutil.which("mpirun") is None:
         pytest.fail("no mpirun on PATH; the multi-rank CUDA lane is an unmet criterion")
+    # ENOUGH DEVICES **OR** A DAEMON, not one device per rank. The workers of ONE LAUNCH may
+    # share a GPU -- that is what `md_tools.openmm.placement` is for, and the assertion below
+    # accepts it, recording "N device(s) for M ranks under verified MPS". The old guard here
+    # demanded `_visible() >= states`, which is one-rank-per-device: the very promise the comment
+    # beside that assertion says the feature "deliberately does not promise". So a six-state
+    # ladder on three cards -- legitimate, coordinated, and the case the assertion was rewritten
+    # to cover -- failed before it ran, and the [6] parametrisation has likely never executed on
+    # a machine with fewer than six free cards.
+    #
+    # The precondition that is REAL is MPS, because without it the runtime refuses the share
+    # before writing anything. Keeping a precondition at all (rather than deleting the guard)
+    # matters: `_visible`'s own docstring records a six-state ladder that passed a nine-device
+    # count, ran, and failed later with two ranks on one card. An early refusal that names the
+    # cause beats a late one that does not.
+    #
+    # Sharing ACROSS runs is a different question and not this software's to answer: placement
+    # reasons about the workers of one launch. Two projects on one card is a scheduling decision
+    # made by whoever holds the cards.
     if _visible() < states:
-        pytest.fail(f"{states} states need {states} devices; {_visible()} visible")
+        from md_tools.openmm.placement import read_mps_status
+
+        status = read_mps_status()
+        if status.daemon != "running":
+            pytest.fail(
+                f"{states} ranks on {_visible()} visible device(s) needs NVIDIA MPS, and no "
+                f"daemon this process can reach is running: {status.detail}. Either expose "
+                f"{states} devices, or start a daemon on a private pipe directory.")
 
     work = tmp_path / f"ladder-{states}"
     work.mkdir()
