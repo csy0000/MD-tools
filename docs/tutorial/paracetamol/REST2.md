@@ -1,7 +1,13 @@
 # REST2: paracetamol in explicit water, 10 ns per state
 
-**Tested against md-tools `0.6.1`.** Every command and every number on this page comes from a
-run executed as written, at that version.
+**Tested against md-tools `0.6.1`,** except [section 8](#8-extending-it-four-more-chunks-of-10-ns).
+Every command and every number up to section 7 comes from a run executed as written, at that
+version.
+
+**Section 8 was run at `0.6.4`, on the 0.6.1 run this page produced** — and it could not have been
+run at 0.6.1, which section 8 explains: before 0.6.4 an extension looked for a manifest name no
+`build-md` tree has ever written, so no generated ladder was extendable. That is the realistic
+case anyway: the parent is an older run and the extension is done with the version you have now.
 
 A four-state REST2 ladder over paracetamol, 10 ns of production **per state**. Every command below
 was run exactly as written, and every number is copied from the files that run produced.
@@ -410,6 +416,24 @@ identity is recognised across the version), but the older code cannot find the m
 
 The next chunk is the same command with `ext1 → ext2`, `--extend-from ../REST2-run1-ext1`, no
 `--extend-manifest`, and the helpers copied from `REST2-run1-ext1` rather than from `REST2-run1`.
+
+**The chain on this page was run.** Four chunks, 50 ns in total, and each segment's `restart.json`
+pins its parent by the sha256 of that parent's manifest, checkpoint, analysis file and all four
+state trajectories — so the chain is checkable rather than a naming convention:
+
+```text
+ext1  parent REST2-run1        at 5,000,000 steps / 10 ns   ->  10,000,000
+ext2  parent REST2-run1-ext1   at 10,000,000 / 20 ns        ->  15,000,000
+ext3  parent REST2-run1-ext2   at 15,000,000 / 30 ns        ->  20,000,000
+ext4  parent REST2-run1-ext3   at 20,000,000 / 40 ns        ->  25,000,000
+```
+
+Overall exchange acceptance was 0.2216, 0.2255, 0.2257, 0.2256 across the four — stable, as one
+continuing experiment should be rather than four different ones.
+
+**No timing is quoted, deliberately.** The four segments ran under different card placements on a
+shared machine, and per-step times across them differ by 2.5x for that reason alone. A rate
+measured that way describes the machine's load, not the software.
 
 **The group file is still the parent's**, and still names the same `build/REST2/system_state<i>.xml`
 saved states. An extension integrates the same Hamiltonians as the run it continues; a ladder that
