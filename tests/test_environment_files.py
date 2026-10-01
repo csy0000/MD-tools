@@ -49,7 +49,13 @@ def _dependencies(path: Path) -> dict[str, str]:
 #: What makes a file a VARIANT of the run environment rather than a separate thing: anything that
 #: integrates a trajectory, parameterises a molecule, or picks a GPU. A second file naming any of
 #: these is the situation that once cost five tests to police.
-RUN_STACK = ("openmm", "openmmforcefields", "openff-toolkit", "ambertools", "parmed", "rdkit",
+#: NOT rdkit, and the omission is the point. rdkit is GENUINELY SHARED: the run environment
+#: parameterises ligands with it and the analysis environment reads their SDFs with it, so a file
+#: naming rdkit is not thereby a variant of the run environment. The marker of a variant is
+#: something that INTEGRATES or places work on a device -- openmm, the Amber stack, MPI, a CUDA
+#: pin. Listing rdkit made this guard fire on `environment-analysis.yml`, which names rdkit and
+#: none of the rest: correct by the letter of the list and wrong about the question being asked.
+RUN_STACK = ("openmm", "openmmforcefields", "openff-toolkit", "ambertools", "parmed",
              "mpi4py", "openmpi", "cuda-version")
 
 
@@ -65,7 +71,7 @@ def test_there_is_exactly_one_file_describing_the_RUN_environment():
     assert ENVIRONMENT.is_file()
     for path in sorted(ROOT.glob("environment-*.yml")):
         overlap = sorted(set(_dependencies(path)) & set(RUN_STACK))
-        assert not overlap, (
+        assert not overlap, (        # noqa: E501 - the message is the documentation
             f"{path.name} names {overlap} from the run stack, which makes it a VARIANT of "
             f"environment.yml rather than a separate environment. Two lists describing one "
             f"environment drift apart silently; fold it back into environment.yml instead.")
