@@ -362,20 +362,54 @@ EXCHANGE ATTEMPTS, and this ladder attempts one every 1000 steps, so 10 ns is
 10 ns / 2 fs  =  5,000,000 steps  =  5000 exchanges at 1000 steps each
 ```
 
-— the same `number_of_exchanges: 5000` the configuration already names. One chunk:
+— the same `number_of_exchanges: 5000` the configuration already names.
+
+**Run it through the GENERATED `REST2.py`, not through `md-openmm md-run`.** `md-run`'s parser
+stops at `--resume` and `--overwrite`: it defines neither `--extend` nor `--extend-from`, so the
+command fails in argparse before anything starts. Extension is a property of the ladder runtime,
+and the generated entry point is the surface that reaches it.
+
+A segment is a directory that carries its own copy of the generated helpers, because the script
+locates `resolved.config` from `__file__`:
 
 ```bash
-mkdir -p REST2-run1-ext1 && cd REST2-run1-ext1
+mkdir -p REST2-run1-ext1/eq
+for f in REST2.py resolved.config remd_groupfile.1 eq/eq_3.xml; do
+  cp -p "REST2-run1/$f" "REST2-run1-ext1/$f"
+done
+cd REST2-run1-ext1
 
 CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1,2,3,4 \
-mpirun -n 4 md-openmm md-run -ng 4 -i ../input/REST2.in -p ../build/built.pdb \
-  --groupfile ../REST2-run1/remd_groupfile.1 -odir . \
-  --extend-from ../REST2-run1 --extend 5000 \
-  -o remd_records/REST2_prod1.out -log remd_records/REST2_prod1.log \
-  -r remd_records/restart_prod1.json
+mpirun -n 4 python REST2.py -ng 4 -p ../build/built.pdb \
+  --groupfile remd_groupfile.1 \
+  --extend 5000 --extend-from ../REST2-run1 \
+  --extend-manifest remd_records/restart_prod1.json
 ```
 
-and the next chunk is the same command with `ext1 → ext2` and `--extend-from ../REST2-run1-ext1`.
+**No `-s`.** A ladder reads its saved states only from the group file, and the extension's copy
+names the same `build/REST2/system_state<i>.xml` the parent integrated.
+
+### `--extend-manifest`, and why only the first chunk needs it
+
+An extension finds its parent by reading that parent's completion manifest, and the two kinds of
+parent file it differently:
+
+| the parent is | its manifest is at | flag needed |
+|---|---|---|
+| the original run, from `run.sh` | `remd_records/restart_prod1.json` | **yes** |
+| a previous extension segment | `restart.json`, at the segment root | no |
+
+So chunk 1 passes `--extend-manifest remd_records/restart_prod1.json` and chunks 2 to 4 pass
+nothing: the default is already right. Passing the flag to chunk 2 refuses read-only, naming the
+file it did not find — which is how to tell the two cases apart if you are unsure.
+
+Before 0.6.4 the assumed name was the ONLY name, and since no `build-md` tree has ever written it,
+no generated ladder was extendable at all. If you are extending a run made by 0.6.1, 0.6.2 or
+0.6.3, run the extension with 0.6.4 or later: it continues the older parent (its Hamiltonian
+identity is recognised across the version), but the older code cannot find the manifest.
+
+The next chunk is the same command with `ext1 → ext2`, `--extend-from ../REST2-run1-ext1`, no
+`--extend-manifest`, and the helpers copied from `REST2-run1-ext1` rather than from `REST2-run1`.
 
 **The group file is still the parent's**, and still names the same `build/REST2/system_state<i>.xml`
 saved states. An extension integrates the same Hamiltonians as the run it continues; a ladder that
