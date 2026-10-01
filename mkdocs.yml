@@ -51,6 +51,20 @@ theme:
 
 plugins:
   - search
+  # The analysis tutorials are notebooks, and they are committed WITH their outputs so a reader
+  # sees the results of our simulations. `execute: false` is the whole point: the site renders
+  # the outputs that are IN the file, the ones produced by the runs the pages describe.
+  #
+  # Executing at build time would be worse in three ways. It needs the trajectories, which are
+  # not in this repository and never will be. It needs the analysis environment, not the docs
+  # one. And it would silently re-measure: a figure on the site would then come from whatever
+  # data the build machine happened to have, while the prose beside it describes the run the
+  # author actually did.
+  - mkdocs-jupyter:
+      execute: false
+      include_source: true
+      ignore_h1_titles: false
+      show_input: true
 
 # KEPT IN THE REPOSITORY, KEPT OFF THE SITE. See the header for why. This is MkDocs' own
 # `exclude_docs` (1.5+), gitignore-style, rather than a third-party plugin: the core does the job,
@@ -117,11 +131,16 @@ nav:
           - cMD: tutorial/ALA/cMD.md
           - REST2: tutorial/ALA/REST2.md
           - AIS: tutorial/ALA/AIS.md
-          - Analysis: tutorial/ALA/analysis/index.md
+          - Analysis:
+              - tutorial/ALA/analysis/index.md
+              - Free energy along phi: tutorial/ALA/analysis/pmf-1d.ipynb
+              - The Ramachandran surface: tutorial/ALA/analysis/pmf-2d.ipynb
       - Ethanol:
           - The system: tutorial/ethanol/index.md
           - Hydration free energy: tutorial/ethanol/hydration.md
-          - Analysis: tutorial/ethanol/analysis/index.md
+          - Analysis:
+              - tutorial/ethanol/analysis/index.md
+              - Four estimators, one dataset: tutorial/ethanol/analysis/free-energy.ipynb
       - Ethane + chloroethane:
           - The system: tutorial/ethane-chloroethane/index.md
           - Relative hydration free energy: tutorial/ethane-chloroethane/relative.md
@@ -130,7 +149,11 @@ nav:
           - cMD: tutorial/paracetamol/cMD.md
           - REST2: tutorial/paracetamol/REST2.md
           - AIS: tutorial/paracetamol/AIS.md
-          - Analysis: tutorial/paracetamol/analysis/index.md
+          - Analysis:
+              - tutorial/paracetamol/analysis/index.md
+              - Free energy of each torsion: tutorial/paracetamol/analysis/pmf-1d.ipynb
+              - Clustering, pruning, summary: tutorial/paracetamol/analysis/clustering.ipynb
+              - Which torsions move together: tutorial/paracetamol/analysis/mutual-information.ipynb
       - Chignolin:
           - The system: tutorial/chignolin/index.md
           - cMD: tutorial/chignolin/cMD.md

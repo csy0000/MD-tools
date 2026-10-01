@@ -8,8 +8,8 @@ Three notebooks over the runs the [cMD](../cMD.md) and [REST2](../REST2.md) page
 | [`clustering.ipynb`](clustering.ipynb) | **1.** clustering **2.** pruning by symmetry **3.** summary |
 | [`mutual-information.ipynb`](mutual-information.ipynb) | which torsions move together, and the estimator's own bias |
 
-**Committed with their outputs**, so the figures and numbers are readable without running
-anything. To re-run:
+**Committed with their outputs**, and rendered here as pages: the figures and numbers come from
+the runs these tutorials describe. To run them yourself:
 
 ```bash
 micromamba activate analysis-env          # see Installing, step 5

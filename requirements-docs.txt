@@ -20,3 +20,14 @@ mkdocs-material==9.7.7
 Markdown==3.10.3
 pymdown-extensions==12.0.1
 
+# THE ANALYSIS NOTEBOOKS, rendered as PAGES with the outputs they were committed with.
+# `execute: false` in mkdocs.yml is the point: the site must show the results of the runs the
+# prose describes, not re-measure them on the build machine, which has neither the trajectories
+# nor the analysis environment. Pinned like the rest -- an unpinned renderer changes how a
+# notebook looks with no commit here, and nbconvert's HTML output in particular moves between
+# minor versions. Read off the environment that built the site clean, not chosen from memory.
+mkdocs-jupyter==0.26.3
+nbconvert==7.17.1
+nbformat==5.11.1
+jupytext==1.19.5
+

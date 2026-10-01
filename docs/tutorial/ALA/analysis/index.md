@@ -7,8 +7,9 @@ Two notebooks over the runs the [cMD](../cMD.md) and [REST2](../REST2.md) pages 
 | [`pmf-1d.ipynb`](pmf-1d.ipynb) | the free energy along phi, cMD against the REST2 cold rung |
 | [`pmf-2d.ipynb`](pmf-2d.ipynb) | the Ramachandran surface the 1D projection averages away |
 
-**They are committed with their outputs**, so every figure and number is readable without running
-anything — on GitHub, or in Jupyter. To re-run them:
+**They are committed with their outputs**, and rendered here as pages: every figure and number
+below comes from the runs these tutorials describe, not from a build-time re-execution. To run
+them yourself:
 
 ```bash
 micromamba activate analysis-env          # see Installing, step 5
