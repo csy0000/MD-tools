@@ -285,3 +285,119 @@ def test_a_selector_claim_added_on_resume_is_a_difference():
     now = _as_written_by_0_6_1()
     now["rest2"]["backbone_scaling_list"] = ":2"
     assert resume_identity.differences(_as_written_by_0_6_0(), now) == ["rest2.backbone_scaling_list"]
+
+
+def _v4_hamiltonian_entry():
+    """A v4 `hamiltonian` identity entry, built the way `identity_record` builds one."""
+    from md_tools.rest2 import identity as hamiltonian_identity
+
+    # The two selection digests are COMPUTED from a real legacy document, not written by hand:
+    # the whole point of the v3 bridge is which digests `identity_record` offers, and a literal
+    # would let the bridge agree with a list no writer ever produces.
+    document = hamiltonian_identity._legacy_selection_document(range(20), [(0, 1)], True)
+    return {
+        "format": hamiltonian_identity.FINGERPRINT_FORMAT,
+        "system_sha256": "52db0189" + "0" * 56,
+        "selection_mode": hamiltonian_identity.LEGACY_SELECTION_MODE,
+        "selection_sha256": hamiltonian_identity.selection_identity_sha256(document),
+        "v2_selection_sha256": "bb" * 32,
+        "v3_selection_sha256": hamiltonian_identity._v3_selection_sha256_candidates(document),
+        "n_solute_atoms": 20,
+        "n_unscaled_central_bonds": 3,
+        "unscaled_impropers": True,
+        "tau": None,
+        "temperature_k": 300.0,
+        "ensemble": "NVT",
+        "summary": {"HarmonicBondForce": 1},
+        "note": "whatever the writer of the day put here",
+    }
+
+
+def _v3_record_of(entry):
+    """What 0.6.1/0.6.2/0.6.3 wrote for the SAME Hamiltonian: v3's format, v3's selection digest,
+    the detector stamp v4 dropped, and no `v2_/v3_selection_sha256` helpers (v3 had none)."""
+    from md_tools.rest2 import identity as hamiltonian_identity
+
+    recorded = {key: value for key, value in entry.items()
+                if key not in ("v2_selection_sha256", "v3_selection_sha256")}
+    recorded["format"] = hamiltonian_identity.V3_FINGERPRINT_FORMAT
+    recorded["selection_sha256"] = entry["v3_selection_sha256"][0]
+    recorded["detector_policy_version"] = 3
+    return recorded
+
+
+def test_a_v3_parent_hamiltonian_is_extendable_by_v4():
+    """A 0.6.1/0.6.2/0.6.3 ladder's identity must still agree with the v4 identity of the SAME
+    Hamiltonian, through `rest2.identity`'s v3 compatibility branch.
+
+    The v3 -> v4 bump moved `detector_policy_version` out of the projection and added
+    `v3_selection_sha256`. Nothing about the energy changed. `compare_identity` once took the
+    compatibility branch for v2 only and compared every other format WHOLE, so `format` alone
+    made every in-flight ladder un-extendable -- a refusal the one named rule does not make.
+    """
+    from md_tools.remd.driver import ReplicaRun
+
+    entry = _v4_hamiltonian_entry()
+    before = {"format": "md-tools-replica-identity/v2", "hamiltonian": _v3_record_of(entry)}
+    now = {"format": "md-tools-replica-identity/v2", "hamiltonian": entry}
+    assert ReplicaRun.compare_identity(before, now) == []
+
+
+def test_a_v3_parent_of_a_different_system_is_still_refused():
+    """The branch is a format bridge, not an exemption: the fields it compares still have to
+    match. Without this the test above would pass just as happily on a stub that returns True."""
+    from md_tools.remd.driver import ReplicaRun
+
+    entry = _v4_hamiltonian_entry()
+    recorded = _v3_record_of(entry)
+    recorded["system_sha256"] = "ff" * 32
+    before = {"format": "md-tools-replica-identity/v2", "hamiltonian": recorded}
+    now = {"format": "md-tools-replica-identity/v2", "hamiltonian": entry}
+    assert ReplicaRun.compare_identity(before, now) == ["hamiltonian"]
+
+
+def test_a_hamiltonian_identity_of_an_unknown_format_is_refused():
+    """And an format the one rule does not know is refused rather than compared field by field."""
+    from md_tools.remd.driver import ReplicaRun
+
+    entry = _v4_hamiltonian_entry()
+    recorded = dict(entry, format="md-tools-hamiltonian-identity/v99")
+    before = {"format": "md-tools-replica-identity/v2", "hamiltonian": recorded}
+    now = {"format": "md-tools-replica-identity/v2", "hamiltonian": entry}
+    assert ReplicaRun.compare_identity(before, now) == ["hamiltonian"]
+
+
+def test_a_v3_legacy_selection_record_carries_the_unstamped_digest():
+    """A v3 record of a LEGACY-full-solute region agrees, and this is the case the field hit.
+
+    A legacy selection document never carried `detector_policy_version`, so v3 hashed the
+    projection WITHOUT it and wrote exactly the digest v4 writes. The candidate list reconstructed
+    only the stamped forms, so the digests it offered were all wrong ones and a real 0.6.1
+    paracetamol ladder -- whose parent record and the fresh v4 record agreed on `selection_sha256`
+    character for character -- was refused on that very field.
+    """
+    from md_tools.remd.driver import ReplicaRun
+    from md_tools.rest2 import identity as hamiltonian_identity
+
+    entry = _v4_hamiltonian_entry()
+    recorded = _v3_record_of(entry)
+    # What v3 actually wrote for a stampless document: v4's own digest.
+    recorded["selection_sha256"] = entry["selection_sha256"]
+    recorded.pop("detector_policy_version")
+    assert entry["selection_sha256"] == entry["v3_selection_sha256"][0], \
+        "the unstamped digest must be the candidate a legacy v3 record is matched against"
+    before = {"format": "md-tools-replica-identity/v2", "hamiltonian": recorded}
+    now = {"format": "md-tools-replica-identity/v2", "hamiltonian": entry}
+    assert ReplicaRun.compare_identity(before, now) == []
+    assert hamiltonian_identity.hamiltonian_identities_agree(recorded, entry)
+
+
+def test_the_unstamped_candidate_is_the_projections_own_digest():
+    """It must be computed, not copied from the record under comparison. Reading the candidate off
+    `current["selection_sha256"]` would make the field agree with itself and check nothing."""
+    from md_tools.rest2 import identity as hamiltonian_identity
+
+    document = hamiltonian_identity._legacy_selection_document(range(5), [(0, 1)], True)
+    candidates = hamiltonian_identity._v3_selection_sha256_candidates(document)
+    assert candidates[0] == hamiltonian_identity.selection_identity_sha256(document)
+    assert len(candidates) == 1 + len(hamiltonian_identity._V3_DETECTOR_POLICY_VERSIONS)

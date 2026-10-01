@@ -289,6 +289,11 @@ def replica_parser(description: str = "one coordinated replica-exchange ladder")
     parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("--extend", type=int, default=0, metavar="N")
     parser.add_argument("--extend-from", default=None, metavar="DIRECTORY")
+    # Forwarded to the executor like --extend-from beside it. A generated ladder writes its
+    # manifest to `remd_records/restart_prod1.json`, which is exactly the layout the executor's
+    # default of `restart.json` does not find -- so without this flag HERE, the generated entry
+    # point cannot extend a generated run, which is the only kind it ever sees.
+    parser.add_argument("--extend-manifest", default=None, metavar="PATH")
     parser.add_argument("--force", action="store_true",
                         help="the executor's spelling of --overwrite, accepted here for symmetry "
                              "with the direct executor. The two are one policy: either replaces "
@@ -543,7 +548,8 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
         from .storage import StorageError
 
         try:
-            ReplicaRun.validate_extension_parent(Path(args.extend_from))
+            ReplicaRun.validate_extension_parent(Path(args.extend_from),
+                                                 args.extend_manifest)
             ReplicaRun.refuse_other_saved_states(Path(args.extend_from), args.groupfile)
         except (DriverError, StorageError, ValueError, OSError) as refusal:
             print(f"{protocol_name}: --extend-from {args.extend_from}: {refusal} Nothing was "
@@ -763,6 +769,8 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
         executor_argv += ["--extend", str(args.extend)]
     if args.extend_from:
         executor_argv += ["--extend-from", args.extend_from]
+    if args.extend_manifest:
+        executor_argv += ["--extend-manifest", args.extend_manifest]
 
     from ..build.record import LogWriter, file_facts
     from ..remd import executor as replica_executor

@@ -232,7 +232,12 @@ def _v3_selection_sha256_candidates(document):
     """
     carried = document.get("detector_policy_version", "<absent>")
     values = (carried,) if carried != "<absent>" else _V3_DETECTOR_POLICY_VERSIONS
-    out = []
+    # THE UNSTAMPED CANDIDATE FIRST, and it is not a formality: a LEGACY-full-solute selection
+    # document never carried `detector_policy_version` at all, so v3 hashed the projection
+    # without it and wrote exactly the digest v4 writes. Reconstructing only the stamped forms
+    # left that case with no matching candidate, which refused every 0.6.1/0.6.2/0.6.3 ladder
+    # whose region was the whole solute -- the common case, and the one the tutorial runs.
+    out = [selection_identity_sha256(document)]
     for value in values:
         projection = hamiltonian_selection_projection(document)
         projection["detector_policy_version"] = value

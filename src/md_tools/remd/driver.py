@@ -236,11 +236,18 @@ class ReplicaRun:
 
     @staticmethod
     def _identity_entry_agrees(key, was, now):
-        """Equality, except a 0.6.0 (v2) `hamiltonian` entry, which goes through the ONE named
-        compatibility branch (`rest2.identity`, shared contract §3): accepted only for a legacy
-        selection with every v2 field matching. Every v3 entry is still compared whole."""
-        if (key == "hamiltonian" and isinstance(was, dict) and isinstance(now, dict)
-                and was.get("format") == hamiltonian_identity.LEGACY_FINGERPRINT_FORMAT):
+        """Equality, except a `hamiltonian` entry, which goes through the ONE named rule
+        (`rest2.identity.require_same_hamiltonian`, shared contract §3) WHATEVER format it
+        carries. That function owns the v2 and v3 compatibility branches and refuses a format it
+        does not know, so this call site must not decide for itself which formats are comparable.
+
+        It used to take the branch only for v2 and compare every other format whole. That was
+        correct only while v3 was current: the v3 -> v4 bump added `v3_selection_sha256` and
+        changed `format`, so whole comparison made every 0.6.1/0.6.2/0.6.3 ladder un-extendable --
+        for a digest change that describes no physical difference, with the function that says so
+        one call away, already written and already dispatching on v3.
+        """
+        if key == "hamiltonian" and isinstance(was, dict) and isinstance(now, dict):
             return hamiltonian_identity.hamiltonian_identities_agree(was, now)
         if key == "rungs" and was is None:
             # THE COMPATIBILITY BRANCH for rung provenance (shared contract §3): an identity
@@ -253,7 +260,7 @@ class ReplicaRun:
 
     # -- the run -------------------------------------------------------------------------------------
 
-    def run(self, *, resume=False, extend=0, extend_from=None):
+    def run(self, *, resume=False, extend=0, extend_from=None, extend_manifest=None):
         rule, rule_identity = self._load_rule()
         identity = self.scientific_identity(rule_identity)
         started = datetime.datetime.now(datetime.timezone.utc)
@@ -284,7 +291,8 @@ class ReplicaRun:
         result = None
         try:
             state = self._begin(identity, systems, rule_identity, resume=resume,
-                                extend=extend, extend_from=extend_from)
+                                extend=extend, extend_from=extend_from,
+                                extend_manifest=extend_manifest)
             if state.get("per_tau_interrupted"):
                 # Stopped between two per-tau stages, collectively, before the ladder took a
                 # step: there is no checkpoint, and the record says so by name.
@@ -633,14 +641,15 @@ class ReplicaRun:
             return None
 
     def _begin(self, identity, systems, rule_identity, *, resume, extend,
-               extend_from=None):
+               extend_from=None, extend_manifest=None):
         seed = int(self.protocol.random_seed or 20260830)
         self.engine = ReplicaEngine(
             self.protocol, systems, self.topology, owned=self.owned,
             platform=self._platform, properties=self._properties, seed=seed)
 
         if extend_from:
-            return self._extend_from(identity, Path(extend_from), extend=extend)
+            return self._extend_from(identity, Path(extend_from), extend=extend,
+                                     manifest_name=extend_manifest)
         if resume or extend:
             return self._continue(identity, extend=extend)
 
@@ -779,7 +788,8 @@ class ReplicaRun:
         except (OSError, ValueError):
             return None
 
-    #: The one name an extension assumes. Everything else it needs is READ OUT of this file:
+    #: The DEFAULT manifest name, and the only one assumable. Everything else an extension needs
+    #: is READ OUT of this file:
     #: a completion manifest records the analysis and checkpoint names it was written with, and
     #: those are the truth. Assuming them instead would work only for runs whose outputs happen
     #: to be named the way the documentation example names them -- the generated ladders call
@@ -787,13 +797,21 @@ class ReplicaRun:
     PARENT_MANIFEST = "restart.json"
 
     @classmethod
-    def parent_files(cls, parent):
-        """The parent's manifest, and the analysis and checkpoint files it names."""
+    def parent_files(cls, parent, manifest_name=None):
+        """The parent's manifest, and the analysis and checkpoint files it names.
+
+        `manifest_name` is the caller's `--extend-manifest`, relative to the parent. It exists
+        because `PARENT_MANIFEST` was the only name this would look for, and NO build-md-generated
+        ladder has ever written it: `run.sh` files its segments as
+        `remd_records/restart_prod<N>.json`. The assumed name is still the default, so nothing
+        that worked before needs the flag.
+        """
         parent = Path(parent)
-        manifest_path = parent / cls.PARENT_MANIFEST
+        name = manifest_name or cls.PARENT_MANIFEST
+        manifest_path = parent / name
         if not manifest_path.is_file():
             raise DriverError(
-                f"{parent} holds no {cls.PARENT_MANIFEST}, so it is not a completed run. An "
+                f"{parent} holds no {name}, so it is not a completed run. An "
                 f"extension continues a finished parent; a run that never wrote a completion "
                 f"manifest is resumed in place with --resume instead.")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -809,7 +827,7 @@ class ReplicaRun:
                           "checkpoint": parent / checkpoint}
 
     @classmethod
-    def validate_extension_parent(cls, parent):
+    def validate_extension_parent(cls, parent, manifest_name=None):
         """Every READ-ONLY reason to refuse extending `parent`, established from the parent alone.
 
         Returns `(manifest, files, checkpoint, stored_identity)`. Separate from `_extend_from`
@@ -822,7 +840,7 @@ class ReplicaRun:
         from . import validate as replica_validate
 
         parent = Path(parent)
-        manifest, files = cls.parent_files(parent)
+        manifest, files = cls.parent_files(parent, manifest_name)
         for name in ("analysis", "checkpoint"):
             if not files[name].is_file():
                 raise DriverError(
@@ -922,7 +940,7 @@ class ReplicaRun:
                 f"a continuation of it: {groupfile} names other saved states than {record} "
                 f"records the parent integrating.\n  - " + "\n  - ".join(differ))
 
-    def _extend_from(self, identity, parent, *, extend):
+    def _extend_from(self, identity, parent, *, extend, manifest_name=None):
         """Continue a COMPLETED parent into a NEW output set, leaving the parent untouched.
 
         This is not `--resume`, which reopens the parent's own files for append. Here the parent
@@ -937,7 +955,8 @@ class ReplicaRun:
         """
         payload = None
         if self.coordinator.is_root:
-            manifest, files, checkpoint, stored = self.validate_extension_parent(parent)
+            manifest, files, checkpoint, stored = self.validate_extension_parent(
+                parent, manifest_name)
             differences = self.compare_identity(stored, identity)
             if differences:
                 raise IdentityError(

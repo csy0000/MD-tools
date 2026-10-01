@@ -279,13 +279,20 @@ trajectories and restraints are about:
 * `scaler_arguments`: exactly the arguments `build_scaled_system` takes besides τ, so every state
   rebuilds from the record alone.
 
-Hamiltonian identity is `md-tools-hamiltonian-identity/v3`. Its `selection_sha256` hashes only
+Hamiltonian identity is `md-tools-hamiltonian-identity/v4`. Its `selection_sha256` hashes only
 what determines the Hamiltonian: the hot atoms, the scaled and protected torsion bonds, each CMAP
 decision, the improper policy and rule versions, and each ligand instance's residue, package and
 resolved exclusions. Mask spelling, instance labels, file paths and an exclusion file's comments
-are **provenance**. They are recorded, but they never make a run unresumable. A 0.6.0 (v2)
-identity is still accepted, but only for a legacy selection and only when every v2 field
-matches.
+are **provenance**. They are recorded, but they never make a run unresumable. v4 is v3 with
+`detector_policy_version` moved out of the projection for exactly that reason, which is why a
+0.6.1/0.6.2/0.6.3 (v3) record is accepted on sight of a matching `v3_selection_sha256`: the energy
+did not move, so refusing it would strand an in-flight ladder over a stamp. A 0.6.0 (v2) identity
+is still accepted too, but only for a legacy selection and only when every v2 field matches.
+
+Both bridges live in ONE function, `rest2.identity.require_same_hamiltonian`, and every caller
+that compares a `hamiltonian` entry — the ladder's `compare_identity` included — must go through
+it rather than deciding for itself which formats are comparable. A caller that compares the entry
+whole breaks on the next format bump, silently and for no physical reason.
 
 ## What MD-tools implements
 

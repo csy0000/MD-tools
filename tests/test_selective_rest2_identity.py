@@ -266,9 +266,19 @@ def test_a_v3_identity_of_a_DIFFERENT_selection_is_refused(system):
         require_same_hamiltonian(_v3_record(system, EXPLICIT), _current(system, other))
 
 
-def test_the_v4_digest_really_differs_from_the_v3_one(system):
-    """If these were equal the compatibility branch would be untested dead code."""
+def test_the_v4_digest_really_differs_from_every_STAMPED_v3_one(system):
+    """If these were equal the stamped reconstruction would be untested dead code.
+
+    The candidate list OPENS with the v4 digest itself, deliberately: a selection document that
+    carried no `detector_policy_version` -- every legacy-full-solute one -- was hashed by v3
+    without it, so v3's digest and v4's are the same string. That candidate is therefore expected
+    and is not what this test is about. What must differ is every RECONSTRUCTED stamped digest,
+    because those are the ones the branch exists to recognise.
+    """
     from md_tools.rest2.identity import (_v3_selection_sha256_candidates,
                                          selection_identity_sha256)
 
-    assert selection_identity_sha256(EXPLICIT) not in _v3_selection_sha256_candidates(EXPLICIT)
+    candidates = _v3_selection_sha256_candidates(EXPLICIT)
+    assert candidates[0] == selection_identity_sha256(EXPLICIT)
+    assert selection_identity_sha256(EXPLICIT) not in candidates[1:]
+    assert len(set(candidates)) == len(candidates), "two reconstructions must not collide"
