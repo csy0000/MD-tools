@@ -7,25 +7,176 @@ all under `md_tools.analysis`:
 
 | | | needs |
 |---|---|---|
-| [`t_hdbscan`](#t_hdbscan) | a density partition of a torsional ensemble | scikit-learn |
+| [`t_hdbscan`](#t_hdbscan) | a density partition of a torsional ensemble, symmetry-first by default | scikit-learn, rdkit |
 | [`t_mi`](#t_mi) | mutual information between torsions, with its own bias measured | numpy |
-| [`t_symmetry`](#t_symmetry) | which of those clusters are the same conformer | rdkit |
+| [`t_symmetry`](#t_symmetry) | the older post-hoc route: which clusters of an existing partition are the same conformer | rdkit |
 
 They are independent: none imports another's estimator, and `import md_tools.analysis` loads none
-of them. See [Installing](../../install.md#5-optional-the-analysis-environment) for the extra.
+of them; `t_hdbscan` reaches the symmetry enumeration only on its default route, lazily. See [Installing](../../install.md#5-optional-the-analysis-environment) for the extra.
 
 ---
 
 ## `t_hdbscan`
 
-A torsional ensemble is points on a TORUS, not in a Euclidean space, and that governs everything.
-Two frames at +179° and −179° are neighbours; any method that treats the angle as a real number
-puts them maximally far apart and cuts a single basin in half at the periodic seam. So every
-distance here is computed in the `(cos θ, sin θ)` embedding, where Euclidean distance is a
-monotone function of the chordal distance on the torus.
+### The default workflow: symmetry first
 
-On that embedding the partition is HDBSCAN: a density-based method that finds basins of arbitrary
-shape and labels low-density frames as noise rather than forcing them into a cluster.
+```text
+enumerate molecular symmetry -> symmetry-aware torsional distance -> HDBSCAN -> classify frames
+                                                                     (same distance, 18 of 20)
+```
+
+```python
+from md_tools.analysis import t_hdbscan, TorsionDefinitions, verify_atom_mapping
+
+definitions = TorsionDefinitions(quads=((0, 1, 3, 4), (1, 3, 4, 5), (6, 7, 8, 17)),
+                                 names=("omega", "aryl", "phenol"),
+                                 indexing="zero-based", units="radian")
+fit = t_hdbscan(torsions,                     # (n_frames, 3) radians, in that column order
+                molecule=mol,                 # RDKit Mol with explicit H (the SDF)
+                torsion_definitions=definitions,
+                coordinates=traj,             # mdtraj.Trajectory: coordinates, unit cell, topology
+                atom_mapping=mapping).fit()   # trajectory index of each reference atom
+fit.labels_            # 0, 1, ... by population; -2 density noise; -1 ambiguous
+fit.summary()          # populations, unassigned masses, vote, symmetry, metric, caveats
+```
+
+A torsion is measured through four NAMED atoms, and a molecular symmetry renames atoms without
+moving any. Paracetamol's ring flip renames C5 as C10, so the `aryl` torsion measured to C5
+becomes the torsion measured to C10: the same configuration, a different number. The distance
+between two frames therefore has to be independent of which equivalent naming each is written in:
+
+```text
+Phi(theta) = (..., sqrt(w_j) cos theta_j, sqrt(w_j) sin theta_j, ...)
+d_sym(x, y) = min over g, h in G of || Phi(g x) - Phi(h y) ||
+```
+
+Frames that differ only by a relabelling are then at distance **zero before HDBSCAN builds its
+density**, so symmetry-related basins share a cluster during the fit, before the minimum cluster
+size is applied. The older workflow fitted the labellings as separate clusters and merged them
+afterwards; it is still available (below) and the two are compared on paracetamol in the
+[comparison notebook](../../tutorial/paracetamol/analysis/clustering-comparison.ipynb).
+
+**Relabelling is not motion.** The enumerations are alternative descriptions of one observation.
+They are never appended to the data as extra frames, which would multiply frame counts and
+statistical weights by the group order.
+
+### The input contract
+
+Angles alone cannot establish a molecular symmetry, so the default route needs:
+
+| input | what it is | when |
+|---|---|---|
+| `torsions` | `(n_frames, n_selected)` stored angles, in the order of the definitions | always |
+| `molecule` | an RDKit molecule with explicit hydrogens | always |
+| `torsion_definitions` | a `TorsionDefinitions` indexing that molecule | always |
+| `coordinates` | an `mdtraj.Trajectory`, or an `(n, n_atoms, 3)` array with `box_vectors` (or `periodic=False`) and a `topology` | when a symmetry maps a selected torsion onto one that is not in the table |
+| `atom_mapping` | the trajectory index of each reference atom; never defaulted | with `coordinates` |
+
+Missing information raises with the call that fixes it. Nothing guesses a symmetry, and nothing
+falls back to ordinary clustering on its own. The mapping is checked twice: by graph (elements and
+every bond among the mapped atoms) and by geometry (each stored column must agree with the same
+quadruplet recomputed from the coordinates, to 1e-3 rad by default). Molecules split across the
+periodic box are made whole along their bonds, for orthorhombic and reduced triclinic cells, before
+any dihedral is computed.
+
+### Enumerating the symmetry
+
+`enumerate_symmetry` matches the molecule against ITSELF with RDKit (`uniquify=False`,
+`useChirality=True`), which returns every graph automorphism of the whole molecule -- rings,
+methyl groups, anything. It works on a copy with atom-map numbers cleared, re-verifies every match
+as an element- and bond-order-preserving bijection, checks that every specified stereocentre and
+stereo double bond keeps its CIP label, puts the identity first, and asks for one match more than
+its cap (200 000): a search that hits the cap raises `IncompleteSymmetryEnumeration` instead of
+being used. Permutations that act identically on the descriptor collapse to one operation:
+paracetamol has 12 automorphisms (3! methyl-hydrogen orders x the ring flip) and 2 distinct
+operations, because no selected torsion contains a methyl hydrogen.
+
+### When the one-sided minimum is exact
+
+If every operation acts on the descriptor as an ISOMETRY of the embedding,
+
+```text
+d_sym(x, y) = min over g in G of || Phi(x) - Phi(g y) ||
+```
+
+which costs |G| evaluations instead of |G|^2. That holds exactly when (1) every operation maps the
+set of descriptor torsions onto itself, so it acts as a permutation of columns, and (2) the metric
+weights are constant on every orbit of that permutation group. **An arbitrary selection satisfies
+neither.** Paracetamol's `aryl` (1-3-4-5) maps to 1-3-4-10, which nobody selected, so the flip does
+not even act on the three selected columns. `SymmetricTorsionDescriptor` therefore:
+
+* **closes** the selection: every image of a selected quadruplet becomes a column, named
+  `<torsion>@<atoms>` (`aryl@1-3-4-10`, `phenol@9-7-8-17`), recomputed from coordinates -- never
+  approximated by a 180 degree shift, which on paracetamol would be wrong by up to 25 degrees;
+* **normalises** the weights: each orbit carries the summed weight of the torsions selected in it,
+  split equally among its columns (paracetamol: `omega` 1, the four ring-dependent columns 0.5
+  each), so the ring orientation counts once and not twice; selected torsions in one orbit must
+  have equal weights, or the constructor refuses;
+* **verifies** closure under composition and the isometry when it is built, and raises if either
+  fails. `exhaustive_distance` computes the two-sided minimum, and the test suite checks the two
+  agree on small fixtures, including a molecule with a three-fold axis, where an operation and its
+  inverse differ.
+
+The minimising operation is returned for inspection (`distance_matrix(..., return_operation=True)`,
+`distance`, `pair_table`); ties go to the earlier operation. What is NOT done: choosing a
+"canonical" labelling per frame and taking ordinary Euclidean distances between representatives,
+which breaks pairs that sit on either side of the canonicalisation boundary.
+
+### One distance, everywhere
+
+`d_sym` is used for the HDBSCAN fit, the nearest-neighbour vote, the density threshold and the
+query density check, and the medoid tie-break of `representatives()`. It is a minimum over
+relabellings and not Euclidean in any fixed embedding, so it is handed to HDBSCAN as an **exact
+dense matrix** (`metric="precomputed"`) and never forced into a Euclidean KD-tree. One copy is
+`8 n^2` bytes -- 122 MiB at the 4000 frames of the paracetamol tutorial -- and sklearn holds about
+three. **Above `max_precomputed_frames` (10000) the fit refuses** and names the subset route,
+`resampling=N`: N frames are drawn in proportion to the weights, fitted, and every frame is then
+classified with the same distance. The metric is never swapped to make a fit cheaper.
+
+### Assigning frames: 18 of 20
+
+Every frame is classified by its `k = 20` nearest CLUSTERED training frames, itself excluded. It
+joins the winning cluster when
+
+```text
+vote_fraction = n_winner / k_effective >= 0.90        (equality accepted)
+```
+
+so 18 of 20 assigns and 17 of 20 does not. `k_effective` is 20, or the number of eligible training
+frames when there are fewer, and it is reported per frame (`fit.k_effective_`). Neighbours at
+equal distance are ordered by index, so the decision does not depend on the numpy build.
+
+Two kinds of unassigned frame, with different codes and different meanings:
+
+* **-2, density noise** -- the frame's `min_samples`-th neighbour is farther than that of any
+  clustered training frame, under the same distance. Takes precedence.
+* **-1, ambiguous** -- fewer than 90 % of the neighbours agree. This describes the sample around
+  the frame; it is **not** evidence of a free-energy barrier. (`AMBIGUOUS_LABEL`; the former name
+  `BARRIER_LABEL` is kept as an alias of the same value.)
+
+`noise_mass`, `ambiguous_mass` and their sum `unassigned_mass` are reported separately. Populations
+are weighted sums over every frame; the density the fit sees is that of the fitted frames,
+unweighted unless `resampling=N`.
+
+### Migrating an existing call
+
+| before | now |
+|---|---|
+| `t_hdbscan(tors)` | refused: pass `molecule`, `torsion_definitions` (and `coordinates`, `atom_mapping`), or `symmetry=False` |
+| `t_hdbscan(tors)` for the old numbers | `t_hdbscan(tors, symmetry=False, vote_rule="legacy-margin")` |
+| `min_vote=0.9` (a MARGIN, k = 15) | refused unless `vote_rule="legacy-margin"`; the new threshold is `min_vote_fraction` (k = 20). A margin is never reinterpreted as a fraction: 18 of 20 against two votes is a fraction of 0.90 and a margin of 0.80 |
+| `summary()["min_vote"]` | `summary()["vote"]` (`rule`, `k`, `k_effective_min/max`, `min_vote_fraction`); `min_vote` is still written on the legacy-margin rule |
+| `noise_mass_` (both codes) | `noise_mass_` is DENSITY noise only; add `ambiguous_mass_`, or read `unassigned_mass_` |
+| name `"barrier"` for -1 | `"ambiguous"` |
+| `representative_by_vote(fit)` | unchanged call; it now uses the fit's own distance and vote (`fit.representatives()`) |
+| `multiplicities=[...]` with symmetry | refused: per-torsion folding is what the symmetry-first distance replaces |
+| cluster, then `TorsionSymmetry` merge | the default route needs no merge; the merge remains available for the legacy route |
+
+**Structural, not thermodynamic.** A graph automorphism says two configurations are the same
+conformer under another naming. It does not make the populations of the two namings equal: an
+atom-specific restraint, an atom-indexed parameter or a REST2 region covering one side breaks the
+energetic symmetry and leaves the graph unchanged. Declare such a thing with `broken_by=[...]`; it
+is recorded in the summary.
 
 **Three things it does not claim.**
 
@@ -108,6 +259,11 @@ pairwise MI is blind to dependence that appears only in three or more variables 
 
 ## `t_symmetry`
 
+**The post-hoc route, kept for the legacy workflow and for comparison.** The default `t_hdbscan`
+enumerates the symmetry before clustering and needs no merge. `TorsionSymmetry` takes an EXISTING
+partition and decides which of its clusters to merge; it is what the
+[archived 0.6.4 tutorial](../../tutorial/archived/0.6.4/paracetamol/clustering.ipynb) used.
+
 Some clusters are the same physical conformer seen through a permutation of chemically identical
 atoms. Paracetamol's phenyl ring has a two-fold axis: flipping it maps one basin onto another with
 no physical change at all. Merging those is right; merging two genuinely different conformers
@@ -181,5 +337,7 @@ recorded on every accepted pair.
 
 ## Where these are used
 
-* [Paracetamol: clustering, pruning and summary](../../tutorial/paracetamol/analysis/index.md)
+* [Paracetamol: symmetry-first clustering](../../tutorial/paracetamol/analysis/clustering.ipynb)
+* [Paracetamol: the old and new workflows compared](../../tutorial/paracetamol/analysis/clustering-comparison.ipynb)
 * [Paracetamol: which torsions move together](../../tutorial/paracetamol/analysis/index.md)
+* [Archived 0.6.4: cluster, then merge by symmetry](../../tutorial/archived/0.6.4/paracetamol/clustering.ipynb)

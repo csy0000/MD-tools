@@ -8,7 +8,8 @@ version is older than the one you have installed has not been re-run for your re
 may still be right, but nothing on this site claims they were checked against it.
 
 At each major release every tutorial is re-run as written and adjusted where it no longer passes.
-The 0.5.3 pages are [archived](archived/README.md), with the reasons.
+The 0.5.3 pages, and the 0.6.4 paracetamol clustering page that the symmetry-first workflow replaced,
+are [archived](archived/README.md), with the reasons.
 
 ## Start from a system
 

@@ -152,7 +152,8 @@ nav:
           - Analysis:
               - tutorial/paracetamol/analysis/index.md
               - Free energy of each torsion: tutorial/paracetamol/analysis/pmf-1d.ipynb
-              - Clustering, pruning, summary: tutorial/paracetamol/analysis/clustering.ipynb
+              - Symmetry-first clustering: tutorial/paracetamol/analysis/clustering.ipynb
+              - Old and new clustering compared: tutorial/paracetamol/analysis/clustering-comparison.ipynb
               - Which torsions move together: tutorial/paracetamol/analysis/mutual-information.ipynb
       - Chignolin:
           - The system: tutorial/chignolin/index.md
@@ -170,6 +171,7 @@ nav:
           - Choosing the ladder: tutorial/tyk2-ejm31/choosing-the-ladder.md
       - Archived:
           - tutorial/archived/README.md
+          - 0.6.4 paracetamol clustering (cluster, then merge): tutorial/archived/0.6.4/paracetamol/clustering.ipynb
           - 0.5.3 cMD paracetamol: tutorial/archived/0.5.3/cMD/paracetamol.md
           - 0.5.3 cMD Chinolin: tutorial/archived/0.5.3/cMD/chinolin.md
           - 0.5.3 REST2 paracetamol: tutorial/archived/0.5.3/REST2/paracetamol.md

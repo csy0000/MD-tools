@@ -4,7 +4,21 @@ Tutorials for releases the current workflow has moved past. Each page was run ex
 against the release it names, and is kept unchanged as a record of that release: its commands and
 outputs are true for that version, and may be refused by a later one.
 
-**For md-tools 0.5.4 or later, use the [current tutorials](../README.md).**
+**Use the [current tutorials](../README.md)** for the current package.
+
+## 0.6.4
+
+Archived because the default clustering workflow changed: `t_hdbscan` now enumerates the
+molecule's symmetry BEFORE clustering and measures distances as the minimum over symmetry
+relabellings, and frames are assigned by an absolute 18-of-20 vote. The page below clustered on the
+plain torsion distance with the historical 15-neighbour margin vote and merged symmetry-related
+clusters afterwards (`TorsionSymmetry`). Its saved outputs are those of commit `8516c12a` (tag
+`v0.6.4`), not re-executed; only the helper import path and the install link were updated. On the current package it is
+reproduced with `t_hdbscan(tors, symmetry=False, vote_rule="legacy-margin")`.
+
+| tutorial | workflow |
+|---|---|
+| [paracetamol clustering](0.6.4/paracetamol/clustering.ipynb) | the historical cluster-then-merge workflow |
 
 ## 0.5.3
 
