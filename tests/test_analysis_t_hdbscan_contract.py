@@ -7,6 +7,14 @@ promises. Nothing here reads a path, a config or a project module, so the file c
 
 Each test says the mistake it exists to catch. A guard that cannot be shown able to fail is not a
 guard; where a test pins a number, the number was measured rather than expected.
+
+MIGRATED FOR THE SYMMETRY-FIRST DEFAULT. `t_hdbscan(angles)` now refuses, because angles alone
+cannot establish a molecular symmetry. These tests are about the density estimator, its labels,
+its mass floor and its resampling, which the legacy-distance route (`symmetry=False`) shares with
+the default; so the name `t_hdbscan` below is that route. The vote is the new default (k = 20,
+absolute fraction 0.90) except where a test is about the historical margin and says so with
+`vote_rule='legacy-margin'`. The default route's own tests are in
+`test_analysis_symmetry_first.py`.
 """
 from __future__ import annotations
 
@@ -19,8 +27,15 @@ requires_sklearn = pytest.mark.skipif(
     importlib.util.find_spec("sklearn") is None,
     reason="sklearn (which ships HDBSCAN) is an analysis-only dependency")
 
-from md_tools.analysis._t_hdbscan import (ALLOW_SINGLE_CLUSTER_DEFAULT, BARRIER_LABEL, NOISE_LABEL,
-                               THDBSCAN, t_hdbscan)
+from md_tools.analysis._t_hdbscan import (ALLOW_SINGLE_CLUSTER_DEFAULT, AMBIGUOUS_LABEL,
+                                          BARRIER_LABEL, NOISE_LABEL, THDBSCAN)
+from md_tools.analysis._t_hdbscan import t_hdbscan as _public_t_hdbscan
+
+
+def t_hdbscan(*args, **kwargs):
+    """The legacy-distance route, which is what an angles-only call means now. See the header."""
+    kwargs.setdefault("symmetry", False)
+    return THDBSCAN(*args, **kwargs)
 
 
 def three_blobs(rng, n=(6000, 3000, 1000), s=0.2):
@@ -36,7 +51,7 @@ def three_blobs(rng, n=(6000, 3000, 1000), s=0.2):
 
 @requires_sklearn
 def test_the_alias_is_the_class_so_the_call_site_reads_as_specified():
-    assert t_hdbscan is THDBSCAN
+    assert _public_t_hdbscan is THDBSCAN
 
 
 @requires_sklearn
@@ -172,7 +187,10 @@ def test_resampling_is_off_by_default():
     rng = np.random.default_rng(8)
     c = t_hdbscan(three_blobs(rng))
     assert c.resampling is False
-    assert c.mass_floor == 0.01 and c.min_vote == 0.9 and c.seed == 5
+    assert c.mass_floor == 0.01 and c.seed == 5
+    # the vote default: 20 neighbours, absolute winning fraction 0.90 (18 of 20)
+    assert c.vote_rule == "fraction" and c.k == 20 and c.min_vote_fraction == 0.9
+    assert c.min_vote is None
     # NOT sklearn's default, deliberately: see ALLOW_SINGLE_CLUSTER_DEFAULT
     assert c.allow_single_cluster is ALLOW_SINGLE_CLUSTER_DEFAULT is True
 
@@ -287,8 +305,10 @@ def test_min_vote_controls_BARRIER_frames_only_not_density_noise():
     th = np.concatenate([rng.normal(np.deg2rad(-90), np.deg2rad(8), 2000),
                          rng.normal(np.deg2rad(90), np.deg2rad(8), 2000),
                          rng.uniform(-np.pi, np.pi, 200)])[:, None]
-    open_idx, _ = t_hdbscan(th, mass_floor=0.02, min_vote=0.0).fit().predict(th)
-    gated_idx, _ = t_hdbscan(th, mass_floor=0.02, min_vote=0.9).fit().predict(th)
+    open_idx, _ = t_hdbscan(th, mass_floor=0.02, vote_rule="legacy-margin",
+                            min_vote=0.0).fit().predict(th)
+    gated_idx, _ = t_hdbscan(th, mass_floor=0.02, vote_rule="legacy-margin",
+                             min_vote=0.9).fit().predict(th)
     assert (open_idx == BARRIER_LABEL).sum() == 0
     assert (gated_idx == BARRIER_LABEL).sum() > 0
     # density noise is a separate verdict and appears under BOTH gates, unchanged by min_vote
@@ -306,7 +326,16 @@ def test_mass_floor_is_range_checked(bad):
 @pytest.mark.parametrize("bad", [-0.1, 1.1])
 def test_min_vote_is_range_checked(bad):
     with pytest.raises(ValueError, match="min_vote"):
-        t_hdbscan(np.zeros((100, 2)), min_vote=bad)
+        t_hdbscan(np.zeros((100, 2)), min_vote_fraction=bad)
+    with pytest.raises(ValueError, match="min_vote"):
+        t_hdbscan(np.zeros((100, 2)), vote_rule="legacy-margin", min_vote=bad)
+
+
+def test_a_legacy_margin_is_never_read_as_a_fraction():
+    """`min_vote` was a MARGIN. Accepting it under the new rule would silently change what 0.9
+    means; it is refused with the two ways forward."""
+    with pytest.raises(TypeError, match="min_vote_fraction=.*vote_rule='legacy-margin'"):
+        t_hdbscan(np.zeros((100, 2)), min_vote=0.9)
 
 
 @pytest.mark.parametrize("bad", [1, 0, -5])
@@ -333,19 +362,24 @@ def test_summary_records_the_defaults_and_the_three_standing_caveats():
     """A result file has to be readable without the code that produced it."""
     rng = np.random.default_rng(17)
     s = t_hdbscan(three_blobs(rng)).fit().summary()
-    assert s["mass_floor"] == 0.01 and s["min_vote"] == 0.9 and s["resampling"] is False
+    assert s["mass_floor"] == 0.01 and s["resampling"] is False
+    assert s["vote"]["rule"] == "fraction" and s["vote"]["k"] == 20
+    assert s["vote"]["min_vote_fraction"] == 0.9 and "18 of 20" in s["vote"]["statement"]
     assert s["n_clusters"] == len(s["cluster_names"]) == len(s["cluster_mass"])
     joined = " ".join(s["caveats"])
     assert "NOT a metastable state" in joined
     assert "PRECISION, not accuracy" in joined
-    assert "BOUNDARY detector" in joined
+    assert "NOT evidence of a free-energy barrier" in joined
 
 
 @requires_sklearn
 def test_masses_and_noise_sum_to_one():
     rng = np.random.default_rng(18)
-    c = t_hdbscan(three_blobs(rng), min_vote=0.9).fit()
-    assert sum(c.cluster_mass_.values()) + c.noise_mass_ == pytest.approx(1.0)
+    c = t_hdbscan(three_blobs(rng)).fit()
+    # `noise_mass_` is DENSITY noise only; the vote's refusals are `ambiguous_mass_`
+    assert sum(c.cluster_mass_.values()) + c.noise_mass_ + c.ambiguous_mass_ == \
+        pytest.approx(1.0)
+    assert c.unassigned_mass_ == pytest.approx(c.noise_mass_ + c.ambiguous_mass_)
 
 
 @requires_sklearn
@@ -374,18 +408,18 @@ def test_noise_is_minus_two_and_barrier_is_minus_one():
     noise ("nowhere in particular"), -1 barrier ("between two somewheres"). Collapsing them
     discarded one verdict -- the single-code version silently committed most of HDBSCAN's noise
     frames to clusters."""
-    assert NOISE_LABEL == -2 and BARRIER_LABEL == -1
+    assert NOISE_LABEL == -2 and AMBIGUOUS_LABEL == -1 and BARRIER_LABEL == AMBIGUOUS_LABEL
     rng = np.random.default_rng(20)
     th = np.concatenate([rng.normal(np.deg2rad(-90), np.deg2rad(8), 2000),
                          rng.normal(np.deg2rad(90), np.deg2rad(8), 2000),
                          rng.uniform(-np.pi, np.pi, 200)])[:, None]
-    c = t_hdbscan(th, mass_floor=0.02, min_vote=0.9).fit()
+    c = t_hdbscan(th, mass_floor=0.02).fit()
     idx, names = c.predict(th)
     present = set(idx.tolist())
     assert NOISE_LABEL in present, "a uniform background must produce density noise"
     assert BARRIER_LABEL in present, "two basins must produce some barrier frames"
     assert set(names[idx == NOISE_LABEL]) == {"noise"}
-    assert set(names[idx == BARRIER_LABEL]) == {"barrier"}
+    assert set(names[idx == BARRIER_LABEL]) == {"ambiguous"}
 
 
 @requires_sklearn
@@ -397,7 +431,7 @@ def test_density_takes_precedence_over_the_barrier_code():
     th = np.concatenate([rng.normal(np.deg2rad(-90), np.deg2rad(8), 1500),
                          rng.normal(np.deg2rad(90), np.deg2rad(8), 1500),
                          rng.uniform(-np.pi, np.pi, 300)])[:, None]
-    c = t_hdbscan(th, mass_floor=0.02, min_vote=0.9).fit()
+    c = t_hdbscan(th, mass_floor=0.02).fit()
     idx, _ = c.predict(th)
     sparse = c._query_core(th) > c.density_threshold_
     assert np.all(idx[sparse] == NOISE_LABEL), "a sparse frame must be -2 whatever the vote said"
@@ -411,7 +445,8 @@ def test_min_vote_zero_still_reports_density_noise():
     th = np.concatenate([rng.normal(np.deg2rad(-90), np.deg2rad(8), 1500),
                          rng.normal(np.deg2rad(90), np.deg2rad(8), 1500),
                          rng.uniform(-np.pi, np.pi, 300)])[:, None]
-    idx, _ = t_hdbscan(th, mass_floor=0.02, min_vote=0.0).fit().predict(th)
+    idx, _ = t_hdbscan(th, mass_floor=0.02, vote_rule="legacy-margin",
+                       min_vote=0.0).fit().predict(th)
     assert (idx == BARRIER_LABEL).sum() == 0
     assert (idx == NOISE_LABEL).sum() > 0
 
@@ -427,9 +462,9 @@ def test_the_density_proxy_reports_its_own_agreement_with_hdbscan():
                          rng.normal(np.deg2rad(90), np.deg2rad(8), 2000),
                          rng.uniform(-np.pi, np.pi, 200)])[:, None]
     s = t_hdbscan(th, mass_floor=0.02).fit().summary()
-    assert s["noise_label"] == -2 and s["barrier_label"] == -1
+    assert s["noise_label"] == -2 and s["ambiguous_label"] == -1
     assert 0.0 < s["density_threshold"] < np.inf
     assert 0.0 <= s["density_proxy_agreement"] <= 1.0
     assert s["density_proxy_agreement"] > 0.95
     assert "PROXY" in s["density_proxy_note"]
-    assert any("different claims" in c for c in s["caveats"])
+    assert any("two kinds of unassigned" in c and "AMBIGUOUS" in c for c in s["caveats"])

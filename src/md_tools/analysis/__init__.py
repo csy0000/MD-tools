@@ -1,21 +1,28 @@
 """Analysis of what a run produced. Nothing here integrates anything.
 
-TWO PUBLIC ENTRY POINTS, deliberately independent of each other:
+THE PUBLIC ENTRY POINTS, deliberately independent of each other:
 
 ```python
 from md_tools.analysis import t_hdbscan, torsional_mi
 ```
 
-* `t_hdbscan(torsions, ...)` -- a density PARTITION of a torsional ensemble, as a fit/predict
-  estimator. Needs scikit-learn.
+* `t_hdbscan(torsions, molecule=..., torsion_definitions=..., coordinates=..., atom_mapping=...)`
+  -- a density PARTITION of a torsional ensemble, SYMMETRY-FIRST: the molecule's symmetry is
+  enumerated, the torsional distance is the minimum over symmetry-equivalent relabellings, HDBSCAN
+  is fitted on that distance, and every frame is assigned by the same distance with a 20-neighbour
+  absolute vote (18 of 20). `symmetry=False` is the legacy plain-Euclidean route; add
+  `vote_rule='legacy-margin'` for the historical vote. Needs scikit-learn, and rdkit by default.
+* `SymmetricTorsionDescriptor`, `enumerate_symmetry` -- the symmetry-closed descriptor and the
+  enumeration behind that distance, for inspecting an operation or a pair of frames.
 * `t_mi(torsions, ...)` -- mutual information between torsion pairs (alias `torsional_mi`), with
   the plug-in estimator's upward bias measured per pair against a shuffled null; plus
   `mi_matrix` and `dependence_graph` for CORRELATION DETECTION across the whole set, with a
   false-discovery-rate correction, because d torsions means d(d-1)/2 simultaneous comparisons.
   numpy only.
-* `t_symmetry` / `TorsionSymmetry` -- which of those clusters are the SAME conformer seen through
-  a molecular symmetry, decided from RDKit graph automorphisms and a joint-distribution
-  comparison, never from equal populations. Needs rdkit.
+* `t_symmetry` / `TorsionSymmetry` -- the older POST-HOC route: which clusters of an existing
+  partition are the SAME conformer seen through a molecular symmetry, decided from RDKit graph
+  automorphisms and a joint-distribution comparison, never from equal populations. Kept for the
+  legacy cluster-then-merge workflow and for comparison. Needs rdkit.
 
 None of them imports another's estimator, and this package imports none of them at module load:
 all are reached lazily below, so `import md_tools.analysis` costs nothing and a missing extra is reported by
@@ -40,7 +47,11 @@ the reasoning in their docstrings is theirs.
 """
 from __future__ import annotations
 
-__all__ = ["THDBSCAN", "t_hdbscan",
+__all__ = ["THDBSCAN", "t_hdbscan", "NOISE_LABEL", "AMBIGUOUS_LABEL", "BARRIER_LABEL",
+           "PrecomputedMemoryGuard",
+           "SymmetricTorsionDescriptor", "enumerate_symmetry", "SymmetryEnumeration",
+           "IncompleteSymmetryEnumeration", "MissingCoordinatesError", "TorsionDefinitions",
+           "check_atom_mapping", "draw_symmetry_operation",
            "t_mi", "torsional_mi", "mi_matrix", "dependence_graph",
            "t_symmetry", "TorsionSymmetry", "load_torsion_json", "load_cluster_torsion",
            "draw_torsions", "verify_atom_mapping", "calibrate", "ComparisonTolerance",
@@ -49,6 +60,14 @@ __all__ = ["THDBSCAN", "t_hdbscan",
 
 _LAZY = {
     "THDBSCAN": "._t_hdbscan", "t_hdbscan": "._t_hdbscan",
+    "NOISE_LABEL": "._t_hdbscan", "AMBIGUOUS_LABEL": "._t_hdbscan",
+    "BARRIER_LABEL": "._t_hdbscan", "PrecomputedMemoryGuard": "._t_hdbscan",
+    "SymmetricTorsionDescriptor": "._symmetry_metric", "enumerate_symmetry": "._symmetry_metric",
+    "SymmetryEnumeration": "._symmetry_metric",
+    "IncompleteSymmetryEnumeration": "._symmetry_metric",
+    "MissingCoordinatesError": "._symmetry_metric", "check_atom_mapping": "._symmetry_metric",
+    "draw_symmetry_operation": "._symmetry_metric",
+    "TorsionDefinitions": "._t_symmetry",
     "t_mi": "._t_mi", "torsional_mi": "._t_mi",
     "mi_matrix": "._t_mi", "dependence_graph": "._t_mi",
     "t_symmetry": "._t_symmetry", "TorsionSymmetry": "._t_symmetry",

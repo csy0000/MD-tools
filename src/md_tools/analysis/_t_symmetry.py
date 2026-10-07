@@ -450,10 +450,13 @@ def automorphisms(molecule, *, max_matches: int = MAX_AUTOMORPHISMS,
     them" would make an incomplete search indistinguishable from a complete one.
     """
     clean = _clean_for_automorphism(molecule)
+    # ONE MORE THAN THE CAP is requested, so a search that found exactly `max_matches`
+    # permutations and stopped because there were no more is not mistaken for a truncated one
+    # (the old `>= max_matches` test called every complete search of exactly that size truncated).
     matches = clean.GetSubstructMatches(clean, uniquify=False, useChirality=use_chirality,
-                                        maxMatches=max_matches, useQueryQueryMatches=True)
-    truncated = len(matches) >= max_matches
-    return [tuple(int(i) for i in m) for m in matches], truncated
+                                        maxMatches=max_matches + 1, useQueryQueryMatches=True)
+    truncated = len(matches) > max_matches
+    return [tuple(int(i) for i in m) for m in matches[:max_matches]], truncated
 
 
 def _canonical_rank_partition(molecule) -> Dict[int, List[int]]:
@@ -1150,32 +1153,14 @@ def make_whole(coordinates, bonds: Iterable[Tuple[int, int]], box_vectors) -> np
 
     A molecule that straddles the box edge has atoms on both sides, and a dihedral computed from
     those raw positions is nonsense -- a plausible-looking number that describes no geometry. This
-    walks the bond graph from atom 0 and shifts each atom by the box vector that brings it nearest
-    its bonded neighbour.
+    walks the bond graph from atom 0 and places each atom at the periodic image nearest its bonded
+    neighbour, for orthorhombic and reduced triclinic boxes alike, and refuses a bond graph that
+    does not reach every atom. Same implementation as the symmetry-first route
+    (`_symmetry_metric.whole_molecule_coordinates`).
     """
-    xyz = np.array(coordinates, dtype=np.float64, copy=True)
-    box = np.asarray(box_vectors, dtype=np.float64)
-    if box.ndim == 2:
-        box = np.broadcast_to(box, (xyz.shape[0],) + box.shape).copy()
-    lengths = np.stack([np.linalg.norm(box[:, i, :], axis=-1) for i in range(3)], axis=-1)
+    from ._symmetry_metric import whole_molecule_coordinates
 
-    neighbours: Dict[int, List[int]] = {}
-    for i, j in bonds:
-        neighbours.setdefault(int(i), []).append(int(j))
-        neighbours.setdefault(int(j), []).append(int(i))
-
-    seen = {0}
-    stack = [0]
-    while stack:
-        current = stack.pop()
-        for other in neighbours.get(current, ()):
-            if other in seen:
-                continue
-            delta = xyz[:, other, :] - xyz[:, current, :]
-            xyz[:, other, :] -= lengths * np.round(delta / lengths)
-            seen.add(other)
-            stack.append(other)
-    return xyz
+    return whole_molecule_coordinates(coordinates, bonds, box_vectors)
 
 
 def verify_atom_mapping(molecule, topology_bonds: Iterable[Tuple[int, int]],
@@ -1789,33 +1774,23 @@ def group_name(index: int) -> str:
 
 
 def representative_by_vote(fit, labels=None) -> Dict[int, int]:
-    """The frame of each cluster with the HIGHEST classifier vote margin; first one on a tie.
+    """The frame of each cluster its neighbours agree about most strongly. Delegates to the fit.
 
     THE REPRESENTATIVE IS AN ACTUAL FRAME, never an average. The mean of two Cartesian structures
     is not a structure, and the circular mean of a bimodal torsion points at the barrier between
     its basins -- the one place the molecule is never found.
 
-    "Highest vote" means the k-NN margin `classify_to_clusters` reports: the frame its neighbours
-    agree about most strongly, which is the one furthest from any boundary. Ties are broken by
-    taking the FIRST, deterministically, because the alternative -- picking arbitrarily among
-    equals -- makes a figure that changes between runs of the same analysis.
+    "Strongest" is the vote the fit itself used: the winning FRACTION of k = 20 neighbours on the
+    default rule, with ties -- the common case, since most frames of a well-separated partition
+    are unanimous -- broken by the smallest summed distance to the cluster's members under the
+    fit's OWN distance (symmetry-aware by default). On `vote_rule='legacy-margin'` it is the
+    historical margin with the first frame taken on a tie, so an archived figure is reproduced.
+    `labels` is accepted for compatibility and must equal the fit's labels.
     """
-    from ._torsions import classify_to_clusters
-
-    labels = fit.labels_ if labels is None else np.asarray(labels)
-    out = classify_to_clusters(fit.train_theta_, fit.train_labels_, fit.theta_, units="radians",
-                               metric_weights=fit.metric_weights,
-                               multiplicities=fit.multiplicities, k=fit.k,
-                               min_vote_margin=fit.min_vote)
-    margins = np.asarray(out["vote_margin"], dtype=np.float64)
-    representatives = {}
-    for cluster in sorted({int(c) for c in np.unique(labels) if int(c) >= 0}):
-        members = np.flatnonzero(labels == cluster)
-        if members.size == 0:
-            continue
-        best = margins[members]
-        representatives[cluster] = int(members[int(np.argmax(best))])   # argmax -> first on ties
-    return representatives
+    if labels is not None and not np.array_equal(np.asarray(labels), fit.labels_):
+        raise ValueError("representative_by_vote uses the fit's own labels; relabelled arrays "
+                         "(for example after a merge) have no vote of their own")
+    return fit.representatives()
 
 
 def strip_nonpolar_hydrogens(trajectory):
@@ -1864,6 +1839,17 @@ def draw_representative_structures(trajectory, frames: Dict[str, int], *, output
     picked = subset[[int(i) for _, i in ordered]]
     if align:
         picked.superpose(picked, 0)          # onto the FIRST group, so panels share a frame
+    # ONE PROPER ROTATION, the same for every panel, putting the first structure's principal axes
+    # along x, y, z (largest first). The view then looks down z -- the flattest direction -- with
+    # the longest axis horizontal, so a molecule that the superposition happened to leave along
+    # the vertical is not clipped by the panel. A proper rotation (det +1) never mirrors a
+    # structure, and applying the same one everywhere keeps the superposition.
+    first = picked.xyz[0] - picked.xyz[0].mean(axis=0)
+    _, _, vt = np.linalg.svd(first, full_matrices=False)
+    rotation = vt.T
+    if np.linalg.det(rotation) < 0:
+        rotation[:, 2] *= -1.0
+    oriented = (picked.xyz - picked.xyz[0].mean(axis=0)) @ rotation
 
     topology = picked.topology
     bonds = [(b[0].index, b[1].index) for b in topology.bonds]
@@ -1872,7 +1858,7 @@ def draw_representative_structures(trajectory, frames: Dict[str, int], *, output
     figure = plt.figure(figsize=(4.8 * len(ordered), 4.4), layout="constrained")
     for position, (name, frame) in enumerate(ordered):
         axis = figure.add_subplot(1, len(ordered), position + 1, projection="3d")
-        xyz = picked.xyz[position] * 10.0                      # nm -> angstrom
+        xyz = oriented[position] * 10.0                        # nm -> angstrom
         for i, j in bonds:
             axis.plot(*zip(xyz[i], xyz[j]), color="0.45", lw=2.0, zorder=1)
         for atom in topology.atoms:
@@ -1888,12 +1874,16 @@ def draw_representative_structures(trajectory, frames: Dict[str, int], *, output
         # matplotlib: a 3D axes defaults to a lot of padding, and three independently scaled
         # axes would stretch the geometry differently in each panel -- which is the one thing a
         # figure comparing CONFORMATIONS must not do.
+        # The SAME span in every panel, so the panels share a scale, and zoom 1 so the cube --
+        # and with it every atom -- lies inside the panel whatever the orientation.
         centre = xyz.mean(axis=0)
-        span = float(np.abs(xyz - centre).max()) * 1.02
+        span = float(np.abs(oriented * 10.0 - oriented.mean(axis=1, keepdims=True) * 10.0).max())
+        span *= 1.05
         for setter, value in ((axis.set_xlim, centre[0]), (axis.set_ylim, centre[1]),
                               (axis.set_zlim, centre[2])):
             setter(value - span, value + span)
-        axis.set_box_aspect((1, 1, 1), zoom=1.45)
+        axis.view_init(elev=90, azim=-90)
+        axis.set_box_aspect((1, 1, 1), zoom=1.0)
 
     figure.suptitle("Representative structures, superposed. Nonpolar hydrogens removed; "
                     "polar H kept because its orientation IS part of the conformation.",
@@ -1902,4 +1892,4 @@ def draw_representative_structures(trajectory, frames: Dict[str, int], *, output
     plt.close(figure)
     return {"output": str(output), "frames": dict(frames),
             "n_atoms_drawn": int(picked.n_atoms), "aligned": bool(align),
-            "aligned_xyz_nm": picked.xyz}
+            "aligned_xyz_nm": picked.xyz, "drawn_xyz_nm": oriented}
