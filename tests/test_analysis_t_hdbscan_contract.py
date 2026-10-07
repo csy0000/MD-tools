@@ -409,17 +409,22 @@ def test_noise_is_minus_two_and_barrier_is_minus_one():
     discarded one verdict -- the single-code version silently committed most of HDBSCAN's noise
     frames to clusters."""
     assert NOISE_LABEL == -2 and AMBIGUOUS_LABEL == -1 and BARRIER_LABEL == AMBIGUOUS_LABEL
-    rng = np.random.default_rng(20)
-    th = np.concatenate([rng.normal(np.deg2rad(-90), np.deg2rad(8), 2000),
-                         rng.normal(np.deg2rad(90), np.deg2rad(8), 2000),
-                         rng.uniform(-np.pi, np.pi, 200)])[:, None]
+    # Both codes by CONSTRUCTION, not by luck. Two mirror-image basins with a 0.1 rad gap: the
+    # midpoint's 20 neighbours split exactly 10/10 and it is dense enough to pass (its core distance
+    # is ~0.65 of the threshold), so it can only be ambiguous. A frame at pi has no neighbour within
+    # 19x the threshold, so it can only be noise. The previous version drew a random background and
+    # relied on it producing a split vote; it got exactly one such frame locally and none on CI's
+    # scikit-learn 1.9.1.
+    half = np.concatenate([np.linspace(0.05, 0.5, 1500), np.linspace(0.5, 1.2, 300)[1:]])
+    th = np.concatenate([-half, half])[:, None]
     c = t_hdbscan(th, mass_floor=0.02).fit()
-    idx, names = c.predict(th)
-    present = set(idx.tolist())
-    assert NOISE_LABEL in present, "a uniform background must produce density noise"
-    assert BARRIER_LABEL in present, "two basins must produce some barrier frames"
-    assert set(names[idx == NOISE_LABEL]) == {"noise"}
-    assert set(names[idx == BARRIER_LABEL]) == {"ambiguous"}
+    assert c.n_clusters_ == 2
+    probes = np.array([[0.0], [np.pi]])
+    core = c._query_core(probes) / c.density_threshold_
+    assert core[0] < 0.8 and core[1] > 10, core
+    idx, names = c.predict(probes)
+    assert idx.tolist() == [BARRIER_LABEL, NOISE_LABEL]
+    assert names.tolist() == ["ambiguous", "noise"]
 
 
 @requires_sklearn
