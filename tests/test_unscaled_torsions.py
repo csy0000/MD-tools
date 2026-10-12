@@ -61,15 +61,17 @@ def _by_class(result):
     return out
 
 
-def test_paracetamol_keeps_its_amide_and_its_six_ring_bonds(tmp_path):
+def test_paracetamol_keeps_its_six_ring_bonds_and_scales_its_amide(tmp_path):
+    """A LIGAND's amide is scaled (convention v4): the omega protection is for peptides."""
     from md_tools.openmm.system import unscaled_torsions
 
     topology, solute, sdfs, mol = _ligand(tmp_path, "CC(=O)Nc1ccc(O)cc1")
     result = unscaled_torsions(topology, solute, residue_sdfs=sdfs)
     classes = _by_class(result)
 
-    # Two CATEGORIES now; which rule fired is kept per bond as evidence, so both are checked.
-    assert len(classes.get("amide_omega", ())) == 1
+    assert "amide_omega" not in classes
+    assert len(result["ligand_amide_scaled_bonds"]) == 1, (
+        "the amide was seen and CHOSEN scalable, which must be recorded and not look like a miss")
     assert len(classes.get("non_rotatable", ())) == 6
     rules = {e["evidence"].rsplit(": ", 1)[-1] for e in result["central_bonds"]
              if e["class"] == "non_rotatable"}
@@ -78,9 +80,23 @@ def test_paracetamol_keeps_its_amide_and_its_six_ring_bonds(tmp_path):
     ring = {tuple(sorted((b.GetBeginAtomIdx(), b.GetEndAtomIdx())))
             for b in mol.GetBonds() if b.GetIsAromatic()}
     assert classes["non_rotatable"] == ring
-    assert sorted(result["unscaled_central_bonds"]) == sorted(
-        classes["amide_omega"] | classes["non_rotatable"])
+    assert sorted(result["unscaled_central_bonds"]) == sorted(classes["non_rotatable"])
+    scaled = tuple(sorted(result["ligand_amide_scaled_bonds"][0]))
+    assert scaled not in set(result["unscaled_central_bonds"])
     assert result["unscaled_impropers"] is True
+
+
+def test_the_same_amide_in_a_declared_peptide_like_residue_stays_protected(tmp_path):
+    """The protection did not go away: it moved to peptides, and a peptide-like solute names its
+    residue to keep it. Same molecule, same SDF -- only the declaration differs."""
+    from md_tools.openmm.system import unscaled_torsions
+
+    topology, solute, sdfs, _ = _ligand(tmp_path, "CC(=O)Nc1ccc(O)cc1")
+    result = unscaled_torsions(topology, solute, residue_sdfs=sdfs,
+                               peptide_like_residues=["lig"])        # case-insensitive, like PRO
+    assert len(_by_class(result).get("amide_omega", ())) == 1
+    assert result["ligand_amide_scaled_bonds"] == []
+    assert result["peptide_like_residues"] == ["LIG"]
 
 
 def test_a_chain_double_bond_is_kept(tmp_path):
@@ -98,12 +114,18 @@ def test_a_chain_double_bond_is_kept(tmp_path):
 
 
 def test_a_proline_like_amide_is_scaled_but_its_neighbours_rules_still_apply(tmp_path):
+    """Proline-likeness is a PEPTIDE notion, so it is read where the omega protection is."""
     from md_tools.openmm.system import unscaled_torsions
 
     topology, solute, sdfs, _ = _ligand(tmp_path, "CC(=O)N1CCCC1")       # N-acetylpyrrolidine
-    result = unscaled_torsions(topology, solute, residue_sdfs=sdfs)
+    result = unscaled_torsions(topology, solute, residue_sdfs=sdfs, peptide_like_residues=["LIG"])
     assert "amide_omega" not in _by_class(result)
     assert len(result["proline_like_scaled_bonds"]) == 1
+    # As a plain ligand there is no proline-like exception to make: every amide is scaled.
+    as_ligand = unscaled_torsions(topology, solute, residue_sdfs=sdfs)
+    assert "amide_omega" not in _by_class(as_ligand)
+    assert as_ligand["proline_like_scaled_bonds"] == []
+    assert len(as_ligand["ligand_amide_scaled_bonds"]) == 1
 
 
 def test_a_small_molecule_without_bond_orders_is_unclassified_even_without_an_amide(tmp_path):
@@ -295,12 +317,53 @@ def test_the_report_counts_the_impropers_it_left_alone(tmp_path):
     assert len(report["unscaled_improper_indices"]) == expected
 
 
-def test_the_convention_changed_version_and_the_old_one_cannot_be_continued():
+def test_the_convention_changed_version_and_only_the_one_v3_is_continued():
     from md_tools.rest2 import REST2_IMPLEMENTATION, require_compatible_implementation
 
     assert REST2_IMPLEMENTATION["name"] == "rest2-unscaled-torsions"
-    assert REST2_IMPLEMENTATION["version"] == 3
+    assert REST2_IMPLEMENTATION["version"] == 4
     assert REST2_IMPLEMENTATION["unscaled_torsions"] == [
-        "ordinary amide omega", "aromatic ring bonds", "other double bonds", "impropers"]
+        "ordinary amide omega of a protein or peptide-like residue",
+        "aromatic ring bonds", "other double bonds", "impropers"]
     with pytest.raises(ValueError, match="rest2-no-bond-angle-omega/v2"):
         require_compatible_implementation({"name": "rest2-no-bond-angle-omega", "version": 2})
+    # v3 is ACCEPTED, not refused: a ladder built under it runs from saved states that are its
+    # Hamiltonian, so an in-flight production run must not die over the label.
+    require_compatible_implementation(dict(REST2_IMPLEMENTATION, version=3))
+    with pytest.raises(ValueError, match="rest2-unscaled-torsions/v2"):
+        require_compatible_implementation(dict(REST2_IMPLEMENTATION, version=2))
+
+
+def test_the_v3_compatibility_branch_is_narrow():
+    from md_tools.rest2 import REST2_IMPLEMENTATION
+    from md_tools.rest2.scaler import rest2_implementations_agree
+
+    v3 = dict(REST2_IMPLEMENTATION, version=3,
+              unscaled_torsions=["ordinary amide omega", "aromatic ring bonds",
+                                 "other double bonds", "impropers"])
+    assert rest2_implementations_agree(v3, REST2_IMPLEMENTATION)
+    # Anything ELSE that differs is a different Hamiltonian, whatever the version says.
+    assert not rest2_implementations_agree(dict(v3, generalized_born_scale="(1-tau)^2"),
+                                           REST2_IMPLEMENTATION)
+    assert not rest2_implementations_agree(dict(v3, solute_solute_nonbonded_scale="(1-tau)"),
+                                           REST2_IMPLEMENTATION)
+    assert not rest2_implementations_agree(dict(v3, name="something-else"), REST2_IMPLEMENTATION)
+    assert not rest2_implementations_agree(dict(v3, version=2), REST2_IMPLEMENTATION)
+    assert not rest2_implementations_agree(None, REST2_IMPLEMENTATION)
+
+
+def test_a_continuation_keeps_the_convention_version_its_states_were_built_under():
+    from md_tools.remd.driver import ReplicaRun
+    from md_tools.rest2 import REST2_IMPLEMENTATION
+
+    v3 = dict(REST2_IMPLEMENTATION, version=3)
+    identity = {"rest2_implementation": dict(REST2_IMPLEMENTATION), "n_states": 4}
+    assert ReplicaRun.compare_identity({"rest2_implementation": v3, "n_states": 4}, identity) == []
+    ReplicaRun.adopt_recorded_convention({"rest2_implementation": v3}, identity)
+    assert identity["rest2_implementation"]["version"] == 3, (
+        "a v3 ladder's record must not be relabelled v4")
+    assert identity["n_states"] == 4
+    # and a genuinely different identity is still a difference
+    assert ReplicaRun.compare_identity(
+        {"rest2_implementation": dict(v3, bonds="scaled")},
+        {"rest2_implementation": dict(REST2_IMPLEMENTATION)}) == ["rest2_implementation"]

@@ -813,7 +813,8 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
     # manifest, the REST2 bridge, the unscaled torsions -- reads one shape. `geometry` is null rather
     # than absent: "this System has no periodic box" is a fact worth recording, and a missing key
     # would be indistinguishable from a record that forgot to write it.
-    from .system import classify_unscaled_torsions, omega_central_bonds
+    from .system import (classify_unscaled_torsions, omega_central_bonds,
+                         peptide_like_residue_names)
 
     topology = app.PDBFile(str(staging / "topology.pdb")).topology
     solute = list(range(system.getNumParticles()))
@@ -821,7 +822,9 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
     # detection depends on them. It is written by the same step that built the conformer.
     ligand_sdf = amber.get("ligand_sdf")
     unscaled_info = classify_unscaled_torsions(
-        topology, solute, ligand_sdf=(Path(ligand_sdf) if ligand_sdf else None))
+        topology, solute, ligand_sdf=(Path(ligand_sdf) if ligand_sdf else None),
+        peptide_like_residues=peptide_like_residue_names(
+            topology, (cfg.get("solute") or {}).get("kind")))
     build_record = {
         "suffix": "system",
         "route": route,
@@ -847,7 +850,8 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
         "omega_central_bonds": omega_central_bonds(topology, solute),
         "unscaled_torsions": {k: unscaled_info[k] for k in
                               ("unscaled_central_bonds", "central_bonds", "proline_like_scaled_bonds", "unclassified",
-         "unscaled_impropers", "detection_method", "detector_version", "amide_detail")},
+         "ligand_amide_scaled_bonds", "unscaled_impropers", "detection_method",
+         "detector_version", "amide_detail")},
         "degrees_of_freedom": (3 * system.getNumParticles() - system.getNumConstraints() - 3),
         "implicit": info,
     }
@@ -869,6 +873,7 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
         "n_solute_atoms": system.getNumParticles(),   # implicit: the solute IS the system
         "route": route,
         "ligand_package": amber.get("ligand_package") if route == "ligand" else None,
+        "ligand_protonation": amber.get("ligand_protonation") if route == "ligand" else None,
         "build": {**info, **{k: v for k, v in amber.items()
                              if k in ("tleap_commands", "protein_forcefield", "radii_requested",
                                       "small_molecule_forcefield", "charge_method",
@@ -918,4 +923,5 @@ def _amber_files_for_ligand(cfg: dict, staging: Path, *, smiles: Optional[str],
         "charge_method": (cfg.get("forcefield") or {}).get("ligand_charge_method"),
         "forcefield_info": ff_info,
         "ligand_package": package_record,
+        "ligand_protonation": structure.get("protonation"),
     }

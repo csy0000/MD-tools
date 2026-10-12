@@ -122,7 +122,13 @@ How titratable protein residues get their protonation states. openmm -- Modeller
 
 type: number · default: `7.0` · minimum 0.0; maximum 14.0
 
-Target pH.
+Target pH, for the protein's titratable residues AND for a small molecule's Open Babel protonation (`ligand_method`).
+
+#### `protonation.ligand_method`
+
+type: string · default: `openbabel` · one of `openbabel`, `none`
+
+How a small molecule (kind: ligand or peptide-like, and `--parameterize`) gets its protonation state BEFORE it is parameterised. openbabel -- Open Babel's pH model (`obabel -p`) at `ph`, applied to the molecule as supplied: carboxylic and sulfonic acids become anions, aliphatic amines, amidines and guanidines cations, at the default 7.0. It is a table of functional-group rules, not a pKa predictor: phosphates, imidazoles and environment-dependent pKa values are left as they came. It adds and removes hydrogens and formal charges and nothing else -- a result that changes the heavy-atom graph or the stereochemistry is refused -- and a 3D input keeps its heavy-atom coordinates. What it did is recorded in built.log. Open Babel missing is an error, never a fall back. none -- the molecule is parameterised exactly as its input encodes it: the choice for a protomer you picked yourself, or for a study at another pH than the one you set. Recorded as a choice. A parameter package is one exact protonation state, so an input that Open Babel changes no longer matches a package built from the unchanged molecule: it is a different species and takes its own package. Refused for kind: peptide (PROPKA decides there) and complex (a mapped ligand's hydrogens are its package's).
 
 #### `protonation.overrides`
 
@@ -410,7 +416,7 @@ Steps between collective-variable observations. Independent of the trajectory an
 
 ### `rest2`
 
-The REST2 ladder. Ignored when protocol is cMD. The Hamiltonian scaling itself -- bonds and angles unscaled, amide omega, aromatic ring, double bond and improper torsions unscaled, eligible solute torsions and CMAP by (1-tau)^2, solute-solute nonbonded and 1-4 by (1-tau)^2, solute-environment by (1-tau), GB by (1-tau) -- is a property of the validated implementation and is not configurable here.
+The REST2 ladder. Ignored when protocol is cMD. The Hamiltonian scaling itself -- bonds and angles unscaled, a peptide's amide omega, aromatic ring, double bond and improper torsions unscaled (a ligand's amide is scaled), eligible solute torsions and CMAP by (1-tau)^2, solute-solute nonbonded and 1-4 by (1-tau)^2, solute-environment by (1-tau), GB by (1-tau) -- is a property of the validated implementation and is not configurable here.
 
 #### `rest2.number_of_replicas`
 

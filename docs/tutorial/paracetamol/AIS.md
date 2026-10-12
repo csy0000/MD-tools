@@ -3,6 +3,14 @@
 **Tested against md-tools `0.6.1`.** Every command and every number on this page comes from a
 run executed as written, at that version.
 
+!!! warning "The ligand amide is scaled in REST2 convention v4"
+    The numbers below were measured under convention v3, which left a ligand's amide ω unscaled.
+    From v4 (2026-10-12) the ω protection belongs to peptides: an amide inside a non-protein residue
+    is scaled and listed under `ligand_amide_scaled_bonds`. A new build of this system therefore
+    protects one bond fewer, and its states are a different Hamiltonian with a different digest.
+    The page is kept as the record of the v3 run; re-run it to regenerate the numbers. See
+    [REST2: the Hamiltonian](../../openmm_methods/REST2/README.md).
+
 The AIS chain of [AIS: alanine dipeptide](../ALA/AIS.md), applied to a small molecule given as SMILES.
 Read that page first: it explains each step, and this page shows only where the ligand route differs
 and what the run produced. Every command below was run exactly as written, and every number is

@@ -91,7 +91,8 @@ def _legacy_cfg(resolved: dict[str, Any]) -> dict[str, Any]:
     # PROTONATION, carried across for the same reason: a key not copied here does not reach the
     # builders, so `protonation.method: propka` would be resolved, recorded as asked, and built
     # with OpenMM's defaults.
-    for key in ("method", "ph", "overrides", "histidine_proximity_angstrom", "near_ph_window"):
+    for key in ("method", "ph", "overrides", "histidine_proximity_angstrom", "near_ph_window",
+                "ligand_method"):
         if key in (resolved.get("protonation") or {}):
             cfg["protonation"][key] = resolved["protonation"][key]
 
@@ -244,6 +245,7 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
 
     ligand_sdf = None
     package_record = None
+    ligand_protonation = None
     if route == "ligand":
         # ONE staging location for the prepared molecule, shared with the implicit route. This was
         # bare `staging` here and `staging / "structure"` there, while `build/top.py` copies
@@ -257,6 +259,11 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
         source = Path(prepared["solute_pdb"])
         ligand_sdf = Path(prepared["solute_sdf"])
         log(f"ligand       : {prepared.get('smiles', '')[:60]}")
+        from .ligand_protonation import protonation_summary
+
+        ligand_protonation = prepared.get("protonation")
+        if ligand_protonation is not None:
+            log(f"ligand pH    : {protonation_summary(ligand_protonation)}")
         # THE PACKAGE, before any force field exists: every later step loads these parameters.
         from ..ligands.build import attach_for_build
 
@@ -306,7 +313,7 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
     return {"system_xml": built["system_xml"], "topology_pdb": solvated["output_pdb"],
             "initial_state": state_path, "n_solute_atoms": solvated["n_solute_atoms"],
             "ligand_sdf": ligand_sdf, "omega": built, "ligand_package": package_record,
-            "protonation": protonated,
+            "protonation": protonated, "ligand_protonation": ligand_protonation,
             # Carried through for forcefield.json: what the box actually ended up containing is
             # part of how the system was parameterised, not a log line.
             "n_waters": solvated.get("n_waters"), "ions": solvated.get("ions"),
@@ -486,6 +493,7 @@ def _build_implicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
             "initial_state": state_path, "n_solute_atoms": built["n_solute_atoms"],
             "ligand_sdf": built.get("ligand_sdf"),
             "ligand_package": built.get("ligand_package"),
+            "ligand_protonation": built.get("ligand_protonation"),
             "omega": built.get("build_record") or {},
             # The builder's own report of what it loaded: the tleap protein resource, the radii,
             # and on the ligand route the OpenFF report from build_forcefield. Surfaced here so

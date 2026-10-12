@@ -235,9 +235,11 @@ def test_one_copy_of_a_compound_is_selected_and_its_twin_is_not(fx, tmp_path):
     assert hot == {a.index for a in fx.residue(first).atoms()}
     assert not hot & {a.index for a in fx.residue(twin).atoms()}
     assert all(fx.atom(twin, "C2") not in b for b in selection.torsion_bonds)
-    # Classified from bond orders: the C=C double bond and the amide C-N stay unscaled.
+    # Classified from bond orders: the C=C double bond stays unscaled. The amide C-N is a LIGAND
+    # amide and is scaled (REST2 convention v4: the omega protection is for peptides).
     assert _bond(fx, (first, "C1"), (first, "C2")) in selection.excluded_bonds
-    assert _bond(fx, (first, "C3"), (first, "N1")) in selection.excluded_bonds
+    assert _bond(fx, (first, "C3"), (first, "N1")) not in selection.excluded_bonds
+    assert _bond(fx, (first, "C3"), (first, "N1")) in selection.torsion_bonds
     assert _bond(fx, (first, "C2"), (first, "C3")) in selection.torsion_bonds
     assert _bond(fx, (first, "N1"), (first, "C4")) in selection.torsion_bonds
     instance = region["ligand_instances"][0]

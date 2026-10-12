@@ -29,6 +29,11 @@ ACETYLPYRROLIDINE = "CC(=O)N1CCCC1"
 
 _SYMBOLS = {"C": elem.carbon, "N": elem.nitrogen, "O": elem.oxygen, "H": elem.hydrogen}
 
+#: Since REST2 convention v4 an amide is read from bond orders ONLY in a residue declared
+#: peptide-like; in any other non-protein residue (a ligand) it is simply scaled, and there is
+#: nothing to map. This file is about where bond orders come from, so its residues are declared.
+PEPTIDE_LIKE = ["MO1", "MO2"]
+
 
 
 def _amide(result):
@@ -79,7 +84,8 @@ def _within(bonds, atoms):
 def test_each_residue_is_read_from_its_own_sdf(tmp_path):
     topology, solute, sdfs, (mo1, mo2) = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
-    result = classify_unscaled_torsions(topology, solute, residue_sdfs=sdfs)
+    result = classify_unscaled_torsions(topology, solute, residue_sdfs=sdfs,
+                                        peptide_like_residues=PEPTIDE_LIKE)
 
     assert _amide_unclassified(result) == []
     assert len(_within(_amide(result), mo1)) == 1, "paracetamol: ordinary"
@@ -91,14 +97,16 @@ def test_the_whole_set_mapping_cannot_do_this(tmp_path):
     """Why the map exists: one SDF over two different residues fails, for both of them."""
     topology, solute, sdfs, _ = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
-    result = classify_unscaled_torsions(topology, solute, ligand_sdf=sdfs["MO1"])
+    result = classify_unscaled_torsions(topology, solute, ligand_sdf=sdfs["MO1"],
+                                        peptide_like_residues=PEPTIDE_LIKE)
     assert len(_amide_unclassified(result)) == 2
 
 
 def test_a_residue_missing_from_the_map_is_unclassified_by_name(tmp_path):
     topology, solute, sdfs, (mo1, mo2) = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
-    result = classify_unscaled_torsions(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]})
+    result = classify_unscaled_torsions(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]},
+                                        peptide_like_residues=PEPTIDE_LIKE)
 
     unknown = _amide_unclassified(result)
     assert len(unknown) == 1 and unknown[0]["nitrogen_residue"] == "MO2"
@@ -111,7 +119,8 @@ def test_swapped_sdfs_are_refused_not_believed(tmp_path):
     topology, solute, sdfs, _ = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
     swapped = {"MO1": sdfs["MO2"], "MO2": sdfs["MO1"]}
-    result = classify_unscaled_torsions(topology, solute, residue_sdfs=swapped)
+    result = classify_unscaled_torsions(topology, solute, residue_sdfs=swapped,
+                                        peptide_like_residues=PEPTIDE_LIKE)
 
     assert len(_amide_unclassified(result)) == 2
     assert all("mismatch" in c["ambiguous"] for c in _amide_unclassified(result))
@@ -122,7 +131,8 @@ def test_every_instance_of_a_residue_is_mapped_separately(tmp_path):
     would fail on atom count."""
     topology, solute, sdfs, (first, second) = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO1", PARACETAMOL)])
-    result = classify_unscaled_torsions(topology, solute, residue_sdfs=sdfs)
+    result = classify_unscaled_torsions(topology, solute, residue_sdfs=sdfs,
+                                        peptide_like_residues=PEPTIDE_LIKE)
 
     assert _amide_unclassified(result) == []
     assert len(_within(_amide(result), first)) == 1
@@ -141,7 +151,8 @@ def test_a_declared_proline_like_name_needs_no_sdf(tmp_path):
 def test_the_method_names_which_sdf_described_which_residue(tmp_path):
     topology, solute, sdfs, _ = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
-    method = classify_unscaled_torsions(topology, solute, residue_sdfs=sdfs)["detection_method"]
+    method = classify_unscaled_torsions(topology, solute, residue_sdfs=sdfs,
+                                        peptide_like_residues=PEPTIDE_LIKE)["detection_method"]
     assert "MO1.sdf" in method and "MO2.sdf" in method, method
 
 
@@ -156,10 +167,12 @@ def test_the_enforcing_entry_point_takes_the_same_evidence(tmp_path):
 
     topology, solute, sdfs, _ = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
-    decided = unscaled_torsions(topology, solute, residue_sdfs=sdfs)
+    decided = unscaled_torsions(topology, solute, residue_sdfs=sdfs,
+                                peptide_like_residues=PEPTIDE_LIKE)
     assert _amide_unclassified(decided) == []
     with pytest.raises(UnclassifiedTorsionError, match="MO2"):
-        unscaled_torsions(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]})
+        unscaled_torsions(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]},
+                          peptide_like_residues=PEPTIDE_LIKE)
     # and the proline-like declaration reaches the classifier through it
     unscaled_torsions(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]},
                      proline_like_residues=("PRO", "MO2"))

@@ -73,6 +73,31 @@ HISTORICAL_REST2_IMPLEMENTATIONS = {
 }
 
 
+#: THE ONE COMPATIBILITY BRANCH for the convention (shared contract §3, as for the selection
+#: identity in 0.6.3). v3 -> v4 changed WHICH torsions the scaler protects -- a ligand's amide is no
+#: longer one of them -- and that decision is taken when `build-top --rest2-scaler` writes the
+#: saved states. A ladder runs from those FILES and never re-derives them, so a ladder built under
+#: v3 keeps integrating exactly the Hamiltonian it was built with, and refusing to resume or
+#: extend it would kill an in-flight production run over a label. What the branch accepts is
+#: therefore narrow: the same convention name, recorded version 3, current version 4, and every
+#: OTHER field equal. What it does not do is relabel: a continued run keeps the version it
+#: recorded, because its states are that version's.
+COMPATIBLE_RECORDED_VERSIONS = {("rest2-unscaled-torsions", 4): (3,)}
+
+
+def rest2_implementations_agree(recorded, current):
+    """Whether *recorded* may be continued under *current*: equal, or the one accepted v3 -> v4."""
+    if recorded == current:
+        return True
+    if not isinstance(recorded, dict) or not isinstance(current, dict):
+        return False
+    accepted = COMPATIBLE_RECORDED_VERSIONS.get((current.get("name"), current.get("version")), ())
+    if recorded.get("name") != current.get("name") or recorded.get("version") not in accepted:
+        return False
+    keys = (set(recorded) | set(current)) - {"version", "unscaled_torsions"}
+    return all(recorded.get(key) == current.get(key) for key in keys)
+
+
 def require_compatible_implementation(recorded, *, what="this run"):
     """Refuse to continue a run written under a superseded Hamiltonian identity.
 
@@ -85,6 +110,8 @@ def require_compatible_implementation(recorded, *, what="this run"):
     name = recorded.get("name")
     version = recorded.get("version")
     if name == REST2_IMPLEMENTATION["name"] and version == REST2_IMPLEMENTATION["version"]:
+        return
+    if rest2_implementations_agree(recorded, REST2_IMPLEMENTATION):
         return
     reason = HISTORICAL_REST2_IMPLEMENTATIONS.get((name, version))
     current = f"{REST2_IMPLEMENTATION['name']}/v{REST2_IMPLEMENTATION['version']}"

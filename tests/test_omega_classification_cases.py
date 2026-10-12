@@ -477,17 +477,19 @@ def test_a_residue_with_no_bond_orders_still_refuses_because_nothing_is_protecte
     """The case that keeps the refusal alive, and the reason it is not "unclassifiable".
 
     With no SDF the classifier does not see an unnameable bond -- it sees NOTHING. Paracetamol
-    goes from 7 protected bonds (1 amide + 6 aromatic ring) to 0. Defaulting that to scaled would
-    put a whole benzene ring on the lambda path because somebody forgot a file, with no refusal
-    and nothing red in the picture to notice. It is a missing INPUT, and the user can fix it.
+    goes from 6 protected bonds (the aromatic ring; its amide is a ligand amide and is scaled
+    since convention v4) to 0. Defaulting that to scaled would put a whole benzene ring on the
+    lambda path because somebody forgot a file, with no refusal and nothing red in the picture to
+    notice. It is a missing INPUT, and the user can fix it.
     """
     from md_tools.openmm.system import UnclassifiedTorsionError, unscaled_torsions
 
     topology, solute, sdf = _ligand_topology("CC(=O)Nc1ccc(O)cc1", name="TYL")
 
     with_orders = unscaled_torsions(topology, solute, ligand_sdf=sdf)
-    assert len(with_orders["unscaled_central_bonds"]) == 7
-    assert {e["class"] for e in with_orders["central_bonds"]} == {"amide_omega", "non_rotatable"}
+    assert len(with_orders["unscaled_central_bonds"]) == 6
+    assert {e["class"] for e in with_orders["central_bonds"]} == {"non_rotatable"}
+    assert len(with_orders["ligand_amide_scaled_bonds"]) == 1
 
     with pytest.raises(UnclassifiedTorsionError, match="SDF"):
         unscaled_torsions(topology, solute)

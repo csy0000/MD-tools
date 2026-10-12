@@ -30,6 +30,8 @@ from typing import Any
 
 import yaml
 
+from ..openmm.ligand_protonation import (DEFAULT_LIGAND_PROTONATION, DEFAULT_PH,
+                                          LIGAND_PROTONATION_METHODS)
 from ..openmm.system_defaults import (DEFAULT_PADDING_NM, SOLVENTS, canonical_solvent, is_implicit,
                                       is_vacuum)
 from .record import LogWriter, file_facts, openmm_platform_facts
@@ -214,8 +216,30 @@ BUILD_SCHEMA = Schema(
                       "are flagged. Everything is recorded in build/protonation.json.\n"
                       "  Either way the states are held fixed for the run: this is not "
                       "constant-pH MD."),
-            Field("ph", float, default=7.0, minimum=0.0, maximum=14.0,
-                  doc="Target pH."),
+            Field("ph", float, default=DEFAULT_PH, minimum=0.0, maximum=14.0,
+                  doc="Target pH, for the protein's titratable residues AND for a small molecule's "
+                      "Open Babel protonation (`ligand_method`)."),
+            Field("ligand_method", str, default=DEFAULT_LIGAND_PROTONATION,
+                  enum=LIGAND_PROTONATION_METHODS,
+                  doc="How a small molecule (kind: ligand or peptide-like, and "
+                      "`--parameterize`) gets its protonation state BEFORE it is parameterised.\n"
+                      "  openbabel -- Open Babel's pH model (`obabel -p`) at `ph`, applied to the "
+                      "molecule as supplied: carboxylic and sulfonic acids become anions, "
+                      "aliphatic amines, amidines and guanidines cations, at the default 7.0. It "
+                      "is a table of functional-group rules, not a pKa predictor: phosphates, "
+                      "imidazoles and environment-dependent pKa values are left as they came. It "
+                      "adds and removes hydrogens and formal charges and nothing else -- a result "
+                      "that changes the heavy-atom graph or the stereochemistry is refused -- and "
+                      "a 3D input keeps its heavy-atom coordinates. What it did is recorded in "
+                      "built.log. Open Babel missing is an error, never a fall back.\n"
+                      "  none -- the molecule is parameterised exactly as its input encodes it: "
+                      "the choice for a protomer you picked yourself, or for a study at another "
+                      "pH than the one you set. Recorded as a choice.\n"
+                      "A parameter package is one exact protonation state, so an input that Open "
+                      "Babel changes no longer matches a package built from the unchanged "
+                      "molecule: it is a different species and takes its own package. Refused for "
+                      "kind: peptide (PROPKA decides there) and complex (a mapped ligand's "
+                      "hydrogens are its package's)."),
             Field("overrides", list, default=[],
                   doc="Explicit per-residue variants, which win over any prediction and are "
                       "reported when they do:\n"
@@ -628,6 +652,7 @@ def _sys_document(resolved: dict[str, Any]) -> dict[str, Any]:
     document.setdefault("protonation", {}).update({
         "method": resolved["protonation"]["method"],
         "ph": float(resolved["protonation"]["ph"]),
+        "ligand_method": resolved["protonation"]["ligand_method"],
         "overrides": list(resolved["protonation"]["overrides"]),
         "histidine_proximity_angstrom": float(resolved["protonation"]["histidine_proximity_angstrom"]),
         "near_ph_window": float(resolved["protonation"]["near_ph_window"]),
@@ -825,11 +850,25 @@ def _check_input_and_protonation(resolved: dict[str, Any]) -> None:
             f"input.assembly = {resolved['input']['assembly']!r}, but solute.kind is {kind!r}. A "
             f"biological assembly is expanded from a protein structure: kind: peptide or complex.")
     protonation = resolved["protonation"]
-    if not protein and stated:
+    # WHICH keys a kind may state. A small molecule takes the pH and the Open Babel switch; the
+    # protein's titration keys (PROPKA, overrides, histidine screening) describe a structure it
+    # does not have. A peptide or complex takes the protein keys and not the ligand switch: PROPKA
+    # decides a peptide, and a complex's ligands are mapped packages whose hydrogens are not ours.
+    molecule_keys = {"ph", "ligand_method"}
+    if not protein:
+        refused = [key for key in stated if key not in molecule_keys]
+        if refused:
+            raise ConfigError(
+                f"protonation.{', protonation.'.join(refused)} is set, but solute.kind is "
+                f"{kind!r}. Those describe a protein's titratable residues. A molecule built "
+                f"from .smi/.sdf takes only protonation.ph and protonation.ligand_method: Open "
+                f"Babel's pH model (or `none`, keeping the protomer its input encodes).")
+    elif "ligand_method" in stated:
+        why = ("a mapped ligand's hydrogens are its parameter package's and are never changed"
+               if kind == "complex" else "PROPKA decides a peptide's protonation")
         raise ConfigError(
-            f"protonation.{', protonation.'.join(stated)} is set, but solute.kind is {kind!r}. A "
-            f"molecule built from .smi/.sdf keeps the protomer its input encodes; nothing titrates "
-            f"it.")
+            f"protonation.ligand_method is set, but solute.kind is {kind!r}: {why}. It applies to "
+            f"kind: ligand and peptide-like only.")
     if implicit and (protonation["method"] == "propka" or protonation["overrides"]):
         raise ConfigError(
             "protonation.method: propka and protonation.overrides apply to the explicit-solvent "
@@ -1164,6 +1203,12 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                 continue
             origin = "set" if key in stated.get(section, ()) else "default"
             log.field(f"{section}.{key}", f"{value}   ({origin})")
+    if kind in ("ligand", "peptide-like"):
+        # The two protonation keys a molecule takes. Printed, because the default is an ACTION on
+        # the molecule -- Open Babel at pH 7 -- and a reader should see that it was asked for.
+        for key in ("ph", "ligand_method"):
+            origin = "set" if key in stated.get("protonation", ()) else "default"
+            log.field(f"protonation.{key}", f"{resolved['protonation'][key]}   ({origin})")
 
     log.heading("Input interpretation")
     if complex_build:
@@ -1540,6 +1585,12 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         protonation = (record.get("protonation") or {}).get("protonation")
         if protonation is not None:
             log.update(protonation=protonation)
+        ligand_protonation = record.get("ligand_protonation")
+        if ligand_protonation is not None:
+            from ..openmm.ligand_protonation import protonation_summary
+
+            log.field("ligand protonation", protonation_summary(ligand_protonation))
+            log.update(ligand_protonation=ligand_protonation)
         log.update(outputs=written_outputs,
                    ligand_packages={
                        "catalog_searched": [str(r) for r in ([resolved["ligand_catalog"]["path"]]

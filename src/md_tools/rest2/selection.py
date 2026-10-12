@@ -125,7 +125,7 @@ class ScalingSelection:
 
     @classmethod
     def derive(cls, topology, solute_atoms: Iterable[int],
-               ligand_sdf=None) -> "ScalingSelection":
+               ligand_sdf=None, peptide_like_residues: Iterable[str] = ()) -> "ScalingSelection":
         """Use the validated classifier to decide the exclusions for this topology.
 
         *ligand_sdf* is the SDF `build-top` retains beside the System for a molecular input. It is
@@ -137,7 +137,8 @@ class ScalingSelection:
 
         atoms = tuple(sorted({int(i) for i in solute_atoms}))
         try:
-            classified = unscaled_torsions(topology, atoms, ligand_sdf=ligand_sdf)
+            classified = unscaled_torsions(topology, atoms, ligand_sdf=ligand_sdf,
+                                           peptide_like_residues=peptide_like_residues)
         except UnclassifiedTorsionError as refusal:
             raise SelectionError(str(refusal)) from None
 
@@ -159,6 +160,9 @@ class ScalingSelection:
                 "residues": f"{entry.get('residue')}{entry.get('residue_index')}",
                 "reason": reasons[entry["class"]],
             })
+        for pair in classified.get("ligand_amide_scaled_bonds") or []:
+            labels.append({"bond": [int(i) for i in pair], "residues": None,
+                           "reason": "ligand amide: SCALED, the omega protection is for peptides"})
         for pair in classified.get("proline_like_scaled_bonds") or []:
             labels.append({"bond": [int(i) for i in pair], "residues": None,
                            "reason": "proline-like: SCALED, no amide hydrogen to protect"})

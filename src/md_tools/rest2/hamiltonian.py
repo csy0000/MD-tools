@@ -14,8 +14,9 @@ The convention, in tau (`a = 1 - tau`):
     (1 - tau)^2   solute-solute nonbonded and 1-4, eligible solute torsions, solute CMAP
     (1 - tau)     solute-environment nonbonded, the whole generalised-Born energy
     unscaled      bonds, angles, and the UNSCALED TORSIONS: every proper torsion across an unscaled
-                  central bond (ordinary amide omega, aromatic ring bond, other double bond --
-                  which bonds those are is decided by `md_tools.openmm.system.unscaled_torsions`),
+                  central bond (ordinary amide omega of a protein or peptide-like residue, aromatic
+                  ring bond, other double bond -- which bonds those are is decided by
+                  `md_tools.openmm.system.unscaled_torsions`),
                   and every solute improper
 
 Charges scale by (1 - tau) and epsilons by (1 - tau)^2, which gives exactly that split through the
@@ -33,7 +34,7 @@ from openmm import CMAPTorsionForce, CustomGBForce, NonbondedForce, PeriodicTors
 #: stored is a second thing to keep consistent, and the one that drifts is never the one you check.
 REST2_IMPLEMENTATION = {
     "name": "rest2-unscaled-torsions",
-    "version": 3,
+    "version": 4,
     "state_coordinate": "tau",
     "solute_solute_nonbonded_scale": "(1-tau)^2",
     "solute_environment_nonbonded_scale": "1-tau",
@@ -43,9 +44,11 @@ REST2_IMPLEMENTATION = {
     "angles": "unscaled",
     # v2 left only the ordinary amide omega unscaled. v3 is the user's decision of 2026-09-16: a hot
     # state that lets a ring pucker, a double bond twist or a planar centre pyramidalise samples
-    # geometries the physical state never visits, exactly as an isomerising amide does.
-    "unscaled_torsions": ["ordinary amide omega", "aromatic ring bonds", "other double bonds",
-                          "impropers"],
+    # geometries the physical state never visits, exactly as an isomerising amide does. v4 is the
+    # user's decision of 2026-10-12: the amide omega protection is for PEPTIDES (protein residues
+    # and a declared peptide-like solute); an amide in a ligand is scaled.
+    "unscaled_torsions": ["ordinary amide omega of a protein or peptide-like residue",
+                          "aromatic ring bonds", "other double bonds", "impropers"],
 }
 
 

@@ -377,8 +377,8 @@ MD_SCHEMA = Schema(
                   doc="Report acceptance for each neighbouring pair. A single averaged acceptance "
                       "hides a ladder with one impassable gap."),
         ], doc="The REST2 ladder. Ignored when protocol is cMD. The Hamiltonian scaling itself -- "
-               "bonds and angles unscaled, amide omega, aromatic ring, double bond and improper "
-               "torsions unscaled, eligible solute torsions "
+               "bonds and angles unscaled, a peptide's amide omega, aromatic ring, double bond and "
+               "improper torsions unscaled (a ligand's amide is scaled), eligible solute torsions "
                "and CMAP by (1-tau)^2, solute-solute nonbonded and 1-4 by (1-tau)^2, "
                "solute-environment by (1-tau), GB by (1-tau) -- is a property of the validated "
                "implementation and is not configurable here."),

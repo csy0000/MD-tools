@@ -48,13 +48,29 @@ does it.
 | generalized Born (implicit) | `(1 − τ)` |
 | environment–environment | `1` — untouched |
 | bonds and angles | `1` — untouched |
-| **unscaled torsions**: every proper torsion across an ordinary amide C–N (ω), an aromatic ring bond or another double bond; every improper | `1` — **unscaled by convention** |
+| **unscaled torsions**: every proper torsion across an ordinary amide C–N (ω) *of a protein or peptide-like residue*, an aromatic ring bond or another double bond; every improper | `1` — **unscaled by convention** |
 
-Leaving these unscaled is *this repository's* convention (v3, `rest2-unscaled-torsions`), not
+Leaving these unscaled is *this repository's* convention (v4, `rest2-unscaled-torsions`), not
 textbook REST2. A softened ω barrier lets the backbone sample *cis* amides the force field was never
 fit to describe; a softened ring or double-bond torsion lets a hot state bend a planar group, and a
 softened improper lets it invert a centre. In every case the hot states would explore geometry
-state 0 never visits, and exchanges would stop being useful. The exclusion is expressed as
+state 0 never visits, and exchanges would stop being useful.
+
+**The ω protection belongs to peptides, not to ligands** (v4, decided 2026-10-12). The argument
+above is about a backbone whose reference ensemble never visits *cis*. A small-molecule ligand has no
+such reference: a tertiary amide has two real rotamers behind a barrier the cold run does not cross,
+which is what REST2 is for. So an amide **inside a non-protein residue** is *scaled* and recorded
+under `ligand_amide_scaled_bonds`; a protein residue, and a residue named in the scaler's
+`peptide_like_residues` (the residue of a `solute.kind: peptide-like` build), keep it unscaled. A
+bond *between* two residues is a peptide bond whatever either residue is called, so a modified
+residue in a protein chain is still read from bond orders or refused, never silently scaled. To
+protect one ligand amide anyway, list its central bond in `unscaled_list`.
+
+!!! warning "A v3 ladder is continued, not re-derived"
+    v3 → v4 changes which bonds `build-top --rest2-scaler` protects when it *writes* the states. A
+    ladder built under v3 runs from those files, so it resumes and extends under v4 and keeps
+    recording v3. The states of a new build differ from a v3 build of the same ligand wherever it
+    has an amide, so the two are two Hamiltonians with two digests. The exclusion is expressed as
 **central bonds**: every proper torsion term across such a bond is left unscaled, so no term is
 missed because it was enumerated differently. The ARG guanidinium counts as double bonds.
 
@@ -83,7 +99,15 @@ schedule:
   tau_max: 0.5
 # unscaled_torsions: true  # default; false scales every solute torsion
 # sdf_filelist: {MO1: MO1.sdf, MO2: MO2.sdf}
+# peptide_like_residues: [CYC]   # unset: read from build/built.log (peptide-like -> its residue)
 ```
+
+A **cyclic peptide built as `kind: peptide-like`** keeps its backbone ω protected without a key: the
+scaler reads `solute.kind` from the build record beside the System (`built.log`) and, for
+`peptide-like`, treats the solute's non-protein residues as peptide-like. Any other kind names none,
+so a ligand's amide is scaled. State the key to override — even as `[]`, which says "none" about a
+peptide-like build — and the record is then not consulted. A System built by hand has no record to
+read; the answer is "none", and the scaler's `ligand amides` log line says where it came from.
 
 It writes `build/REST2/`:
 
@@ -185,8 +209,8 @@ A central bond is selected when the region that **owns** it is selected:
 
 The four atoms of a scaled torsion need not all be hot. χ1 (N–CA–CB–CG) is scaled by a sidechain
 selection although N and CA are backbone atoms it does not heat. φ reaches into the previous
-residue's C. Ordinary amide ω, aromatic ring and double-bond torsions, and every improper, stay
-unscaled whoever owns them. A proline-like ω is scaled when residue *i*'s backbone is selected.
+residue's C. Ordinary amide ω of a protein residue, aromatic ring and double-bond torsions, and every
+improper, stay unscaled whoever owns them. A proline-like ω is scaled when residue *i*'s backbone is selected.
 
 ### Choosing the residues around a ligand
 

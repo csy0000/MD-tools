@@ -9,6 +9,14 @@ run at 0.6.1, which section 8 explains: before 0.6.4 an extension looked for a m
 `build-md` tree has ever written, so no generated ladder was extendable. That is the realistic
 case anyway: the parent is an older run and the extension is done with the version you have now.
 
+!!! warning "The ligand amide is scaled in REST2 convention v4"
+    The numbers below were measured under convention v3, which left a ligand's amide ω unscaled.
+    From v4 (2026-10-12) the ω protection belongs to peptides: an amide inside a non-protein residue
+    is scaled and listed under `ligand_amide_scaled_bonds`. A new build of this system therefore
+    protects one bond fewer, and its states are a different Hamiltonian with a different digest.
+    The page is kept as the record of the v3 run; re-run it to regenerate the numbers. See
+    [REST2: the Hamiltonian](../../openmm_methods/REST2/README.md).
+
 A four-state REST2 ladder over paracetamol, 10 ns of production **per state**. Every command below
 was run exactly as written, and every number is copied from the files that run produced.
 

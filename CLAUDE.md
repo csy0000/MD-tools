@@ -139,9 +139,11 @@ generated from the models and drift-checked; never hand-edit one.
 Do not change these without a failing test that demonstrates a defect.
 
 * **REST2**: every replica at the same physical temperature — Hamiltonian scaling, not
-  temperature REMD. Convention v3, `rest2-unscaled-torsions`: bonds and angles unscaled; every
-  UNSCALED TORSION unscaled — each proper torsion across an ordinary amide C–N (omega), an aromatic
-  ring bond or another double bond (the ARG guanidinium included), and every improper; eligible
+  temperature REMD. Convention v4, `rest2-unscaled-torsions`: bonds and angles unscaled; every
+  UNSCALED TORSION unscaled — each proper torsion across an ordinary amide C–N (omega) **of a
+  protein or peptide-like residue** (a LIGAND's amide is scaled, user decision 2026-10-12; the
+  scaler reads `solute.kind: peptide-like` from the build record, `peptide_like_residues` overrides),
+  an aromatic ring bond or another double bond (the ARG guanidinium included), and every improper; eligible
   solute torsions and CMAP by `(1-tau)²`; solute–solute nonbonded and 1-4 by `(1-tau)²`;
   solute–environment by `(1-tau)`; generalized-Born by `(1-tau)`. Exchanges never rescale
   velocities. The runtime is NVT. One trajectory per fixed thermodynamic **state**
@@ -163,7 +165,9 @@ Do not change these without a failing test that demonstrates a defect.
   it unscaled only when there is no alternative conformer and scaling would buy distortion instead
   of sampling: an AROMATIC ring bond (planarity is enforced by delocalisation, so any excursion is
   pure strain), a DOUBLE bond (cis/trans is a chemical isomer, not a conformer), an AMIDE OMEGA
-  (~20 kcal/mol, ~10 ms; cis-peptide is effectively a distinct chemical state — convention v3), and
+  OF A PEPTIDE (~20 kcal/mol, ~10 ms; cis-peptide is effectively a distinct chemical state against
+  a backbone reference that never visits it — convention v3, narrowed to peptides in v4: a ligand
+  has no such reference, and a tertiary amide's two rotamers are exactly what REST2 is for), and
   every IMPROPER. A SATURATED ring bond is scaled: chair/twist-boat is a real flip (~10.4 kcal/mol,
   ~µs) that swaps axial and equatorial, and freezing it would hide the conformational change that
   often decides binding. A macrocycle's φ/ψ are scaled for the same reason — they are why one runs
@@ -453,6 +457,20 @@ Do not change these without a failing test that demonstrates a defect.
   evaluation count and wall time are recorded under their own `cv_*` names — a position-only
   torsion is not an energy evaluation, and folding it into that total would corrupt the one
   number that says how expensive the Hamiltonian is.
+
+* **A small molecule is parameterised at a stated pH.** `protonation.ligand_method: openbabel`
+  (default) applies Open Babel's pH model — `OBMol.AddHydrogens(False, True, pH)`, which is
+  `obabel -p` — at `protonation.ph` (7.0) to a `.smi`, `.sdf` or `.mol2` BEFORE the charges, for
+  `kind: ligand` and `peptide-like` and for `--parameterize`. It is a table of functional-group
+  rules, not a pKa predictor; it changes hydrogens and formal charges and nothing else (a result
+  that changes the heavy-atom graph or the stereochemistry is refused); Open Babel missing is an
+  error, never a fall back to `none`; and a molecule it leaves unchanged is returned as the same
+  object, so a docked pose keeps its hydrogens. `kind: peptide` is PROPKA's and a complex's mapped
+  ligands keep their package's hydrogens, so `ligand_method` is refused there by name.
+* **A v3 ladder is continued, never relabelled.** `rest2.scaler.rest2_implementations_agree` is the
+  one compatibility branch: recorded v3, current v4, every other convention field equal. The
+  states are files, so the Hamiltonian a v3 ladder integrates does not change under it, and a
+  continuation records v3 (`ReplicaRun.adopt_recorded_convention`).
 
 ## Test lanes
 

@@ -38,7 +38,12 @@ def _resolve(tmp_path, document):
 
 @pytest.mark.parametrize("document, words", [
     ({"solute": {"kind": "ligand"}, "input": {"assembly": "1"}}, "input.assembly"),
-    ({"solute": {"kind": "ligand"}, "protonation": {"method": "propka"}}, "nothing titrates it"),
+    ({"solute": {"kind": "ligand"}, "protonation": {"method": "propka"}},
+     "titratable residues.*only protonation.ph and protonation.ligand_method"),
+    ({"solute": {"kind": "peptide"}, "protonation": {"ligand_method": "none"}},
+     "PROPKA decides a peptide"),
+    ({"solute": {"kind": "ligand"}, "protonation": {"ligand_method": "propka"}}, "ligand_method"),
+    ({"solute": {"kind": "ligand"}, "protonation": {"ph": 14.5}}, "maximum"),
     ({"solute": {"kind": "peptide"}, "solvent": {"model": "GBn2"},
       "protonation": {"method": "propka"}}, "implicit"),
     ({"solute": {"kind": "peptide"},
@@ -133,3 +138,41 @@ def test_the_build_records_how_the_protein_was_protonated(tmp_path, method):
     else:
         assert protonation["propka"] is None
     assert "protonation  : method " + method in (tmp_path / "out" / "built.log").read_text()
+
+
+# --- a small molecule's protonation (Open Babel) --------------------------------------------------
+
+def test_a_molecule_takes_ph_and_the_ligand_switch_and_defaults_to_openbabel_at_seven(tmp_path):
+    resolved = _resolve(tmp_path, {"solute": {"kind": "ligand"}})
+    assert resolved["protonation"]["ligand_method"] == "openbabel"
+    assert resolved["protonation"]["ph"] == 7.0
+    stated = _resolve(tmp_path, {"solute": {"kind": "peptide-like"},
+                                 "protonation": {"ph": 5.5, "ligand_method": "none"}})
+    assert stated["protonation"]["ligand_method"] == "none"
+    assert stated["protonation"]["ph"] == 5.5
+
+
+def test_a_complex_refuses_the_ligand_switch_because_its_hydrogens_are_the_packages(tmp_path):
+    with pytest.raises(ConfigError, match="mapped ligand's hydrogens"):
+        _resolve(tmp_path, {"solute": {"kind": "complex"},
+                            "ligands": [{"select": {"chain": "B", "resid": "201",
+                                                    "insertion_code": ""},
+                                         "parameters": "CHEMBL112/param_e932f4c4f371"}],
+                            "protonation": {"ligand_method": "openbabel"}})
+
+
+def test_the_default_reaches_the_builders_and_the_two_defaults_have_one_source():
+    from md_tools.openmm.builder_defaults import DEFAULTS
+    from md_tools.openmm.ligand_protonation import (DEFAULT_LIGAND_PROTONATION, DEFAULT_PH,
+                                                    ligand_protonation_settings)
+
+    assert DEFAULTS["protonation"]["ligand_method"] == DEFAULT_LIGAND_PROTONATION == "openbabel"
+    assert DEFAULTS["protonation"]["ph"] == DEFAULT_PH == 7.0
+    # A configuration with no protonation section is not "no protonation": the default is the
+    # behaviour, so a direct caller of the builders gets Open Babel at pH 7.
+    assert ligand_protonation_settings({}) == ("openbabel", 7.0)
+    assert ligand_protonation_settings(None) == ("openbabel", 7.0)
+    assert ligand_protonation_settings({"protonation": {"ligand_method": "none", "ph": 6.0}}) == (
+        "none", 6.0)
+    with pytest.raises(ValueError, match="ligand_method"):
+        ligand_protonation_settings({"protonation": {"ligand_method": "propka"}})

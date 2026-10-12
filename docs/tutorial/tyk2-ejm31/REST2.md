@@ -4,6 +4,14 @@
 executed as written on four RTX 3080s. The settings are justified in
 [Choosing τ_max and the rung count](choosing-the-ladder.md); you do not need it to follow this page.
 
+!!! warning "The ligand amide is scaled in REST2 convention v4"
+    The numbers below were measured under convention v3, which left a ligand's amide ω unscaled.
+    From v4 (2026-10-12) the ω protection belongs to peptides: an amide inside a non-protein residue
+    is scaled and listed under `ligand_amide_scaled_bonds`. A new build of this system therefore
+    protects one bond fewer, and its states are a different Hamiltonian with a different digest.
+    The page is kept as the record of the v3 run; re-run it to regenerate the numbers. See
+    [REST2: the Hamiltonian](../../openmm_methods/REST2/README.md).
+
 **Two routes**, both starting from the same configuration with neither selection list present —
 there is no way to write an empty mask, so a category you heat nothing of is one you leave out:
 

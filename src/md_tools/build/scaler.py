@@ -91,6 +91,40 @@ def _check_residue_settings(resolved: dict[str, Any]) -> None:
     if not all(isinstance(name, str) for name in names):
         raise ConfigError(f"proline_like_residues must be residue names, got {names!r}")
     resolved["proline_like_residues"] = list(names)
+    peptide = resolved["peptide_like_residues"]
+    if peptide is not None:
+        if not all(isinstance(name, str) for name in peptide):
+            raise ConfigError(f"peptide_like_residues must be residue names, got {peptide!r}")
+        resolved["peptide_like_residues"] = list(peptide)
+
+
+def peptide_like_residues_for(config: dict[str, Any], system_path: Path,
+                              topology) -> tuple[list[str], str]:
+    """`(names, where they came from)`: the residues whose amide omegas stay protected.
+
+    STATED in `scaler.config` -- even as an empty list -- is the person's answer and is used as
+    written. Otherwise the BUILD RECORD beside the System decides: `solute.kind: peptide-like`
+    there makes the solute's non-protein residues peptide-like, and any other kind names none. That
+    is what keeps a cyclic peptide's backbone protected without anybody having to remember a key,
+    while a ligand -- which is what a one-residue SDF looks like to everything else -- is not.
+
+    No readable record is not an error and is not peptide-like: the answer is "none", and it is
+    said so in the scaler's log, because a System built by hand has no kind to read.
+    """
+    from ..openmm.system import peptide_like_residue_names
+    from .record import RecordError, read_record
+
+    stated = config.get("peptide_like_residues")
+    if stated is not None:
+        return list(stated), "scaler.config"
+    record_path = Path(system_path).with_suffix(".log")
+    try:
+        kind = ((read_record(record_path).get("resolved_config") or {}).get("solute") or {}
+                ).get("kind")
+    except (RecordError, OSError):
+        return [], f"none: no readable build record at {record_path.name}"
+    return (peptide_like_residue_names(topology, kind),
+            f"build record {record_path.name} (solute.kind: {kind})")
 
 
 def _check_selectors(resolved: dict[str, Any]) -> None:
@@ -131,6 +165,16 @@ SCALER_SCHEMA = Schema(
         Field("proline_like_residues", list, default=["PRO"],
               doc="Residue names whose amide nitrogen is ring-locked: those omegas stay ELIGIBLE "
                   "for scaling, and need no SDF."),
+        Field("peptide_like_residues", list, default=None, nullable=True,
+              doc="Residue names of a PEPTIDE-LIKE solute (solute.kind: peptide-like, one residue "
+                  "read from a SMILES or SDF): their ordinary amide omegas stay unscaled, as a "
+                  "protein's do. An amide in any other non-protein residue -- a ligand -- is "
+                  "SCALED: the omega protection belongs to peptides, and a ligand's amide has no "
+                  "reference ensemble that never visits cis. Left unset, it is read from the build "
+                  "record beside the System (built.log): a peptide-like build there names its "
+                  "non-protein residues, anything else names none. Stated -- even as [] -- it "
+                  "wins, and the record is not consulted. A ligand amide you want protected "
+                  "anyway goes in unscaled_list."),
         Field("max_proline_ring_size", int, default=7, minimum=3, maximum=12,
               doc="From bond orders, an amide nitrogen in a ring of at most this many atoms is "
                   "proline-like. The bound is what keeps a macrocycle's omegas ordinary."),
@@ -507,6 +551,7 @@ def _refusal_pictures(topology, solute, system_dir: Path, config_path: Path, con
         placed = unscaled_torsions(
             topology, solute, residue_sdfs=pictures,
             proline_like_residues=config["proline_like_residues"],
+            peptide_like_residues=config["peptide_like_residues"],
             max_proline_ring_size=config["max_proline_ring_size"], enforce=False)
         drawn = depict_unscaled_torsions(
             topology, solute, pictures,
@@ -714,6 +759,9 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
 
     topology = loaded.pdb.topology
     solute = solute_atom_indices(topology)
+    # Resolved ONCE, here, so the classifier, the picture and the record all read the same list.
+    peptide_like, peptide_like_source = peptide_like_residues_for(config, system_path, topology)
+    config = dict(config, peptide_like_residues=peptide_like)
     taus = schedule_taus(config["schedule"])
     state0_is_physical = taus[0] == 0.0
 
@@ -747,6 +795,7 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
         try:
             unscaled = unscaled_torsions(topology, classified_atoms, residue_sdfs=residue_sdfs,
                                          proline_like_residues=config["proline_like_residues"],
+                                         peptide_like_residues=config["peptide_like_residues"],
                                          max_proline_ring_size=config["max_proline_ring_size"])
         except UnclassifiedTorsionError as refusal:
             # The refusal used to write NOTHING: it is raised here, and the depiction is drawn far
@@ -846,6 +895,12 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
             # Seen by the rules and deliberately left scalable, which is a third thing distinct
             # from protected and from never-looked-at.
             "urea_scaled_bonds": [list(b) for b in unscaled.get("urea_scaled_bonds", ())],
+            # A ligand's amide: scaled because the omega protection is for peptides (convention
+            # v4). Recorded so that "decided" never reads as "never noticed".
+            "ligand_amide_scaled_bonds": [list(b) for b in
+                                          unscaled.get("ligand_amide_scaled_bonds", ())],
+            "peptide_like_residues": list(config["peptide_like_residues"]),
+            "peptide_like_residues_source": peptide_like_source,
             "unnamed_scaled_bonds": [
                 {"bond": list(u["bond"]) if u.get("bond") else None, "reason": u.get("ambiguous")}
                 for u in unscaled.get("unnamed_scaled_bonds", ())],
@@ -952,6 +1007,10 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
                       f"{section['n_scaled_solute_torsion_terms']} scaled")
         log.field("proline-like amides", f"{len(section['proline_like_scaled_bonds'])} bond(s), "
                                          f"scaled")
+        log.field("ligand amides", f"{len(section['ligand_amide_scaled_bonds'])} bond(s), scaled "
+                                   f"(the omega protection is for peptides; peptide-like "
+                                   f"residues: {section['peptide_like_residues'] or 'none'}, "
+                                   f"from {section['peptide_like_residues_source']})")
     else:
         log.field("unscaled torsions", "OFF -- every solute torsion scaled, impropers and "
                                        "ordinary amide omegas included")

@@ -17,7 +17,8 @@ The convention, expressed in tau, is documented with its evidence in
     solute-environment                       (1 - tau)
     generalized Born                         (1 - tau)
     environment-environment, bonds, angles   1
-    ordinary amide omega torsions            1   (this repository's convention)
+    ordinary amide omega torsions, protein   1   (this repository's convention, v4: a ligand's
+    and peptide-like residues                    amide is scaled; a declared peptide-like one is not)
 
 **tau is the only public, persisted coordinate.** `s` and `sqrt(s)` are derived inside the scaling
 and never written to a configuration, a record or a trajectory.

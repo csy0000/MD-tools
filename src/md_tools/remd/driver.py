@@ -247,6 +247,18 @@ class ReplicaRun:
         return payload
 
     @staticmethod
+    def adopt_recorded_convention(stored, identity):
+        """A continuation keeps the convention version its states were built under.
+
+        `identity` is what this build would write; after the compatibility branch accepted a v3
+        ladder it would say v4 about states that are v3, and a record that claims a Hamiltonian
+        its states are not is worse than one that is merely old.
+        """
+        recorded = (stored or {}).get("rest2_implementation")
+        if recorded:
+            identity["rest2_implementation"] = recorded
+
+    @staticmethod
     def compare_identity(before, now):
         keys = (set(before) | set(now)) - {"format"}
         return [key for key in sorted(keys)
@@ -267,6 +279,12 @@ class ReplicaRun:
         """
         if key == "hamiltonian" and isinstance(was, dict) and isinstance(now, dict):
             return hamiltonian_identity.hamiltonian_identities_agree(was, now)
+        if key == "rest2_implementation":
+            # The convention's one named compatibility branch (`rest2.scaler`): a ladder built
+            # under v3 runs from saved states that ARE its Hamiltonian, so it may be continued.
+            from md_tools.rest2.scaler import rest2_implementations_agree
+
+            return rest2_implementations_agree(was, now)
         if key == "rungs" and was is None:
             # THE COMPATIBILITY BRANCH for rung provenance (shared contract §3): an identity
             # written before 0.6.1 recorded no rungs. It agrees ONLY with a plain saved-state
@@ -982,6 +1000,7 @@ class ReplicaRun:
                     "be a continuation of it. These differ:\n  - " + "\n  - ".join(
                         f"{key}: parent {stored.get(key)!r} vs here {identity.get(key)!r}"
                         for key in differences))
+            self.adopt_recorded_convention(stored, identity)
 
             inherited = {
                 "path": str(parent.resolve()),
@@ -1182,6 +1201,7 @@ class ReplicaRun:
                     f"the scientific configuration changed since this run was created, so "
                     f"continuing it would append samples from a different calculation:\n{lines}\n"
                     f"  Running longer is a legitimate extension; changing the physics is not.")
+            self.adopt_recorded_convention(stored, identity)
 
             checkpoint = storage.ReplicaCheckpoint(self.files.checkpoint).read()
             resume_exchange = int(checkpoint["exchange_index"])

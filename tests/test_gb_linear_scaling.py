@@ -80,8 +80,9 @@ def _group_energies(system, positions):
 # --- the identity ------------------------------------------------------------------------------
 
 def test_the_identity_names_the_gb_rule():
-    # v2 introduced the (1-tau) GB rule; v3 (unscaled torsions) keeps it.
-    assert scaling.REST2_IMPLEMENTATION["version"] == 3
+    # v2 introduced the (1-tau) GB rule; v3 (unscaled torsions) and v4 (omega protection for
+    # peptides only) keep it.
+    assert scaling.REST2_IMPLEMENTATION["version"] == 4
     assert scaling.REST2_IMPLEMENTATION["generalized_born_scale"] == "1-tau"
     assert scaling.REST2_IMPLEMENTATION["solute_solute_nonbonded_scale"] == "(1-tau)^2"
 

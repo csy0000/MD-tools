@@ -1160,7 +1160,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             writer.field("solute", f"{len(solute)} atom(s) (restraint and REST2 region)")
             # EMPTY IS NOT THE SAME AS NONE FOUND. At tau = 0 nothing is scaled, so there is
             # nothing to exempt and the list is legitimately empty -- while the same system on a
-            # REST2 ladder leaves two amide omegas unscaled. Saying "0: none" invites the reader
+            # REST2 ladder leaves two peptide amide omegas unscaled. Saying "0: none" invites the reader
             # to conclude the classifier found no such bonds, which is a different claim.
             writer.field("unscaled central bonds",
                          (f"{len(excluded)}: " + ", ".join(f"{a}-{b}" for a, b in excluded))

@@ -73,9 +73,18 @@ def initial_structure(smiles: str, out_dir: Path, cfg: dict) -> dict:
     from rdkit import Chem
     from rdkit.Chem import AllChem, rdDistGeom
 
+    from .ligand_protonation import ligand_protonation_settings, protonate_smiles
+
     ecfg, mcfg = cfg["structure"]["etkdg"], cfg["structure"]["mmff"]
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # BEFORE the molecule exists as anything but a string: the species that is parameterised is the
+    # one at the requested pH, and everything below -- the conformer, the charges, the package
+    # identity -- describes it. `protonation` carries what was asked and what changed.
+    method, ph = ligand_protonation_settings(cfg)
+    supplied_smiles = smiles
+    smiles, protonation = protonate_smiles(supplied_smiles, ph, method=method)
 
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -140,7 +149,11 @@ def initial_structure(smiles: str, out_dir: Path, cfg: dict) -> dict:
     Chem.MolToPDBFile(keep, str(out_dir / "solute.pdb"))
 
     info = {
-        "smiles": smiles,
+        # The string the user supplied. The species actually built is `smiles_built`, which is the
+        # same string unless the pH model changed it; `protonation` says whether and how.
+        "smiles": supplied_smiles,
+        "smiles_built": smiles,
+        "protonation": protonation,
         "n_conformers_embedded": len(conf_ids),
         "mmff_variant": mcfg["variant"],
         "selected_conformer": best,
@@ -258,6 +271,14 @@ def initial_structure_from_sdf(sdf_path: Path, out_dir: Path, cfg: dict) -> dict
 
     mol = read_single_sdf_molecule(sdf_path)
 
+    # The pH model, on the molecule as supplied. It adds and removes hydrogens and moves nothing
+    # else: when it changes nothing the object returned IS the one read, so a docked pose keeps
+    # every hydrogen it arrived with. A refusal here also leaves no directory behind.
+    from .ligand_protonation import ligand_protonation_settings, protonate_molecule
+
+    method, ph = ligand_protonation_settings(cfg)
+    mol, protonation = protonate_molecule(mol, ph, route="sdf", method=method)
+
     # Only now. Everything above can refuse, and a refusal must not leave a directory behind.
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -282,6 +303,7 @@ def initial_structure_from_sdf(sdf_path: Path, out_dir: Path, cfg: dict) -> dict
         # meanings apart for anyone reading the file.
         "smiles": Chem.MolToSmiles(mol),
         "smiles_origin": "derived from the supplied coordinates, not a supplied string",
+        "protonation": protonation,
         "coordinate_source": "supplied SDF, used as given (no embedding, no minimisation)",
         "source_file": {"path": sdf_path.name, "sha256": sha256_file(sdf_path)},
         "n_conformers_embedded": 0,
@@ -1071,10 +1093,25 @@ def _amide_candidates(topology, solute: set[int]) -> list[dict]:
     return out
 
 
+def peptide_like_residue_names(topology, kind) -> list[str]:
+    """The residue names the omega protection extends to, for a build of solute *kind*.
+
+    `peptide-like` is the whole-molecule route with a peptide map over it, so its one residue is a
+    peptide and keeps the protection a protein's residues have. Any other kind has none to name: a
+    `ligand`'s amides are scaled, and a `peptide` or `complex` is covered by the protein residue
+    table. ONE place decides this, so the build record and the scaler cannot disagree about it.
+    """
+    if str(kind or "") != "peptide-like":
+        return []
+    return sorted({r.name.upper() for r in topology.residues()
+                   if r.name.upper() not in PROTEIN_RESIDUES})
+
+
 def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
                                ligand_sdf: Optional[Path] = None,
                                residue_sdfs: Optional[dict] = None,
                                proline_like_residues: Iterable[str] = ("PRO",),
+                               peptide_like_residues: Iterable[str] = (),
                                max_proline_ring_size: int = 7,
                                unscaled_impropers: bool = True) -> dict:
     """Which of the solute's torsions REST2 leaves unscaled, with the evidence for each.
@@ -1137,6 +1174,19 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
     N-methylated amides are ordinary amides under both routes: an N-methyl nitrogen is neither
     proline-like nor ring-locked, and those bonds isomerise readily, so they must stay unscaled.
 
+    **THE OMEGA PROTECTION BELONGS TO PEPTIDES, NOT TO LIGANDS** (the user's decision of
+    2026-10-12; REST2 convention v4). The cis/trans argument above is about the peptide backbone:
+    a protein or a peptide-like macrocycle has a reference ensemble that never visits cis, and a
+    hot rung must not either. An amide in a small-molecule LIGAND has no such reference: a tertiary
+    amide has two real rotamers behind a barrier the cold run does not cross, which is what REST2
+    is for. So an amide whose nitrogen sits in a residue that is neither a protein residue nor
+    named in *peptide_like_residues* is SCALED, and recorded under ``ligand_amide_scaled_bonds``
+    -- seen and chosen, which must not read the same as never noticed (the urea precedent). The
+    protein residue table and *peptide_like_residues* keep the protection exactly as before, and a
+    person can still protect one ligand amide by name with ``unscaled_list``. Aromatic ring bonds
+    and double bonds are decided as ever: a ligand's lactam inside an aromatic ring is protected
+    as an aromatic bond, not as an amide.
+
     Returns ``unscaled_central_bonds`` (every class), ``central_bonds`` (each with its class,
     residue and evidence), ``proline_like_scaled_bonds``, ``unclassified``, ``unscaled_impropers``,
     ``detection_method``, ``detector_version`` and ``amide_detail``. **A non-empty unclassified list
@@ -1150,6 +1200,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
     solute = {int(i) for i in solute_atoms}
     candidates = _amide_candidates(topology, solute)
     pro_names = {str(x).upper() for x in proline_like_residues}
+    peptide_names = {str(x).upper() for x in peptide_like_residues}
     per_name = ({str(k).upper(): Path(v) for k, v in residue_sdfs.items()}
                 if residue_sdfs is not None else None)
 
@@ -1192,9 +1243,10 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         # The pattern is INTERPOLATED, not spelled again. Nothing else in the record says which
         # amide pattern classified it -- the detector stamp that used to is gone (v4) -- so a
         # hand-copied literal that drifted would make every record name a pattern that never ran.
-        method += (f"; residues {sorted(non_standard_names)} from RDKit SMARTS "
-                   f"{ORDINARY_AMIDE_SMARTS} over {source}, proline-like = amide N in a ring of "
-                   f"<= {max_proline_ring_size} atoms")
+        method += (f"; residues {sorted(non_standard_names)}: bond orders from {source}; the "
+                   f"amide pattern RDKit SMARTS {ORDINARY_AMIDE_SMARTS} is applied to the "
+                   f"peptide-like ones among them only ({sorted(peptide_names)}), where "
+                   f"proline-like = amide N in a ring of <= {max_proline_ring_size} atoms")
 
     # Per residue INSTANCE, when the evidence is per name: mapped lazily, once each.
     instance_info: dict[int, tuple] = {}
@@ -1211,7 +1263,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
                 instance_info[residue_index] = (None, str(refusal))
         return instance_info[residue_index]
 
-    unscaled, proline, urea, unknown = [], [], [], []
+    unscaled, proline, urea, ligand_amide, unknown = [], [], [], [], []
     for cand in candidates:
         if cand["ambiguous"]:
             unknown.append(dict(cand, evidence_missing=False)); continue
@@ -1228,6 +1280,19 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         # 2. A known protein residue is decided from the residue, as it always was.
         if residue_name in PROTEIN_RESIDUES:
             unscaled.append(cand); continue
+        # 2b. An amide INSIDE one non-protein residue is a LIGAND amide unless the residue is
+        #     declared peptide-like. It is scaled, needs no SDF to say so (the residue-level
+        #     check below still asks for bond orders, for the aromatic and double bonds), and is
+        #     recorded as a decision.
+        #
+        #     "Inside one residue" is the test, and it is deliberate. A BOND BETWEEN TWO RESIDUES
+        #     is a peptide bond whatever either residue is called: a hydroxyproline or a
+        #     phosphoserine in a protein chain is not in the residue table, and treating its
+        #     backbone as a ligand's would quietly scale an omega the protein's own reference
+        #     ensemble never leaves cis. Those fall through to the evidence below, which reads
+        #     bond orders or refuses -- exactly as before this rule existed.
+        if residue_name not in peptide_names and not cand["inter_residue"]:
+            ligand_amide.append(cand); continue
 
         # 3. Otherwise the residue cannot answer, so the molecule's bond orders must.  An
         #    unrecognised residue is still never ASSUMED to be an ordinary amide: with no SDF there
@@ -1385,7 +1450,9 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
     for entry in resolved:
         pair = tuple(sorted(entry["bond"]))
         entry["resolved_by"] = next(e["class"] for e in central if tuple(e["bond"]) == pair)
-    method += ("; aromatic ring and double bonds from PROTEIN_UNSCALED_BONDS for protein residues "
+    method += ("; amide omega unscaled for protein residues and peptide-like residues "
+               f"{sorted(peptide_names)} only, scaled in any other residue (a ligand); "
+               "aromatic ring and double bonds from PROTEIN_UNSCALED_BONDS for protein residues "
                "and from SDF bond orders otherwise; impropers "
                + ("unscaled" if unscaled_impropers else "scaled"))
     return {
@@ -1406,6 +1473,11 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         # Recognised as a urea and left SCALABLE. Recorded because "we saw it and chose not to
         # protect it" and "we never noticed it" must not look the same in a record.
         "urea_scaled_bonds": [c["bond"] for c in urea],
+        # An amide of a LIGAND (a residue that is neither a protein residue nor declared
+        # peptide-like), scaled by decision: the omega protection is for peptides. Recorded for the
+        # same reason as the urea above, and with the residue it was found in.
+        "ligand_amide_scaled_bonds": [c["bond"] for c in ligand_amide],
+        "peptide_like_residues": sorted(peptide_names),
         "unclassified": [u for u in unknown if u.get("evidence_missing")],
         "unnamed_scaled_bonds": [u for u in unknown if not u.get("evidence_missing")],
         # Amide candidates the aromatic or double-bond rule placed instead. Recorded rather than
@@ -1417,7 +1489,8 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         "unscaled_impropers": bool(unscaled_impropers),
         "detector_version": UNSCALED_TORSION_DETECTOR_VERSION,
         "detection_method": method,
-        "amide_detail": {"unscaled": unscaled, "proline_like_scaled": proline},
+        "amide_detail": {"unscaled": unscaled, "proline_like_scaled": proline,
+                         "ligand_scaled": ligand_amide},
     }
 
 
@@ -1458,6 +1531,7 @@ def unscaled_torsions(topology, solute_atoms: Iterable[int], *,
                       ligand_sdf: Optional[Path] = None,
                       residue_sdfs: Optional[dict] = None,
                       proline_like_residues: Iterable[str] = ("PRO",),
+                      peptide_like_residues: Iterable[str] = (),
                       max_proline_ring_size: int = 7,
                       unscaled_impropers: bool = True,
                       enforce: bool = True) -> dict:
@@ -1472,8 +1546,8 @@ def unscaled_torsions(topology, solute_atoms: Iterable[int], *,
     """
     result = classify_unscaled_torsions(
         topology, solute_atoms, ligand_sdf=ligand_sdf, residue_sdfs=residue_sdfs,
-        proline_like_residues=proline_like_residues, max_proline_ring_size=max_proline_ring_size,
-        unscaled_impropers=unscaled_impropers)
+        proline_like_residues=proline_like_residues, peptide_like_residues=peptide_like_residues,
+        max_proline_ring_size=max_proline_ring_size, unscaled_impropers=unscaled_impropers)
     unknown = result["unclassified"]
     if not unknown or not enforce:
         return result
@@ -1911,6 +1985,8 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
         unscaled_info = classify_unscaled_torsions(
             pdb.topology, range(n_solute_atoms), ligand_sdf=ligand_sdf, residue_sdfs=residue_sdfs,
             proline_like_residues=rcfg["proline_like_residues"],
+            peptide_like_residues=peptide_like_residue_names(
+                pdb.topology, (cfg.get("solute") or {}).get("kind")),
             max_proline_ring_size=int(rcfg["max_proline_ring_size"]),
         )
     else:

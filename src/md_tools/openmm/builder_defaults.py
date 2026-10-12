@@ -16,6 +16,7 @@ blocks: nothing read them after the stage chain replaced the old workflow manage
 `barostat_interval: 50` sitting beside the live `barostat_frequency_steps: 25` is exactly the kind
 of second declaration this module is not allowed to keep.
 """
+from .ligand_protonation import DEFAULT_LIGAND_PROTONATION, DEFAULT_PH
 from .system_defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT, EXPLICIT_COMBINATIONS
 
 #: Which combination the base carries is `defaults.DEFAULT_SOLVENT`, not a second spelling of it.
@@ -35,8 +36,9 @@ DEFAULTS = {'run': {'name': None, 'root': None, 'seed': 20260814},
                         'max_iterations': 1000,
                         'energy_tolerance': 1e-06,
                         'force_tolerance': 0.0001}},
- 'protonation': {'ph': 7.0,
+ 'protonation': {'ph': DEFAULT_PH,
                  'method': 'openmm',
+                 'ligand_method': DEFAULT_LIGAND_PROTONATION,
                  'overrides': [],
                  'histidine_proximity_angstrom': 5.0,
                  'near_ph_window': 1.0,

@@ -28,8 +28,8 @@ TWO QUESTIONS, answered separately (policy `md-tools-selective-rest2/1`):
                                                N-CA-CB-CG reaches backbone N and CA, and is
                                                still the sidechain's)
       peptide bond C(i)-N(i+1)             -> residue i's backbone (omega_i, IUPAC). Ordinary amide
-                                               omegas stay unscaled whoever owns them; this
-                                               decides the proline-like ones
+                                               omegas of protein residues stay unscaled whoever
+                                               owns them; this decides the proline-like ones
       disulfide SG-SG                      -> JOINTLY both sidechains: scaled only when both are
                                                selected, and reported when only one is
       within a ligand instance             -> that instance

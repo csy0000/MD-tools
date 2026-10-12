@@ -426,7 +426,8 @@ def test_each_small_molecule_gets_a_picture_with_its_unscaled_bond_in_red(tmp_pa
     assert drawn["MO1"]["file"] == "MO1-unscaled.png"
     for name in ("MO1", "MO2"):
         assert (out / f"{name}-unscaled.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
-    assert len(drawn["MO1"]["unscaled_bonds"]) == 7, "paracetamol's amide and six ring bonds"
+    assert len(drawn["MO1"]["unscaled_bonds"]) == 6, (
+        "paracetamol's six ring bonds; its amide is a LIGAND amide and is scaled (convention v4)")
     assert drawn["MO2"]["unscaled_bonds"] == [], "acetylpyrrolidine's amide is proline-like: scaled"
     assert _red_pixels(out / "MO1-unscaled.png") > 50, "the unscaled bond must be drawn red"
     assert _red_pixels(out / "MO2-unscaled.png") == 0, (
@@ -532,9 +533,9 @@ UREA_LIGAND = "CNC(=O)NC"
 
 
 def _refusal_config(**over):
-    """The three keys `_refusal_pictures` reads out of a resolved scaler configuration."""
+    """The keys `_refusal_pictures` reads out of a resolved scaler configuration."""
     return dict({"sdf_filelist": None, "proline_like_residues": ["PRO"],
-                 "max_proline_ring_size": 7}, **over)
+                 "peptide_like_residues": [], "max_proline_ring_size": 7}, **over)
 
 
 def test_a_refused_classification_draws_the_atom_index_picture_beside_the_system(tmp_path):

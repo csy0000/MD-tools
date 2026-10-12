@@ -77,11 +77,17 @@ def read_molecule(path: Path, *, cfg: Optional[dict] = None, work: Optional[Path
         mol = Chem.MolFromMolFile(prepared["solute_sdf"], removeHs=False)
         seed = ((cfg or {}).get("structure", {}).get("etkdg", {}).get("seed")
                 or (cfg or {}).get("run", {}).get("seed"))
-        return mol, (f"embedded from the SMILES {smiles} (ETKDGv3 seed {seed}, "
+        return mol, (f"embedded from the SMILES {prepared['smiles_built']}"
+                     f"{_protonation_note(prepared['protonation'])} (ETKDGv3 seed {seed}, "
                      f"{prepared['n_conformers_embedded']} conformers, "
                      f"{prepared['mmff_variant']}-minimised, lowest kept)")
+    from ..openmm.ligand_protonation import ligand_protonation_settings, protonate_molecule
+
+    method, ph = ligand_protonation_settings(cfg)
     if path.suffix.lower() == ".sdf":
-        return read_single_sdf_molecule(path), "read from the SDF, used as given"
+        mol, protonation = protonate_molecule(read_single_sdf_molecule(path), ph, route="sdf",
+                                              method=method)
+        return mol, "read from the SDF, used as given" + _protonation_note(protonation)
     mol = Chem.MolFromMol2File(str(path), removeHs=False, sanitize=True)
     if mol is None:
         raise ConfigError(
@@ -95,7 +101,15 @@ def read_molecule(path: Path, *, cfg: Optional[dict] = None, work: Optional[Path
             f"-i {path}: carries no explicit hydrogens. The molecule is parameterised exactly as "
             f"given and none are added, so an implicit-hydrogen file would be parameterised as "
             f"its heavy-atom skeleton.")
-    return mol, "read from the mol2, used as given"
+    mol, protonation = protonate_molecule(mol, ph, route="mol2", method=method)
+    return mol, "read from the mol2, used as given" + _protonation_note(protonation)
+
+
+def _protonation_note(record: dict) -> str:
+    """The sentence the log's `coordinates` line carries about the pH step."""
+    from ..openmm.ligand_protonation import protonation_summary
+
+    return f"; protonation: {protonation_summary(record)}"
 
 
 def _ligand_system(package) -> str:
