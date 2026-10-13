@@ -20,6 +20,7 @@ size.
 |---|---|---|
 | [**Alanine dipeptide**](ALA/index.md) | the toy: two torsions with barriers a plain run crosses, so a method can be checked against the truth | cMD, REST2, AIS |
 | [**Paracetamol**](paracetamol/index.md) | a ligand on its own: parameterise once, reuse everywhere | cMD, REST2, AIS |
+| [**Ligand parameterization**](ligand-parameterization/index.md) | how a small molecule is prepared before any run: protonation at pH 7, parameters, and which torsions REST2 heats — paracetamol as a ligand, c(RGDfV) as a peptide-like molecule | parameterization, REST2 scaler |
 | [**Chignolin**](chignolin/index.md) | a folding peptide: a real equilibrium, small enough to compare methods in a day | cMD, REST2 |
 | [**Barnase + barstar**](barnase-barstar/index.md) | a protein–protein interface: the coordinate is between two molecules | cMD |
 | [**TYK2 + ejm_31**](tyk2-ejm31/index.md) | a kinase with a real inhibitor: where a hot region is worth CHOOSING | cMD, selective REST2, AIS |
@@ -41,6 +42,7 @@ Run on NVIDIA RTX 3080 GPUs with CUDA and mixed precision.
 
 | page | version it was run against |
 |---|---|
+| [ligand parameterization](ligand-parameterization/index.md) | `0.6.5` development branch (`171a708e`), CPU only |
 | [paracetamol / cMD](paracetamol/cMD.md) | `0.6.1` |
 | [paracetamol / REST2](paracetamol/REST2.md) | `0.6.1` |
 | [paracetamol / AIS](paracetamol/AIS.md) | `0.6.1` |

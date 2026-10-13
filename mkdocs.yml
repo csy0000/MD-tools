@@ -145,6 +145,7 @@ nav:
               - Free energy of each torsion: tutorial/paracetamol/analysis/pmf-1d.ipynb
               - Clustering, pruning, summary: tutorial/paracetamol/analysis/clustering.ipynb
               - Which torsions move together: tutorial/paracetamol/analysis/mutual-information.ipynb
+      - Ligand parameterization: tutorial/ligand-parameterization/index.md
       - Chignolin:
           - The system: tutorial/chignolin/index.md
           - cMD: tutorial/chignolin/cMD.md
