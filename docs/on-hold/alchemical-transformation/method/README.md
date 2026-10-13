@@ -1,5 +1,8 @@
 # Alchemical topology
 
+!!! warning "On hold"
+    Alchemical transformation is on hold as of 2026-10-13 and is not part of the current release. This page was last run against 0.6.4. See [On hold](../../index.md).
+
 A ligand parameter package and the built environment holding it — plus, for a transformation, a
 second package and an atom map between them — combined into **one topology plan**: two endpoint
 Systems over a single particle index space, plus the record that says exactly how they were built.
@@ -28,7 +31,7 @@ The five λ components are named as OpenFE and `openmmtools` name them — `lamb
 linearly across the whole path, unstaged, as OpenFE's reference schedule does. That vocabulary is
 adopted deliberately so records are mutually readable and a cross-implementation comparison is
 possible; **nothing here imports OpenFE.** See
-[scientific defaults §13](../../scientific-defaults.md).
+[scientific defaults §13](../../../scientific-defaults.md).
 
 Not implemented, and refused by name rather than approximated: `lambda_path: staged` (a faithful
 staged path is DIRECTIONAL — it needs each region labelled as inserting or deleting, which this
@@ -286,5 +289,5 @@ edited proposal is refused, and that every accepted key does its job or is refus
 
 ## Related
 
-* [The methods index](../README.md) — the four protocols `build-md` generates today
-* [The dataset contract](../../structure/project-data.md) — the schema-level authority for records
+* [The methods index](../../../openmm_methods/README.md) — the four protocols `build-md` generates today
+* [The dataset contract](../../../structure/project-data.md) — the schema-level authority for records

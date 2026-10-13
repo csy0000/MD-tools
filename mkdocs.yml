@@ -196,11 +196,23 @@ nav:
           - AIS:
               - openmm_methods/AIS/README.md
               - Implementation: openmm_methods/AIS/AIS_implementation.md
-      - Free energy:
-          - Alchemical topology: openmm_methods/alchemy/README.md
-          - What the runtime computes: openmm_methods/alchemy/validation.md
       - Analysis:
           - openmm_methods/analysis/README.md
+  - On hold:
+      - on-hold/index.md
+      - Alchemical transformation:
+          - on-hold/alchemical-transformation/index.md
+          - Alchemical topology: on-hold/alchemical-transformation/method/README.md
+          - What the runtime computes: on-hold/alchemical-transformation/method/validation.md
+          - Ethanol, hydration free energy:
+              - The system: on-hold/alchemical-transformation/tutorial/ethanol/index.md
+              - Hydration free energy: on-hold/alchemical-transformation/tutorial/ethanol/hydration.md
+              - Analysis:
+                  - on-hold/alchemical-transformation/tutorial/ethanol/analysis/index.md
+                  - Four estimators, one dataset: on-hold/alchemical-transformation/tutorial/ethanol/analysis/free-energy.ipynb
+          - Ethane to chloroethane, relative:
+              - The system: on-hold/alchemical-transformation/tutorial/ethane-chloroethane/index.md
+              - Relative hydration free energy: on-hold/alchemical-transformation/tutorial/ethane-chloroethane/relative.md
   - Reference:
       - Scientific defaults: scientific-defaults.md
       - Support matrix: support-matrix.md

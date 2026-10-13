@@ -1,5 +1,8 @@
 # What the alchemical runtime has been shown to compute
 
+!!! warning "On hold"
+    Alchemical transformation is on hold as of 2026-10-13 and is not part of the current release. This page was last run against 0.6.4. See [On hold](../../index.md).
+
 The topology builder is checked by its own refusals; the **runtime** — softcore mixing, the λ
 ladder, the window sampler and the estimators — can only be checked against a free energy somebody
 else already knows. This page records that check and nothing else. Every number here came from a
@@ -12,7 +15,7 @@ its environment is switched off across twelve λ windows, and MBAR turns the sam
 energy. ΔG_hyd = −ΔG(decouple).
 
 Then the same quantity is computed a **second, unrelated way**. An earlier campaign
-([0.7.0 M2](../../development/0.7.0/handoffs/S4-acceptance-matrix.md)) obtained the *relative*
+([0.7.0 M2](../../../development/0.7.0/handoffs/S4-acceptance-matrix.md)) obtained the *relative*
 hydration free energy of ethane → chloroethane by **mutating one molecule into the other** — a
 different plan, a different Hamiltonian, different particles appearing and disappearing. Two routes
 through the same thermodynamic cycle must land on the same difference:
@@ -138,5 +141,5 @@ is reported, never gated on.
 ## Related
 
 * [Alchemical topology](README.md) — the builder, its configuration and its refusals
-* [0.7.0 acceptance matrix](../../development/0.7.0/handoffs/S4-acceptance-matrix.md) — where the
+* [0.7.0 acceptance matrix](../../../development/0.7.0/handoffs/S4-acceptance-matrix.md) — where the
   mutation route's number comes from, row M2.5

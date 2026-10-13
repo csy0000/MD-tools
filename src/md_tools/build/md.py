@@ -143,7 +143,7 @@ def _alchemical_endpoint_names(plan_object) -> tuple[str, str]:
 
     So a decoupling's ends are named by what they ARE, and with the names the cycle module already
     uses (`coupled` / `decoupled`) rather than a second spelling invented here: the hydration
-    campaign in `docs/openmm_methods/alchemy/validation.md` labelled its legs through
+    campaign in `docs/on-hold/alchemical-transformation/method/validation.md` labelled its legs through
     `md_tools.alchemy.cycles`, and a generated leg must be comparable with those records.
     """
     from ..alchemy.cycles import COUPLED, DECOUPLED

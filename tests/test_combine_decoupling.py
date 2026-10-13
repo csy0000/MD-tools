@@ -3,7 +3,7 @@
 `md_tools.alchemy.topology.build_decoupling_plan` has existed since the plan builder did, but
 until 0.6.4 `combine-topology` offered only single, hybrid and dual -- so the simplest alchemical
 calculation there is, decoupling one small molecule from water, was reachable only from Python. The
-nine-leg hydration campaign behind `docs/openmm_methods/alchemy/validation.md` was driven that way.
+nine-leg hydration campaign behind `docs/on-hold/alchemical-transformation/method/validation.md` was driven that way.
 
 THE TEST THAT MATTERS is `test_the_cli_plan_is_the_same_plan_the_python_api_builds`: the published
 hydration numbers were produced through the Python entry point, so a CLI that built a merely
