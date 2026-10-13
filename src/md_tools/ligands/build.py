@@ -124,6 +124,10 @@ def attach_ligand_package(*, prepared_sdf: Path, prepared_pdb: Path, settings: d
 
     resource = settings["forcefield"]
     mode = settings.get("parameters") or "search"
+    refinement = settings.get("refinement")
+    if refinement and is_gaff(resource):
+        raise PackageError("solute.torsion_refinement refines a SMIRNOFF force field; "
+                           f"solute.ligand_forcefield {resource!r} is GAFF")
     if is_gaff(resource):
         if mode not in ("search", "generate"):
             raise PackageError("solute.parameters names a package, but solute.ligand_forcefield "
@@ -148,7 +152,7 @@ def attach_ligand_package(*, prepared_sdf: Path, prepared_pdb: Path, settings: d
         # would actually run here -- which AM1-BCC implementation, which NAGL model -- rather than
         # trusting the label in the configuration.
         request = requested_criteria(mol, charge_method=settings["charge_method"],
-                                     forcefield=resource)
+                                     forcefield=resource, refinement=refinement)
         found, search = search_for_match(request, roots)
         search["request"] = request
         if found is not None:
@@ -161,7 +165,8 @@ def attach_ligand_package(*, prepared_sdf: Path, prepared_pdb: Path, settings: d
             mol, compound_id=compound_id, residue_name=residue_name, out_root=root,
             forcefield=resource, charge_method=settings["charge_method"],
             aliases=settings.get("aliases") or (),
-            source={"input": settings.get("input_name"), "input_sha256": settings.get("input_sha256")})
+            source={"input": settings.get("input_name"), "input_sha256": settings.get("input_sha256")},
+            refinement=refinement)
         positions, permutation = order_like_package(mol, package, where="the prepared molecule")
         how = "created"
     # STATED ALIASES THAT DID NOT LAND. Aliases are written only into a package this build

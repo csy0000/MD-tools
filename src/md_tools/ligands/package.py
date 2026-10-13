@@ -154,6 +154,7 @@ class LigandPackage:
             "parameter_digest": self.metadata["parameter_digest"],
             "chemical_state_digest": self.metadata["chemical_state"]["digest"],
             "forcefield": self.metadata["forcefield"]["resource"],
+            "refinement": (self.metadata["forcefield"].get("refinement") or {}).get("method"),
             "charge_method": self.metadata["charges"]["method"],
             # WHICH implementation produced the charges, or the fact that this package does not
             # say. A package that does not say can be used when a configuration names it, and is
@@ -512,7 +513,8 @@ def _finish_package(*, mol, names: list[str], raw_ffxml: str, reference_table: d
                     compound_id: str, aliases: Sequence[str], residue_name: str, resource: str,
                     charges: dict[str, Any], provenance: dict[str, Any], out_root: Path,
                     reference_label: str, missing_bonds_ok: Iterable = (),
-                    skip_masses: bool = False) -> "LigandPackage":
+                    skip_masses: bool = False,
+                    refinement: Optional[dict[str, Any]] = None) -> "LigandPackage":
     """Rename, hash, verify against the reference, write, and load back through `load_package`."""
     state = chemical_state(mol)
     placeholder_ffxml, _ = rename_ffxml(raw_ffxml, template_name="MDT_PENDING",
@@ -547,7 +549,8 @@ def _finish_package(*, mol, names: list[str], raw_ffxml: str, reference_table: d
                    "partial_charge_e": table["atoms"][i][2]}
                   for i, atom in enumerate(mol.GetAtoms())],
         "net_partial_charge_e": table["net_charge_e"],
-        "forcefield": {"family": "smirnoff", "resource": resource},
+        "forcefield": {"family": "smirnoff", "resource": resource,
+                       **({"refinement": refinement} if refinement else {})},
         "charges": charges,
         "nonbonded_conventions": {**table["conventions"], "ffxml_normalisation": normalisation},
         "parameter_table_schema": PARAMETER_TABLE_SCHEMA,
@@ -610,8 +613,15 @@ def _common_checks(compound_id: str, residue_name: str, resource: str) -> tuple[
 def create_package(mol, *, compound_id: str, residue_name: str, out_root: Path,
                    forcefield: str = "sage-2.2.1", charge_method: str = "am1bcc",
                    aliases: Sequence[str] = (), atom_names: Optional[Sequence[str]] = None,
-                   source: Optional[dict[str, Any]] = None) -> LigandPackage:
-    """Parameterise *mol* once and write the package. The ONLY charge-generating entry point."""
+                   source: Optional[dict[str, Any]] = None,
+                   refinement: Optional[dict[str, Any]] = None) -> LigandPackage:
+    """Parameterise *mol* once and write the package. The ONLY charge-generating entry point.
+
+    *refinement* is a verified record from `md_tools.ligands.refinement.refinement_record`: the
+    parameters then come from its `.offxml` (the base force field plus fitted torsions) instead of
+    the stock resource, and the package records the method and the file's hash. The charges are
+    still generated here, once, and still win over the `.offxml`'s own library charges.
+    """
     compound_id, residue_name, resource = _common_checks(compound_id, residue_name, forcefield)
     mol = _prepared_molecule(mol)
     names = _check_atom_names(atom_names if atom_names is not None else default_atom_names(mol),
@@ -620,15 +630,19 @@ def create_package(mol, *, compound_id: str, residue_name: str, out_root: Path,
     charges = _generate_charges(offmol, charge_method)
     charge_values = [float(q) for q in offmol.partial_charges.m]
     offmol = _offmol(mol, charge_values)
-    raw_ffxml, reference_system = _smirnoff_ffxml(offmol, resource)
+    raw_ffxml, reference_system = _smirnoff_ffxml(
+        offmol, refinement["offxml_path"] if refinement else resource)
     c14, lj14 = nonbonded_scales(raw_ffxml)
     reference_table = parameter_table(reference_system, mol, coulomb14scale=c14, lj14scale=lj14)
+    from .refinement import package_refinement
+
     return _finish_package(
         mol=mol, names=names, raw_ffxml=raw_ffxml, reference_table=reference_table,
         compound_id=compound_id, aliases=aliases, residue_name=residue_name, resource=resource,
         charges={**charges, "source": "generated"},
         provenance={"route": "generated", "source": source or {}},
-        out_root=out_root, reference_label=f"the {resource} System openmmforcefields built")
+        out_root=out_root, reference_label=f"the {resource} System openmmforcefields built",
+        refinement=package_refinement(refinement))
 
 
 def import_package_from_system(mol, *, system, atom_indices: Sequence[int], compound_id: str,

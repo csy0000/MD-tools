@@ -237,7 +237,8 @@ def parameterize_ligand(*, input_path: Path, config_path: Optional[Path], out_pd
     log.field("residue name", residue_name)
 
     log.heading("Resolved configuration")
-    for key in ("ligand_forcefield", "ligand_charge_method", "compound_id", "parameters"):
+    for key in ("ligand_forcefield", "ligand_charge_method", "torsion_refinement", "compound_id",
+                "parameters"):
         origin = "set" if key in stated.get("solute", ()) else "default"
         log.field(f"solute.{key}", f"{resolved['solute'][key]}   ({origin})")
 
@@ -257,9 +258,23 @@ def parameterize_ligand(*, input_path: Path, config_path: Optional[Path], out_pd
 
             Chem.MolToMolFile(Chem.Mol(mol), str(prepared_sdf))
             Chem.MolToPDBFile(Chem.Mol(mol), str(prepared_pdb))
+            from ..ligands.refinement import RefinementError, resolve_refinement
+
+            try:
+                refinement = resolve_refinement(
+                    resolved["solute"], base_forcefield=sys_resolved["forcefield"]["ligand"],
+                    config_dir=(Path(config_path).parent if config_path else Path.cwd()))
+            except RefinementError as exc:
+                raise ConfigError(str(exc)) from exc
+            if refinement is not None:
+                log.field("torsion refinement", f"{refinement['method']} -- {refinement['offxml']} "
+                          f"(sha256 {refinement['offxml_sha256'][:12]}, adds "
+                          f"{len(refinement['added_proper_torsion_ids'])} proper torsion(s) to "
+                          f"{refinement['base_file']})")
             attached = attach_ligand_package(
                 prepared_sdf=prepared_sdf, prepared_pdb=prepared_pdb, staging=staging,
                 settings={
+                    "refinement": refinement,
                     "forcefield": sys_resolved["forcefield"]["ligand"],
                     "charge_method": sys_resolved["forcefield"]["ligand_charge_method"],
                     "compound_id": resolved["solute"]["compound_id"],

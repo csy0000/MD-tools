@@ -1351,7 +1351,21 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     if not peptide and not complex_build:
         # A single molecule gets a package: reused if `solute.parameters` names one, created once
         # otherwise. The builder attaches it before its first force field is built.
+        from ..ligands.refinement import RefinementError, resolve_refinement
+
+        try:
+            refinement = resolve_refinement(
+                resolved["solute"], base_forcefield=sys_resolved["forcefield"].get("ligand"),
+                config_dir=(Path(config_path).parent if config_path else Path.cwd()))
+        except RefinementError as exc:
+            raise ConfigError(str(exc)) from exc
+        if refinement is not None:
+            log.field("torsion refinement", f"{refinement['method']} -- {refinement['offxml']} "
+                      f"(sha256 {refinement['offxml_sha256'][:12]}, adds "
+                      f"{len(refinement['added_proper_torsion_ids'])} proper torsion(s) to "
+                      f"{refinement['base_file']})")
         cfg["ligand_package"] = {
+            "refinement": refinement,
             "forcefield": sys_resolved["forcefield"].get("ligand"),
             "charge_method": sys_resolved["forcefield"].get("ligand_charge_method"),
             "compound_id": resolved["solute"]["compound_id"],

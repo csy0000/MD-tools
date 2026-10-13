@@ -1,38 +1,49 @@
 # Ligand parameterization
 
-**Tested against md-tools `0.6.5` (development branch, commit `171a708e`), CPU only.** Nothing on this page
-needs a GPU: it prepares a small molecule and writes the REST2 states, and stops before any
-dynamics. Every block of output below is from that run.
+**Tested against md-tools `0.6.5` (development branch), CPU only for everything on this page except
+the torsion fit, which ran on three GPUs and is described in section 3.** Nothing here runs dynamics:
+the page prepares small molecules and writes the REST2 states, and stops there. Every block of
+output is from that run.
 
 Two molecules, one question each:
 
 | molecule | what it is | the question |
 |---|---|---|
-| **Paracetamol** | a 20-atom ligand, one acetamide | how is a ligand protonated, parameterised, and scaled? |
+| **Paracetamol** | a 20-atom ligand with one acetamide | how is a ligand protonated, parameterised, and scaled — with Sage's torsions, and with torsions refitted to MACE-OMOL? |
 | **c(RGDfV)** | a cyclic pentapeptide that is not a protein: `solute.kind: peptide-like` | which torsions does REST2 protect, and which does it heat? |
 
-The preparation has three steps, in this order, and each one is recorded in the build log.
+Both are prepared the same way: **pH 7.4, AM1-BCC charges, Sage 2.2.1.** The three steps run in this
+order, and each is recorded in the build log:
 
-1. **Protonation at a stated pH** — Open Babel, pH 7.0 by default.
-2. **Parameters** — Sage 2.2.1 and AM1-BCC charges, once, into a reusable package.
-3. **Which torsions REST2 will heat** — decided when the scaled states are written, from the
-   molecule's bond orders and what kind of molecule it is.
+1. **Protonation at a stated pH**, by Open Babel.
+2. **Parameters**: Sage 2.2.1 torsions (or refitted ones) and AM1-BCC charges, once, into a reusable package.
+3. **Which torsions REST2 will heat**, decided when the scaled states are written.
 
 ## 1. Protonation comes first
 
-`protonation.ligand_method` is `openbabel` by default and `protonation.ph` is `7.0`. Open Babel's
-pH model (`OBMol.AddHydrogens(False, True, pH)`, the call behind `obabel -p`) runs on the molecule
-**before** the charges are calculated, for a `.smi`, `.sdf` or `.mol2`:
+`protonation.ligand_method` is `openbabel` by default, and `protonation.ph` is the pH it is applied
+at. This page states `7.4` in every configuration:
+
+```yaml
+protonation:
+  ph: 7.4
+```
+
+!!! note "The default is 7.0"
+    `protonation.ph` defaults to `7.0` and is shared with the protein half of a build. Every
+    configuration on this page sets `7.4` explicitly, which is why you will see it in each log.
+
+Open Babel's pH model (`OBMol.AddHydrogens(False, True, pH)`, the call behind `obabel -p`) runs on
+the molecule **before** the charges are calculated, for a `.smi`, `.sdf` or `.mol2`:
 
 ```bash
 echo "CC(=O)O acetic-acid" > acid.smi
-printf 'solute:\n  kind: ligand\n  parameters: generate\n' > acid.config
 md-openmm build-top --parameterize -i acid.smi --config acid.config \
     -op parameter/ACT.pdb -os parameter/ACT.xml -log parameterize.log --resname ACT
 ```
 
 ```text
-  coordinates   embedded from the SMILES CC(=O)[O-]; protonation: Open Babel 3.2.1 at pH 7.0:
+  coordinates   embedded from the SMILES CC(=O)[O-]; protonation: Open Babel 3.2.1 at pH 7.4:
                 net charge +0 -> -1; CC(=O)O -> CC(=O)[O-]
   package       LOCAL-QTBSBXVTEAMEQO/param_c565813e02ae   (created)
 ```
@@ -41,6 +52,7 @@ The acid was parameterised as acetate. To parameterise a molecule exactly as wri
 
 ```yaml
 protonation:
+  ph: 7.4
   ligand_method: none
 ```
 
@@ -55,19 +67,19 @@ state, so the neutral acid and the acetate never match each other in a search.
 
 !!! warning "What this is not"
     It is a table of functional-group rules, **not a pKa predictor**. A carboxylic acid is ionised
-    and an aliphatic amine protonated at pH 7; a phosphate and an imidazole are left as written.
+    and an aliphatic amine protonated at this pH; a phosphate and an imidazole are left as written.
     It changes hydrogens and formal charges only, and a result that changes the heavy-atom graph or
     the stereochemistry is refused. A molecule it leaves unchanged is used as the same object, so a
     docked pose keeps its hydrogens. Open Babel missing is an error, never a fall back to `none`.
 
-Both molecules below are left unchanged at pH 7.0 — paracetamol has nothing to ionise, and the
-RGDfV SMILES is already written as the zwitterion — and the log says so:
+Both molecules below are left unchanged — paracetamol has nothing to ionise, and the RGDfV SMILES is
+already written as the zwitterion — and the log says so:
 
 ```text
-  ligand protonation   Open Babel 3.2.1 at pH 7.0: no change
+  ligand protonation   Open Babel 3.2.1 at pH 7.4: no change
 ```
 
-## 2. A ligand: paracetamol
+## 2. A ligand: paracetamol with Sage's torsions
 
 ```bash
 echo "CC(=O)Nc1ccc(O)cc1 paracetamol" > paracetamol.smi
@@ -81,6 +93,8 @@ solute:
   compound_id: CHEMBL112
   aliases: [paracetamol, acetaminophen, TYL]
   parameters: generate
+protonation:
+  ph: 7.4
 ```
 
 ```bash
@@ -96,24 +110,26 @@ md-openmm build-top --parameterize -i paracetamol.smi --config para.config \
 
 The identity `param_e932f4c4f371` is the one the [paracetamol tutorials](../paracetamol/index.md)
 use: the package is identified by its chemical state and its parameters, so the same molecule
-reproduces the same package. Then the box, reusing that package:
+reproduces the same package. Then the box, reusing that package (`build.config`):
 
 ```yaml
 solute:
   kind: ligand
-  parameters: ./parameter
+  parameters: ../parameter
 solvent:
   model: TIP3P
   padding_nm: 1.0
+protonation:
+  ph: 7.4
 ```
 
 ```bash
-md-openmm build-top -i parameter/TYL.sdf --config build.config -os built.xml -op built.pdb -log built.log
-cp parameter/TYL.sdf .        # the bond orders the scaler reads, beside the System
+md-openmm build-top -i ../parameter/TYL.sdf --config build.config -os built.xml -op built.pdb -log built.log
+cp ../parameter/TYL.sdf .        # the bond orders the scaler reads, beside the System
 ```
 
 ```text
-  ligand pH    : Open Babel 3.2.1 at pH 7.0: no change
+  ligand pH    : Open Babel 3.2.1 at pH 7.4: no change
   parameters   : CHEMBL112/param_e932f4c4f371 (reused (stated reference))
   solvation    : 580 waters, ions {'NA': 2, 'CL': 2}, box dodecahedron (18.5 nm^3)
 ```
@@ -167,10 +183,103 @@ improper terms      24  (unscaled)
 `TYL:C2-N1 (1-3)` is the acetamide C–N, scaled along with the methyl, the ring–nitrogen and the
 hydroxyl rotations.
 
-## 3. A peptide-like molecule: c(RGDfV)
+## 3. The same ligand with MACE-OMOL-refitted torsions
+
+Sage's torsions are fitted to a broad set of molecules. For one molecule they can be refitted
+against a reference of your choosing: BespokeFit scans each rotatable bond, relaxing the molecule at
+every step, and fits new torsion terms to the energy profile. This page uses **MACE-OMOL-0
+(`extra_large`)** as the reference, so `torsion_refinement` is `mace-omol-bespokefit`.
+
+**The fit is not run by `build-top`.** It takes minutes to hours and uses GPUs, so it is never
+implied by a build. You run BespokeFit in an environment you install and name yourself (BespokeFit,
+QCEngine, `mace-torch` and the model weights are not part of this package's environment), and
+`build-top` consumes the `.offxml` it writes. Asking for a refinement without that file is an error,
+never a quiet fall back to Sage's torsions.
+
+The fit used here, for the record:
+
+| | |
+|---|---|
+| starting force field | Sage 2.2.1 (the unconstrained file BespokeFit fits against) |
+| charges | the package's AM1-BCC charges, held fixed through every evaluation |
+| reference | MACE-OMOL-0 `extra_large`, on three GPUs |
+| scans | two 1-D torsion drives (24 points each, 15° grid), each point relaxed |
+| result | converged in 4 ForceBalance iterations; 8.3 minutes in all |
+| refitted bonds | the acetamide C–N and the N–aryl bond |
+
+Validation against held-out MACE-OMOL scans (constrained optimisations half a grid step away, from a
+different conformer), relaxed-scan RMSE in kcal/mol:
+
+| torsion | barrier | Sage 2.2.1 | refitted |
+|---|---|---|---|
+| acetamide C–N | 12.8 | 1.48 | **0.62** |
+| N–aryl | 2.3 | 1.91 | **0.35** |
+
+The fitted file is beside this page, `data/ligand_sage_mace.offxml`. Name it in the configuration
+(`para-bespoke.config`):
+
+```yaml
+solute:
+  kind: ligand
+  compound_id: CHEMBL112
+  aliases: [paracetamol, acetaminophen, TYL]
+  parameters: generate
+  torsion_refinement: mace-omol-bespokefit
+  refinement_offxml: data/ligand_sage_mace.offxml
+protonation:
+  ph: 7.4
+```
+
+```bash
+md-openmm build-top --parameterize -i paracetamol.smi --config para-bespoke.config \
+    -op parameter-bespoke/TYL.pdb -os parameter-bespoke/TYL.xml \
+    -log parameterize-bespoke.log --resname TYL
+```
+
+```text
+  solute.torsion_refinement   mace-omol-bespokefit   (set)
+  torsion refinement          mace-omol-bespokefit -- ligand_sage_mace.offxml (sha256 fb4121f2299f,
+                              adds 6 proper torsion(s) to openff_unconstrained-2.2.1.offxml)
+  package                     CHEMBL112/param_2f4449d70b95   (created)
+  charges                     am1bcc / am1bcc by ambertools-sqm
+```
+
+The file is **verified, not trusted**: it must hold every proper torsion of Sage 2.2.1 unchanged, and
+add at least one. A stock file is refused ("it is the stock force field, and a package built from it
+would be a stock package under another name"), and so is a different base.
+
+The package is a different package — `param_2f4449d70b95` against `param_e932f4c4f371` — because its
+parameters are different. On the two refitted bonds, summed over every torsion across them (kJ/mol):
+
+| bond | Sage 2.2.1 | MACE-OMOL refit |
+|---|---|---|
+| acetamide C–N | k₁ 5.36, k₂ 33.22 | k₁ 5.36, k₂ 33.22, **k₃ 3.55** |
+| N–aryl | k₂ 23.80 | k₂ **13.18**, **k₄ 1.25** |
+
+The package records the method and the file's hash, and a search treats them as part of its
+identity: a refined package never matches a request for stock Sage, nor one refined another way.
+
+### Which torsions REST2 heats now
+
+The same scaler command, on a box built from the refitted package (`parameters: ../parameter-bespoke`):
+
+```text
+  unscaled torsions   amide omega 0 bond(s), non rotatable 6 bond(s), impropers 24 term(s)
+                      48 torsion term(s) unscaled, 46 scaled
+  ligand amides       1 bond(s), scaled (the omega protection is for peptides; peptide-like
+                      residues: none, from build record built.log (solute.kind: ligand))
+```
+
+The classification is the same — one scaled amide, six protected ring bonds, 24 impropers — because
+which bonds are protected depends on the chemistry and not on the torsion parameters. What changed
+is how much there is to scale: **46 scaled torsion terms against 26**, because the refit adds terms
+(periodicities 3 and 4) to the two bonds it refits.
+
+## 4. A peptide-like molecule: c(RGDfV)
 
 Cyclo(Arg–Gly–Asp–D-Phe–Val) is a peptide, but not a protein: it has no chain template, so it is
-read from a `.smi` and parameterised by Sage like a ligand. `kind: peptide-like` says so:
+read from a `.smi` and parameterised by Sage like a ligand. `kind: peptide-like` says so. No torsion
+refinement is applied to it.
 
 ```text
 CC(C)[C@@H]1NC(=O)[C@@H](Cc2ccccc2)NC(=O)[C@H](CC(=O)[O-])NC(=O)CNC(=O)[C@H](CCCNC(N)=[NH2+])NC1=O RGDfV
@@ -184,6 +293,8 @@ solute:
   residue_name: RGD
 solvent:
   model: GBn2
+protonation:
+  ph: 7.4
 ```
 
 ```bash
@@ -193,7 +304,7 @@ md-openmm build-top -i RGDfV.smi -os built.xml -op built.pdb -log built.log --co
 ```text
   built 79 particles, 1 residues, implicit GBn2
   ligand packages     LOCAL-YYQUWEHEBOMRPH/param_7b0e047357d8 (written)
-  ligand protonation  Open Babel 3.2.1 at pH 7.0: no change
+  ligand protonation  Open Babel 3.2.1 at pH 7.4: no change
 ```
 
 The same scaler command on this System:
@@ -230,8 +341,8 @@ improper terms      63  (unscaled)
 ```
 
 Everything that can rotate and is not an amide ω is scaled: the Cα–C and N–Cα bonds (φ, ψ), the
-valine, phenylalanine, aspartate and arginine side-chain rotations, and the 23 bonds in all. Only
-three kinds of bond stay at τ = 0:
+valine, phenylalanine, aspartate and arginine side-chain rotations, 23 bonds in all. Only three
+kinds of bond stay at τ = 0:
 
 * the **amide ω** bonds, as above;
 * an **aromatic ring** bond or a **double** bond, which has no other conformer to reach: the
@@ -266,7 +377,8 @@ over the build record, an empty list included.
 
 | | ligand | peptide-like |
 |---|---|---|
-| protonation | Open Babel, pH 7.0 | Open Babel, pH 7.0 |
+| protonation | Open Babel, the stated pH | Open Babel, the stated pH |
+| torsions | Sage 2.2.1, or refitted (`torsion_refinement`) | Sage 2.2.1 |
 | amide ω | **scaled** | **protected** |
 | aromatic ring and double bonds | protected | protected |
 | impropers | protected | protected |

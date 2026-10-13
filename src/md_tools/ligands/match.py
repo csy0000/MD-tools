@@ -130,7 +130,11 @@ def charge_identity(method: str, *, scheme: Optional[str], backend_id: Optional[
                       if model else None)}
 
 
-def requested_criteria(mol, *, charge_method: str, forcefield: str) -> dict[str, Any]:
+from .refinement import refinement_identity as _refinement_identity  # noqa: E402
+
+
+def requested_criteria(mol, *, charge_method: str, forcefield: str,
+                       refinement: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """What a build is ABOUT to produce, resolved without computing anything expensive.
 
     The charge implementation is resolved the way `create_package` would resolve it in this
@@ -163,7 +167,8 @@ def requested_criteria(mol, *, charge_method: str, forcefield: str) -> dict[str,
             "protonation": {k: chemical_state(prepared)[k] for k in
                             ("digest", "fixed_h_inchikey", "net_formal_charge", "canonical_smiles")},
             "charges": charges,
-            "forcefield": {"family": "smirnoff", "resource": str(forcefield)}}
+            "forcefield": {"family": "smirnoff", "resource": str(forcefield),
+                           "refinement": _refinement_identity(refinement)}}
 
 
 def criteria_of_metadata(metadata: dict[str, Any], mol) -> dict[str, Any]:
@@ -184,7 +189,9 @@ def criteria_of_metadata(metadata: dict[str, Any], mol) -> dict[str, Any]:
                                        backend_id=charges.get("backend_id"),
                                        model=charges.get("model"), allow_unknown=True),
             "forcefield": {"family": metadata["forcefield"]["family"],
-                           "resource": metadata["forcefield"]["resource"]}}
+                           "resource": metadata["forcefield"]["resource"],
+                           "refinement": _refinement_identity(
+                               metadata["forcefield"].get("refinement"))}}
 
 
 def matches(request: dict[str, Any], candidate: dict[str, Any]) -> MatchVerdict:
@@ -225,6 +232,11 @@ def matches(request: dict[str, Any], candidate: dict[str, Any]) -> MatchVerdict:
             same = want["resource"] == have["resource"]
             why = "same" if same else (f"a different force field ({have['resource']} is not "
                                        f"{want['resource']})")
+            if same and want.get("refinement") != have.get("refinement"):
+                same = False
+                label = lambda r: "none" if not r else f"{r['method']} ({r['offxml_sha256'][:12]})"
+                why = (f"a different torsion refinement ({label(have.get('refinement'))} is not "
+                       f"{label(want.get('refinement'))})")
         reasons[name] = why
         if not same:
             return MatchVerdict(False, reasons, notes)
