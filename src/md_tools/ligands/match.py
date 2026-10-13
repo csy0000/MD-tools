@@ -133,6 +133,21 @@ def charge_identity(method: str, *, scheme: Optional[str], backend_id: Optional[
 from .refinement import refinement_identity as _refinement_identity  # noqa: E402
 
 
+def _forcefield_criteria(family: str, resource: str,
+                         refinement: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """The `forcefield` criteria. `refinement` is present ONLY when there is one.
+
+    A stock package's `parameter.config` was written before the key existed and is re-derived and
+    compared on every load; adding `refinement: null` to the derived form would make every such
+    package "not describe itself". Absent and None mean the same, and `matches` reads it with `.get`.
+    """
+    criteria = {"family": family, "resource": resource}
+    identity = _refinement_identity(refinement)
+    if identity is not None:
+        criteria["refinement"] = identity
+    return criteria
+
+
 def requested_criteria(mol, *, charge_method: str, forcefield: str,
                        refinement: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """What a build is ABOUT to produce, resolved without computing anything expensive.
@@ -167,8 +182,7 @@ def requested_criteria(mol, *, charge_method: str, forcefield: str,
             "protonation": {k: chemical_state(prepared)[k] for k in
                             ("digest", "fixed_h_inchikey", "net_formal_charge", "canonical_smiles")},
             "charges": charges,
-            "forcefield": {"family": "smirnoff", "resource": str(forcefield),
-                           "refinement": _refinement_identity(refinement)}}
+            "forcefield": _forcefield_criteria("smirnoff", str(forcefield), refinement)}
 
 
 def criteria_of_metadata(metadata: dict[str, Any], mol) -> dict[str, Any]:
@@ -188,10 +202,9 @@ def criteria_of_metadata(metadata: dict[str, Any], mol) -> dict[str, Any]:
             "charges": charge_identity(charges["method"], scheme=charges.get("scheme"),
                                        backend_id=charges.get("backend_id"),
                                        model=charges.get("model"), allow_unknown=True),
-            "forcefield": {"family": metadata["forcefield"]["family"],
-                           "resource": metadata["forcefield"]["resource"],
-                           "refinement": _refinement_identity(
-                               metadata["forcefield"].get("refinement"))}}
+            "forcefield": _forcefield_criteria(metadata["forcefield"]["family"],
+                                               metadata["forcefield"]["resource"],
+                                               metadata["forcefield"].get("refinement"))}
 
 
 def matches(request: dict[str, Any], candidate: dict[str, Any]) -> MatchVerdict:

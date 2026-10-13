@@ -156,3 +156,14 @@ def test_a_package_written_before_refinement_existed_reads_as_stock():
     from md_tools.ligands.match import _refinement_identity
 
     assert _refinement_identity(_metadata(None)["forcefield"].get("refinement")) is None
+
+
+def test_a_stock_package_derives_criteria_without_a_refinement_key():
+    """Every `parameter.config` written before refinement existed is re-derived and COMPARED on
+    load; an added `refinement: null` made 138 tests' committed packages stop describing
+    themselves. Absent is the stock form."""
+    from md_tools.ligands.match import _forcefield_criteria
+
+    assert _forcefield_criteria("smirnoff", BASE, None) == {"family": "smirnoff", "resource": BASE}
+    assert "refinement" in _forcefield_criteria(
+        "smirnoff", BASE, {"method": "bespokefit", "offxml_sha256": "a" * 64})
