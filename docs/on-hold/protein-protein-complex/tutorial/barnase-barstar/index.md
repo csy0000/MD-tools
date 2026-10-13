@@ -1,5 +1,8 @@
 # Barnase and barstar
 
+!!! warning "On hold"
+    Protein–protein complexes are on hold as of 2026-10-13 and are not part of the current release. This page was last run against 0.6.1. See [On hold](../../../index.md).
+
 **Tested against md-tools `0.6.1`.** Every command and every number on this page comes from a
 run executed as written, at that version.
 
@@ -73,7 +76,7 @@ solvent:
 * `input.missing_atoms: add` builds the missing heavy atoms. The default, `refuse`, stops the build
   and lists them.
 * `protonation.method: propka` predicts pKa values with PROPKA 3.5.1 on the prepared structure and
-  assigns residue variants by one stated rule (see [Building a system](../../basics/build-top/index.md)).
+  assigns residue variants by one stated rule (see [Building a system](../../../../basics/build-top/index.md)).
   The default, `openmm`, is what earlier releases did.
 * The 90 crystal waters of assembly 3 are kept, and placed after the protein in the topology.
 

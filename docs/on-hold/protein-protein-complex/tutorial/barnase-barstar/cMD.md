@@ -1,5 +1,8 @@
 # cMD: barnase–barstar from a deposited crystal structure
 
+!!! warning "On hold"
+    Protein–protein complexes are on hold as of 2026-10-13 and are not part of the current release. This page was last run against 0.6.1. See [On hold](../../../index.md).
+
 **Tested against md-tools `0.6.1`.** Every command and every number on this page comes from a
 run executed as written, at that version.
 
@@ -12,7 +15,7 @@ files that run produced (one NVIDIA RTX 3080, CUDA, mixed precision).
 
 Building took **16 s**; minimisation, equilibration and 10 ns of production took **40 min**.
 
-Read [cMD: paracetamol](../paracetamol/cMD.md) first; this page explains only what is new.
+Read [cMD: paracetamol](../../../../tutorial/paracetamol/cMD.md) first; this page explains only what is new.
 
 **Starts from a built system.** Do [the system page](index.md) first: it downloads 1BRS,
 chooses assembly 3, assigns protonation and writes `build/built.xml`, `built.pdb` and
@@ -115,5 +118,5 @@ interface; for either, the run length and the analysis are a study of their own.
 ## Next
 
 * a protein with a bound ligand, from its parameter package:
-  [the TYK2 complex](../tyk2-ejm31/index.md)
-* register the finished directory as a dataset: [Registering a finished run](../../basics/data-register/index.md)
+  [the TYK2 complex](../../../../tutorial/tyk2-ejm31/index.md)
+* register the finished directory as a dataset: [Registering a finished run](../../../../basics/data-register/index.md)

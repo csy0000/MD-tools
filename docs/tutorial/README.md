@@ -22,21 +22,20 @@ size.
 | [**Paracetamol**](paracetamol/index.md) | a ligand on its own: parameterise once, reuse everywhere | cMD, REST2, AIS |
 | [**Ligand parameterization**](ligand-parameterization/index.md) | how a small molecule is prepared before any run: protonation at pH 7, parameters, and which torsions REST2 heats — paracetamol as a ligand, c(RGDfV) as a peptide-like molecule | parameterization, REST2 scaler |
 | [**Chignolin**](chignolin/index.md) | a folding peptide: a real equilibrium, small enough to compare methods in a day | cMD, REST2 |
-| [**Barnase + barstar**](barnase-barstar/index.md) | a protein–protein interface: the coordinate is between two molecules | cMD |
 | [**TYK2 + ejm_31**](tyk2-ejm31/index.md) | a kinase with a real inhibitor: where a hot region is worth CHOOSING | cMD, selective REST2, AIS |
 
 ## The methods, and where they are
 
 | method | systems | state |
 |---|---|---|
-| **cMD** | alanine dipeptide, paracetamol, chignolin, barnase–barstar, TYK2 (1 µs) | published |
+| **cMD** | alanine dipeptide, paracetamol, chignolin, TYK2 (1 µs) | published |
 | **REST2** | alanine dipeptide, paracetamol, chignolin, TYK2 (selective) | published |
 | **AIS** | alanine dipeptide, paracetamol; TYK2 as a measured LIMIT | published |
-| **Umbrella sampling** | alanine dipeptide (φ), protein–ligand and protein–protein (centre-of-mass distance) | page planned |
+| **Umbrella sampling** | alanine dipeptide (φ), protein–ligand (centre-of-mass distance) | page planned |
 
 A planned row is listed so the shape of the set is visible; it is never linked to a page that does
-not exist. The tutorials are about conformational sampling; no alchemical transformation is
-taught here.
+not exist. The tutorials are about conformational sampling; no alchemical transformation and no
+protein–protein complex is taught here.
 
 Run on NVIDIA RTX 3080 GPUs with CUDA and mixed precision.
 
@@ -49,7 +48,6 @@ Run on NVIDIA RTX 3080 GPUs with CUDA and mixed precision.
 | [chignolin / cMD](chignolin/cMD.md) | `0.6.1` |
 | [chignolin / REST2](chignolin/REST2.md) | `0.6.1` |
 | [alanine dipeptide / AIS](ALA/AIS.md) | `0.6.1` |
-| [barnase + barstar / cMD](barnase-barstar/cMD.md) | `0.6.1` |
 | [TYK2 + ejm_31 / selective REST2](tyk2-ejm31/REST2.md) | `0.6.1` |
 | [alanine dipeptide / cMD](ALA/cMD.md) | `0.6.1` |
 | [alanine dipeptide / REST2](ALA/REST2.md) | `0.6.1` |

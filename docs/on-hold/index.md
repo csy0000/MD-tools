@@ -5,13 +5,15 @@ pages is part of the current release's promise: it is not re-validated, its test
 the release gate, and the tutorials do not teach it. It is kept, in the tree and in git history, so
 it can be picked up again without being rebuilt.
 
-**The focus for now** is conformational sampling — cMD, REST2 and AIS — and the preparation of the
-small molecules they run on: Open Babel protonation at a stated pH, ligand amide scaling in REST2,
-and BespokeFit torsion refinement (`solute.torsion_refinement`). *Decided 2026-10-13.*
+**The focus for now** is sampling the conformations of a **ligand**, in solvent or in a protein —
+cMD, REST2 and AIS — and the preparation of the small molecules they run on: Open Babel protonation
+at a stated pH, ligand amide scaling in REST2, and BespokeFit torsion refinement
+(`solute.torsion_refinement`). *Decided 2026-10-13.*
 
 | what | state | where |
 |---|---|---|
 | **Alchemical transformation** — `md-openmm combine-topology`, the `alchemical` protocol, hydration and relative free energies, and the two tutorials that were run on it | built and run in 0.6.4, **on hold** | [Alchemical transformation](alchemical-transformation/index.md) |
+| **Protein–protein complex** — the barnase–barstar system and its cMD tutorial | built and run in 0.6.1, **on hold** | [Protein–protein complex](protein-protein-complex/index.md) |
 | **Advanced alchemical sampling** — FEP–REST2, EDS, RE-EDS, ATM | planning only; no implementation | [aims](../development/0.7.1/AIMS.md) |
 | **Grand-canonical and nonequilibrium water sampling** | planning only; no implementation | [aims](../development/0.7.2/AIMS.md) |
 | **The protein–ligand campaign** — one TYK2 system with three congeneric ligands, shared by the methods above | planned; nothing measured | [plan](../development/protein-ligand-campaign.md) |
