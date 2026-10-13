@@ -1,0 +1,51 @@
+# bespokefit — OpenFF BespokeFit with two reference levels:
+#   * Psi4 (BespokeFit's default B3LYP-D3BJ/DZVP), and
+#   * MACE-OMOL-0 / MACE-OFF23 through the QCEngine adapters in mace_adapter.py
+#     (this directory).
+#
+# Create:
+#   conda env create -p <prefix>/bespokefit -f environment.yml
+#   <prefix>/bespokefit/bin/pip install --no-deps mace-torch==0.3.16
+#
+# Pins that matter:
+#   qcengine/qcelemental <0.50   BespokeFit 0.4.3 uses the v1 QCSchema models.
+#   e3nn=0.4.4                   required exactly by mace-torch 0.3.16.
+#   openff-forcefields>=2024.09  provides openff_unconstrained-2.2.1 (Sage 2.2.1,
+#                                MD-tools' default ligand force field).
+# mace-torch is installed with --no-deps so pip cannot replace conda's numpy.
+name: bespokefit
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - openff-bespokefit=0.4.3
+  - openff-toolkit
+  - openff-forcefields>=2024.09
+  - ambertools
+  - psi4
+  - torsiondrive
+  - geometric
+  - qcengine<0.50
+  - qcelemental<0.50
+  - forcebalance
+  - redis-server
+  - cuda-version=12.9
+  - pytorch=*=cuda*
+  - ase
+  - e3nn=0.4.4
+  - matscipy
+  - h5py
+  - torch-ema
+  - opt_einsum_fx
+  - configargparse
+  - gitpython
+  - prettytable
+  - python-lmdb
+  - orjson
+  - torchmetrics
+  - lightning-utilities
+  - python-hostlist
+  - matplotlib
+  - pandas
+  - pip

@@ -178,7 +178,7 @@ every step, and fits new torsion terms to the energy profile. This page uses **M
 (`extra_large`)** as the reference, so `torsion_refinement` is `mace-omol-bespokefit`.
 
 **The fit is not run by `build-top`.** It takes minutes to hours and uses GPUs, so it is never
-implied by a build. You run BespokeFit in an environment you install and name yourself (BespokeFit,
+implied by a build. [Bespoke torsion fit](bespoke-fit.md) shows how to install the tools and run it. You run BespokeFit in an environment you install and name yourself (BespokeFit,
 QCEngine, `mace-torch` and the model weights are not part of this package's environment), and
 `build-top` consumes the `.offxml` it writes. Asking for a refinement without that file is an error,
 never a quiet fall back to Sage's torsions.
