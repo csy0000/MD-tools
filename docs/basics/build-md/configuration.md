@@ -68,6 +68,36 @@ type: string · default: `am1bcc` · one of `am1bcc`, `am1bccelf10`, `gasteiger`
 
 Partial-charge method for the small molecule. am1bcc is the validated default and runs on CPU; it is the slowest part of a ligand build.
 
+#### `solute.torsion_refinement`
+
+type: string · default: `none` · one of `none`, `bespokefit`, `mace-omol-bespokefit`, `mace-off23-bespokefit`
+
+Refit the molecule's torsions with OpenFF BespokeFit before the package is written. `none` (the default) keeps the stock force field. `bespokefit` is BespokeFit's own workflow with its Psi4 B3LYP-D3BJ/DZVP reference; `mace-omol-bespokefit` and `mace-off23-bespokefit` run the same workflow with MACE-OMOL-0 or MACE-OFF23 as the reference. A fit takes hours and a GPU for the MACE references, so it is never implied by anything else. Neither BespokeFit, Psi4 nor MACE is part of this package's environment: install them separately and name that environment in `bespokefit_env` or `mace_env`. Applies to kind: ligand and peptide-like; refused beside a stated `parameters` reference (a reused package keeps its own parameters). MACE-OFF23 cannot evaluate a charged molecule and refuses one.
+
+#### `solute.bespokefit_env`
+
+type: string or null · default: `null`
+
+Path to the environment that holds BespokeFit, QCEngine and Psi4, for `torsion_refinement: bespokefit`. Its python is run as a subprocess; this package never imports from it. Absolute, or relative to this configuration file. A missing or unusable environment is an error.
+
+#### `solute.mace_env`
+
+type: string or null · default: `null`
+
+Path to the environment that holds BespokeFit, QCEngine, mace-torch and the model weights, for `mace-omol-bespokefit` and `mace-off23-bespokefit`. Installed by the user, not by this package, and run as a subprocess. Absolute, or relative to this configuration file.
+
+#### `solute.mace_model`
+
+type: string or null · default: `null`
+
+Which MACE model the reference uses: `extra_large` for mace-omol-bespokefit; `small`, `medium` or `large` for mace-off23-bespokefit, or the path to a .model file. Left null, the defaults are `extra_large` and `large`; the resolved name and the weights' sha256 are recorded in the package.
+
+#### `solute.refinement_offxml`
+
+type: string or null · default: `null`
+
+A bespoke force field (.offxml) that was fitted elsewhere. Used as given and the fit is skipped; its sha256 is recorded as provenance only, because how it was made cannot be known. Requires `torsion_refinement` other than `none`, which then names what the file claims to be.
+
 #### `solute.compound_id`
 
 type: string or null · default: `null`

@@ -127,6 +127,40 @@ BUILD_SCHEMA = Schema(
                   enum=("am1bcc", "am1bccelf10", "gasteiger", "nagl"),
                   doc="Partial-charge method for the small molecule. am1bcc is the validated "
                       "default and runs on CPU; it is the slowest part of a ligand build."),
+            Field("torsion_refinement", str, default="none",
+                  enum=("none", "bespokefit", "mace-omol-bespokefit", "mace-off23-bespokefit"),
+                  doc="Refit the molecule's torsions with OpenFF BespokeFit before the package is "
+                      "written. `none` (the default) keeps the stock force field. `bespokefit` "
+                      "is BespokeFit's own workflow with its Psi4 B3LYP-D3BJ/DZVP reference; "
+                      "`mace-omol-bespokefit` and `mace-off23-bespokefit` run the same workflow "
+                      "with MACE-OMOL-0 or MACE-OFF23 as the reference. A fit takes hours and a "
+                      "GPU for the MACE references, so it is never implied by anything else. "
+                      "Neither BespokeFit, Psi4 nor MACE is part of this package's environment: "
+                      "install them separately and name that environment in `bespokefit_env` or "
+                      "`mace_env`. Applies to kind: ligand and peptide-like; refused beside a "
+                      "stated `parameters` reference (a reused package keeps its own parameters). "
+                      "MACE-OFF23 cannot evaluate a charged molecule and refuses one."),
+            Field("bespokefit_env", str, default=None, nullable=True,
+                  doc="Path to the environment that holds BespokeFit, QCEngine and Psi4, for "
+                      "`torsion_refinement: bespokefit`. Its python is run as a subprocess; this "
+                      "package never imports from it. Absolute, or relative to this "
+                      "configuration file. A missing or unusable environment is an error."),
+            Field("mace_env", str, default=None, nullable=True,
+                  doc="Path to the environment that holds BespokeFit, QCEngine, mace-torch and "
+                      "the model weights, for `mace-omol-bespokefit` and `mace-off23-bespokefit`. "
+                      "Installed by the user, not by this package, and run as a subprocess. "
+                      "Absolute, or relative to this configuration file."),
+            Field("mace_model", str, default=None, nullable=True,
+                  doc="Which MACE model the reference uses: `extra_large` for "
+                      "mace-omol-bespokefit; `small`, `medium` or `large` for "
+                      "mace-off23-bespokefit, or the path to a .model file. Left null, the "
+                      "defaults are `extra_large` and `large`; the resolved name and the weights' "
+                      "sha256 are recorded in the package."),
+            Field("refinement_offxml", str, default=None, nullable=True,
+                  doc="A bespoke force field (.offxml) that was fitted elsewhere. Used as given "
+                      "and the fit is skipped; its sha256 is recorded as provenance only, "
+                      "because how it was made cannot be known. Requires `torsion_refinement` "
+                      "other than `none`, which then names what the file claims to be."),
             Field("compound_id", str, default=None, nullable=True,
                   doc="Catalog identity of the molecule for kind: ligand or peptide-like: a "
                       "ChEMBL id (`CHEMBL112`) or `LOCAL-<first block of the standard InChIKey>`. "
@@ -613,6 +647,9 @@ def _sys_document(resolved: dict[str, Any]) -> dict[str, Any]:
     document["solute"]["peptide"] = peptide
     document["solute"]["ligand_forcefield"] = resolved["solute"]["ligand_forcefield"]
     document["solute"]["ligand_charge_method"] = resolved["solute"]["ligand_charge_method"]
+    for key in ("torsion_refinement", "bespokefit_env", "mace_env", "mace_model",
+                "refinement_offxml"):
+        document["solute"][key] = resolved["solute"][key]
     protein = resolved["forcefield"]["protein"]
     if is_implicit(solvent):
         # Carried through rather than defaulted. `sys_defaults` used to decide this on its own on
@@ -764,6 +801,7 @@ def _check_ligand_settings(resolved: dict[str, Any]) -> None:
         if key in stated and solute.get(key) is not None and not single:
             raise ConfigError(f"solute.{key} is set, but solute.kind is {kind!r}; it describes the "
                               f"single molecule of a kind: ligand or peptide-like build.")
+    _check_torsion_refinement(solute, kind, single, stated)
     if solute.get("aliases") and not single:
         raise ConfigError(f"solute.aliases is set, but solute.kind is {kind!r}.")
     if not all(isinstance(a, str) for a in solute.get("aliases") or []):
@@ -803,6 +841,50 @@ def _check_ligand_settings(resolved: dict[str, Any]) -> None:
                 parse_reference(reference)
     except (CompoundIdError, PackageError) as exc:
         raise ConfigError(str(exc)) from exc
+
+
+def _check_torsion_refinement(solute: dict[str, Any], kind: str, single: bool, stated) -> None:
+    """The bespoke-fit settings, refused where they cannot apply. Nothing on disk is touched."""
+    method = str(solute.get("torsion_refinement") or "none")
+    keys = ("bespokefit_env", "mace_env", "mace_model", "refinement_offxml")
+    if method == "none":
+        for key in keys:
+            if key in stated and solute.get(key) is not None:
+                raise ConfigError(f"solute.{key} is set, but solute.torsion_refinement is 'none'. "
+                                  f"Name a method, or remove solute.{key}.")
+        return
+    if not single:
+        raise ConfigError(f"solute.torsion_refinement is {method!r}, but solute.kind is {kind!r}. "
+                          f"A bespoke fit describes the single molecule of a kind: ligand or "
+                          f"peptide-like build.")
+    if solute.get("parameters") not in (None, "search", "generate"):
+        raise ConfigError(f"solute.torsion_refinement is {method!r} beside a solute.parameters "
+                          f"reference. A reused package keeps its own parameters, so a fit could "
+                          f"only be ignored; refine the molecule and register that package, or "
+                          f"remove one of the two.")
+    mace = method.startswith("mace-")
+    env_key = "mace_env" if mace else "bespokefit_env"
+    other = "bespokefit_env" if mace else "mace_env"
+    if solute.get(other) is not None:
+        raise ConfigError(f"solute.{other} is set, but torsion_refinement {method!r} uses "
+                          f"solute.{env_key}.")
+    given = solute.get("refinement_offxml")
+    if given is None and not str(solute.get(env_key) or "").strip():
+        raise ConfigError(f"solute.torsion_refinement is {method!r}, which runs BespokeFit in an "
+                          f"environment you install separately. Set solute.{env_key} to that "
+                          f"environment's path (or supply an already fitted solute."
+                          f"refinement_offxml).")
+    model = solute.get("mace_model")
+    if model is not None and not mace:
+        raise ConfigError("solute.mace_model applies only to the mace-* refinements.")
+    if method == "mace-omol-bespokefit" and model not in (None, "extra_large") \
+            and not str(model).endswith(".model"):
+        raise ConfigError(f"solute.mace_model {model!r} is not a MACE-OMOL model; use "
+                          f"'extra_large' or the path to a .model file.")
+    if method == "mace-off23-bespokefit" and model not in (None, "small", "medium", "large") \
+            and not str(model).endswith(".model"):
+        raise ConfigError(f"solute.mace_model {model!r} is not a MACE-OFF23 model; use 'small', "
+                          f"'medium', 'large' or the path to a .model file.")
 
 
 def ligand_entries(resolved: dict[str, Any]) -> list[dict[str, Any]]:
