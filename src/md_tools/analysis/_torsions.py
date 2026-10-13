@@ -76,17 +76,90 @@ MIN_CLUSTER_FRACTION_DEFAULT = 0.01
 MIN_SAMPLES_FRACTION_DEFAULT = 0.01
 
 
-#: Default abstention threshold for :func:`classify_to_clusters`. Chosen 2026-09-30 to pair with the
-#: tied `min_samples` above, which is what makes it necessary: the coarser density estimate orphans
-#: a basin's sparse rim, the classifier then commits those frames by a bare majority, and on ALA
-#: that put 459 cold-cell frames into a basin 130 deg away in phi. At 0.9 that drops to 1.
-#:
-#: IT IS A BOUNDARY DETECTOR, NOT A NOISE DETECTOR, and the difference is measured: against a direct
-#: fit's own noise it recalls only 6.7%, because a frame can sit in a sparse region and still have
-#: all k neighbours agree. Most of what it abstains on is cluster INTERFACES. On a pinned k=25 fit,
-#: where nothing is orphaned, it therefore costs accuracy -- 2.904% -> 2.834% on the ALA cold cell
-#: against a direct count of 2.905%. Set 0.0 to commit every frame.
+#: THE VOTE RULE, since the symmetry-first workflow. A frame is assigned to the cluster that wins
+#: its k-nearest-neighbour vote only if the winner holds at least this FRACTION of the votes:
+#: `n_winner / k_effective >= 0.90`, equality accepted -- 18 of 20 assigns, 17 of 20 does not.
+#: `k_effective` is `k`, or the number of eligible training frames when there are fewer, and it is
+#: reported per frame. A frame that fails is AMBIGUOUS (-1), which says its neighbours disagree; it
+#: is NOT evidence of a free-energy barrier, because neighbour disagreement is a statement about the
+#: sample near that frame and nothing here measures energy or time.
+MIN_VOTE_FRACTION_DEFAULT = 0.90
+
+#: Neighbours consulted by the vote. 20 makes the 0.90 threshold a whole number of votes (18), so
+#: the rule can be stated, and checked, as a count.
+K_NEIGHBOURS_DEFAULT = 20
+
+#: The two vote rules. `fraction` is the default; `legacy-margin` is the historical rule, kept only
+#: so a pre-symmetry analysis can be reproduced and compared, and reachable only by naming it.
+VOTE_RULES = ("fraction", "legacy-margin")
+
+#: HISTORICAL. The abstention threshold of the old rule, a MARGIN `(n_first - n_second) / k`, with
+#: `k = 15` (`K_NEIGHBOURS_LEGACY`). Chosen 2026-09-30 to pair with the tied `min_samples` above:
+#: the coarser density estimate orphans a basin's sparse rim, the classifier then commits those
+#: frames by a bare majority, and on ALA that put 459 cold-cell frames into a basin 130 deg away in
+#: phi. At 0.9 that dropped to 1. A margin is not a fraction -- with three classes in play a margin
+#: of 0.9 and a winning fraction of 0.9 disagree -- so a margin passed where a fraction is expected
+#: is REFUSED, never reinterpreted.
 MIN_VOTE_MARGIN_DEFAULT = 0.9
+MIN_VOTE_MARGIN_LEGACY = MIN_VOTE_MARGIN_DEFAULT
+K_NEIGHBOURS_LEGACY = 15
+
+#: Sentinel for "the caller did not pass this", so an EXPLICIT legacy argument can be told apart
+#: from a default and refused rather than silently given a new meaning.
+_UNSET = object()
+
+#: Slack for the fraction comparison, so 18/20 is accepted however the division rounds.
+_VOTE_EPS = 1e-9
+
+
+def legacy_vote_argument_error(argument: str, value) -> TypeError:
+    """The migration message for a historical margin argument passed without naming the old rule."""
+    return TypeError(
+        f"{argument}={value!r} is the HISTORICAL vote MARGIN, (n_first - n_second) / k with k = "
+        f"{K_NEIGHBOURS_LEGACY}. The default rule is now the absolute winning FRACTION, n_winner / "
+        f"k_effective >= {MIN_VOTE_FRACTION_DEFAULT} with k = {K_NEIGHBOURS_DEFAULT} (18 of 20 "
+        f"assigns, 17 of 20 does not), and a margin is not reinterpreted as a fraction: the two "
+        f"disagree whenever a third cluster takes votes. Either pass min_vote_fraction=... for "
+        f"the new rule, or pass vote_rule='legacy-margin' together with {argument}=... to "
+        f"reproduce the historical behaviour.")
+
+
+def vote(neighbour_labels: np.ndarray, k_effective, *, rule: str = "fraction",
+         threshold: float = MIN_VOTE_FRACTION_DEFAULT) -> Dict[str, np.ndarray]:
+    """Decide each row's assignment from its neighbours' labels.
+
+    `neighbour_labels` is `(n, k_max)`; entries `< 0` are padding (no neighbour), never votes.
+    `k_effective` is a scalar or `(n,)`: the denominator, i.e. how many neighbours were actually
+    consulted for that row.
+
+    `rule='fraction'`: assign the plurality winner when `n_winner / k_effective >= threshold`
+    (equality accepted) AND the winner is unique; otherwise -1. `rule='legacy-margin'`: the
+    historical `(n_first - n_second) / k_effective < threshold` abstains.
+    """
+    if rule not in VOTE_RULES:
+        raise ValueError(f"vote rule must be one of {VOTE_RULES}, not {rule!r}")
+    nl = np.asarray(neighbour_labels, dtype=np.int64)
+    n = nl.shape[0]
+    keff = np.broadcast_to(np.asarray(k_effective, dtype=np.int64), (n,)).copy()
+    if np.any(keff < 1):
+        raise ValueError("every frame needs at least one eligible neighbour to vote")
+    classes = np.unique(nl[nl >= 0])
+    if classes.size == 0:
+        raise ValueError("no neighbour carries a cluster label")
+    counts = np.stack([(nl == c).sum(axis=1) for c in classes], axis=1)
+    order = np.argsort(-counts, axis=1, kind="stable")
+    top = counts[np.arange(n), order[:, 0]]
+    second = (counts[np.arange(n), order[:, 1]] if classes.size > 1 else np.zeros(n, np.int64))
+    winner = classes[order[:, 0]]
+    fraction = top / keff
+    margin = (top - second) / keff
+    if rule == "fraction":
+        accept = (top >= float(threshold) * keff - _VOTE_EPS) & (top > second)
+    else:
+        accept = ~(margin < float(threshold))
+    labels = np.where(accept, winner, -1).astype(np.int64)
+    return dict(labels=labels, winner=winner.astype(np.int64), n_winner=top.astype(np.int64),
+                k_effective=keff, vote_fraction=fraction, vote_margin=margin)
 
 
 N_SEED_DEFAULT = 5
@@ -374,6 +447,7 @@ def cluster_torsions(theta, *, units: str, names: Optional[Sequence[str]] = None
                      allow_quadratic_memory: bool = False,
                      representative_method: str = "chord_medoid",
                      multiplicity_justification: Optional[str] = None,
+                     multiplicities: Optional[Sequence[int]] = None,
                      min_resultant_for_mean: float = MIN_RESULTANT_FOR_MEAN,
                      n_jobs: Optional[int] = None,
                      seed: Optional[int] = None) -> ClusterResult:
@@ -396,8 +470,21 @@ def cluster_torsions(theta, *, units: str, names: Optional[Sequence[str]] = None
         if metric_weights is None:
             mw = np.array([float(s.weight) for s in specs], dtype=np.float64)
             metric_weights = None if np.allclose(mw, 1.0) else mw
+        if multiplicities is not None:
+            raise ValueError("pass multiplicities through specs or directly, not both")
         mult = [int(s.multiplicity) for s in specs]
         validate_multiplicities(specs, multiplicity_justification)
+    elif multiplicities is not None:
+        # THE FIT MUST EMBED WITH THE SAME MULTIPLICITIES THE CLASSIFIER USES. Before this
+        # argument existed, `t_hdbscan` passed its multiplicities to the classifier and the
+        # density check but not here, so a fit with multiplicity 2 was clustered on one metric and
+        # assigned on another.
+        mult = [int(v) for v in multiplicities]
+        if any(v != 1 for v in mult) and not (multiplicity_justification
+                                               and str(multiplicity_justification).strip()):
+            raise ValueError("multiplicities other than 1 identify conformers related by a "
+                             "2*pi/k rotation; pass multiplicity_justification naming the "
+                             "symmetry that makes that true")
     else:
         mult = None
 
@@ -772,10 +859,25 @@ def weighted_resample(frame_weights, *, size: Optional[int] = None,
 # --------------------------------------------- classify held-out frames against a fitted partition
 def classify_to_clusters(theta_train, labels_train, theta_query, *, units: str = "radians",
                          metric_weights=None, multiplicities: Optional[Sequence[int]] = None,
-                         k: int = 15, exclude_noise: bool = True,
+                         k=None, exclude_noise: bool = True,
                          block: int = 4096, use_tree: bool = True,
-                         min_vote_margin: float = MIN_VOTE_MARGIN_DEFAULT) -> Dict[str, Any]:
+                         vote_rule: str = "fraction",
+                         min_vote_fraction=_UNSET,
+                         min_vote_margin=_UNSET,
+                         query_is_training: bool = False,
+                         query_training_rows=None) -> Dict[str, Any]:
     """k-NN assignment of `theta_query` to the clusters of an already-fitted partition.
+
+    THIS IS THE LEGACY-DISTANCE CLASSIFIER: Euclidean on the plain cos/sin embedding. The
+    symmetry-first route classifies with its own quotient distance (`THDBSCAN`), never this.
+
+    VOTE RULE. `vote_rule='fraction'` (default): k = 20 and a frame is assigned when its winner
+    holds `>= min_vote_fraction` (0.90) of `k_effective` votes. `query_is_training=True` says the
+    query rows ARE the training rows in order, and each frame's own label is then excluded from its
+    vote (leave-one-out), so `k_effective = min(k, eligible - 1)`; `query_training_rows[i]` says
+    the same for an arbitrary query set (the training row query `i` is, or -1). `vote_rule='legacy-margin'`
+    reproduces the historical classifier exactly -- k = 15, self included, abstain when
+    `(n_first - n_second) / k < min_vote_margin` -- and is the only way to pass `min_vote_margin`.
 
     WHY THIS EXISTS. The expensive step is the density clustering, which scales as ~N^1.83 in this
     20-D embedding. The cluster COUNT converges at N ~ 1024 (measured: two clusters, unanimous over
@@ -799,6 +901,26 @@ def classify_to_clusters(theta_train, labels_train, theta_query, *, units: str =
     them. Pass `exclude_noise=False` to let noise act as its own class and be assigned like any
     other.
     """
+    if vote_rule not in VOTE_RULES:
+        raise ValueError(f"vote_rule must be one of {VOTE_RULES}, not {vote_rule!r}")
+    if vote_rule == "fraction":
+        if min_vote_margin is not _UNSET:
+            raise legacy_vote_argument_error("min_vote_margin", min_vote_margin)
+        threshold = (MIN_VOTE_FRACTION_DEFAULT if min_vote_fraction is _UNSET
+                     else float(min_vote_fraction))
+        k = K_NEIGHBOURS_DEFAULT if k is None else int(k)
+    else:
+        if min_vote_fraction is not _UNSET:
+            raise TypeError("min_vote_fraction belongs to vote_rule='fraction'; the legacy rule "
+                            "takes min_vote_margin")
+        threshold = (MIN_VOTE_MARGIN_LEGACY if min_vote_margin is _UNSET
+                     else float(min_vote_margin))
+        k = K_NEIGHBOURS_LEGACY if k is None else int(k)
+    if not (0.0 <= threshold <= 1.0):
+        raise ValueError("the vote threshold must be in [0, 1]")
+    if k < 1:
+        raise ValueError("k must be at least 1")
+
     a_tr = validate_angles(theta_train, units=units)
     a_q = validate_angles(theta_query, units=units)
     if a_tr.shape[1] != a_q.shape[1]:
@@ -806,14 +928,36 @@ def classify_to_clusters(theta_train, labels_train, theta_query, *, units: str =
     lab = np.asarray(labels_train, dtype=np.int64).ravel()
     if lab.size != a_tr.shape[0]:
         raise ValueError(f"{lab.size} labels for {a_tr.shape[0]} training frames")
+    if query_is_training:
+        if query_training_rows is not None:
+            raise ValueError("pass query_is_training or query_training_rows, not both")
+        if a_q.shape[0] != a_tr.shape[0]:
+            raise ValueError("query_is_training=True needs the query rows to BE the training rows")
+        query_training_rows = np.arange(a_q.shape[0])
+    if query_training_rows is not None:
+        query_training_rows = np.asarray(query_training_rows, dtype=np.int64).ravel()
+        if query_training_rows.size != a_q.shape[0]:
+            raise ValueError("query_training_rows needs one entry per query frame")
+        if vote_rule != "fraction":
+            raise ValueError("leave-one-out voting belongs to the fraction rule; the historical "
+                             "rule counted a frame's own label and is reproduced unchanged")
     w = validate_metric_weights(metric_weights, a_tr.shape[1])
     Xtr = embed(a_tr, w, multiplicities)
     Xq = embed(a_q, w, multiplicities)
+    train_row = np.arange(a_tr.shape[0])
     if exclude_noise:
         keep = lab >= 0
         if not keep.any():
             raise ValueError("every training frame is noise; nothing to classify against")
-        Xtr, lab = Xtr[keep], lab[keep]
+        Xtr, lab, train_row = Xtr[keep], lab[keep], train_row[keep]
+    if vote_rule == "fraction":
+        return _classify_fraction(Xtr, lab, train_row, Xq, k=k, threshold=threshold,
+                                  query_training_rows=query_training_rows, use_tree=use_tree,
+                                  block=block, W=float(np.sum(w)),
+                                  excluded_noise=bool(exclude_noise))
+
+    # ---------------------------------------------------------------- HISTORICAL, unchanged
+    min_vote_margin = threshold
     kk = int(min(k, Xtr.shape[0]))
     W = float(np.sum(w))
     classes = np.unique(lab)
@@ -862,14 +1006,91 @@ def classify_to_clusters(theta_train, labels_train, theta_query, *, units: str =
         out = out.copy()
         out[weak] = -1
     return dict(labels=out, k=kk, classes=[int(c) for c in classes],
+                vote_rule="legacy-margin",
                 vote_margin=votes_margin, min_vote_margin=float(min_vote_margin),
                 n_abstained=n_abstained,
                 n_train=int(Xtr.shape[0]), n_query=int(a_q.shape[0]),
                 excluded_noise_from_training=bool(exclude_noise),
-                note="k-NN assignment on the periodic chord metric. A DIFFERENT estimator from "
-                     "HDBSCAN's own assignment; validate by agreement against a direct fit. With "
-                     "noise excluded from voting every query frame is committed to a cluster, "
-                     "which HDBSCAN itself would not do.")
+                note="HISTORICAL rule: k-NN on the periodic chord metric, the query's own label "
+                     "included, abstention by vote MARGIN. Kept to reproduce pre-symmetry results.")
+
+
+def k_nearest_stable(D: np.ndarray, k: int) -> np.ndarray:
+    """Indices of the `k` smallest entries of each row, ties broken by the LOWER column index.
+
+    `argpartition` returns tied neighbours in an order that depends on the implementation, which
+    makes a 18-vs-17 decision at a tie depend on the numpy build. This orders by (distance,
+    index), so the vote is a function of the distances alone. `inf` marks an excluded column.
+    """
+    n, m = D.shape
+    k = int(min(k, m))
+    kth = np.partition(D, k - 1, axis=1)[:, k - 1:k]
+    less = D < kth
+    need = k - less.sum(axis=1)
+    eq = D == kth
+    chosen = less | (eq & (np.cumsum(eq, axis=1) <= need[:, None]))
+    idx = np.nonzero(chosen)[1].reshape(n, k)
+    return idx
+
+
+def _classify_fraction(Xtr, lab, train_row, Xq, *, k, threshold, query_training_rows, use_tree,
+                       block, W, excluded_noise) -> Dict[str, Any]:
+    """The 20-neighbour absolute-fraction vote on the legacy Euclidean embedding.
+
+    The legacy distance IS Euclidean in the embedding, so a KD/ball tree returns the exact
+    neighbours. One extra neighbour is requested so the frame itself can be dropped (leave-one-
+    out), and the returned neighbours are re-ordered by (distance, index) so a tie inside the
+    returned set is decided by index rather than by the tree. `use_tree=False` is the brute-force
+    reference, exact to the last tie.
+    """
+    n_q = Xq.shape[0]
+    # position of each query's own training row among the voters, or -1
+    self_pos = np.full(n_q, -1, dtype=np.int64)
+    if query_training_rows is not None:
+        where = {int(r): i for i, r in enumerate(train_row)}
+        self_pos = np.array([where.get(int(r), -1) for r in query_training_rows], dtype=np.int64)
+    eligible = Xtr.shape[0] - (self_pos >= 0).astype(np.int64)
+    if np.any(eligible < 1):
+        raise ValueError("a query frame has no eligible training neighbour to vote")
+    k_eff = np.minimum(int(k), eligible)
+    kmax = int(k_eff.max())
+    want = min(Xtr.shape[0], kmax + 1)
+    nl = np.full((n_q, kmax), -1, dtype=np.int64)
+    tree = None
+    if use_tree and Xtr.shape[0] > want:
+        from sklearn.neighbors import NearestNeighbors
+        tree = NearestNeighbors(n_neighbors=want, algorithm="auto").fit(Xtr)
+    step = block if tree is None else max(block, 65536)
+    for lo in range(0, n_q, step):
+        hi = min(n_q, lo + step)
+        if tree is not None:
+            dist, nn = tree.kneighbors(Xq[lo:hi], n_neighbors=want, return_distance=True)
+            dist = np.where(nn == self_pos[lo:hi][:, None], np.inf, dist)
+            order = np.lexsort((nn, dist), axis=1)
+            nn = np.take_along_axis(nn, order, axis=1)[:, :kmax]
+            got = lab[nn]
+        else:
+            D2 = (2.0 * W) - 2.0 * (Xq[lo:hi] @ Xtr.T)
+            np.maximum(D2, 0.0, out=D2)
+            rows = np.flatnonzero(self_pos[lo:hi] >= 0)
+            D2[rows, self_pos[lo:hi][rows]] = np.inf
+            got = lab[k_nearest_stable(D2, kmax)]
+        # The excluded self sits at +inf, so it sorts LAST: blanking slots beyond k_effective
+        # removes it and nothing else.
+        got[np.arange(kmax)[None, :] >= k_eff[lo:hi][:, None]] = -1
+        nl[lo:hi] = got
+    v = vote(nl, k_eff, rule="fraction", threshold=threshold)
+    return dict(labels=v["labels"], k=int(k), k_effective=v["k_effective"],
+                classes=[int(c) for c in np.unique(lab)], vote_rule="fraction",
+                n_winner=v["n_winner"], vote_fraction=v["vote_fraction"],
+                min_vote_fraction=float(threshold),
+                n_abstained=int((v["labels"] < 0).sum()),
+                n_train=int(Xtr.shape[0]), n_query=int(n_q),
+                excluded_noise_from_training=bool(excluded_noise),
+                leave_one_out=bool(query_training_rows is not None),
+                note="k-NN on the periodic chord metric; assigned when the winner holds at least "
+                     "min_vote_fraction of k_effective votes (equality accepted). A frame that "
+                     "fails is AMBIGUOUS, not evidence of a free-energy barrier.")
 
 
 def cluster_mass(labels, frame_weights=None) -> Dict[str, Any]:

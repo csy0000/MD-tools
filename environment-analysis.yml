@@ -39,7 +39,8 @@ dependencies:
   # Clustering, for `md_tools.analysis.t_hdbscan`. `sklearn.cluster.HDBSCAN` needs
   # scikit-learn >= 1.3; it is imported lazily, so a run environment without it is unaffected.
   - scikit-learn>=1.3
-  # Molecular symmetry, for `md_tools.analysis.t_symmetry`: graph automorphisms, the 2D depictions
+  # Molecular symmetry, for `md_tools.analysis.t_hdbscan` (symmetry-first by default, so the
+  # default route needs it) and the post-hoc `t_symmetry`: graph automorphisms, the 2D depictions
   # of each torsion and each operation, and reading the ligand SDF the quadruplets index into.
   # The RUN environment already has rdkit for parameterisation; this is the analysis side's own
   # copy, and the two are allowed to differ in version because nothing is passed between them as
