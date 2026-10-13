@@ -71,9 +71,7 @@ made from, so the same molecule from a different pose resolves to the same packa
 | [**cMD**](cMD.md) | parameterise once, then a plain simulation from that package | published |
 | [**REST2**](REST2.md) | solute tempering of the molecule itself | published |
 | [**AIS**](AIS.md) | annealed importance sampling, with torsion reweighting | published |
-| **Umbrella sampling** | a potential of mean force along a chosen torsion | page planned, 0.6.5 |
-| **Alchemical — decoupling** | hydration free energy. The method is published, on a smaller molecule: [ethanol / hydration](../ethanol/hydration.md). This system has no page of its own yet | see ethanol |
+| **Umbrella sampling** | a potential of mean force along a chosen torsion | page planned |
 
-*Umbrella sampling arrives in 0.6.3 and the alchemical pages in 0.7.0. They are listed here so the
-shape of the set is visible; neither is written yet, and neither is linked to a page that does not
-exist.*
+*Umbrella sampling is listed so the shape of the set is visible; it is not written yet, and it is
+not linked to a page that does not exist.*

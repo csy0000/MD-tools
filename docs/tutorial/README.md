@@ -20,8 +20,6 @@ size.
 |---|---|---|
 | [**Alanine dipeptide**](ALA/index.md) | the toy: two torsions with barriers a plain run crosses, so a method can be checked against the truth | cMD, REST2, AIS |
 | [**Paracetamol**](paracetamol/index.md) | a ligand on its own: parameterise once, reuse everywhere | cMD, REST2, AIS |
-| [**Ethanol**](ethanol/index.md) | the smallest alchemical free energy there is, with an experimental number to check it against | hydration free energy |
-| [**Ethane + chloroethane**](ethane-chloroethane/index.md) | one atom apart: the relative free energy pattern every protein-ligand campaign uses | relative hydration |
 | [**Chignolin**](chignolin/index.md) | a folding peptide: a real equilibrium, small enough to compare methods in a day | cMD, REST2 |
 | [**Barnase + barstar**](barnase-barstar/index.md) | a protein–protein interface: the coordinate is between two molecules | cMD |
 | [**TYK2 + ejm_31**](tyk2-ejm31/index.md) | a kinase with a real inhibitor: where a hot region is worth CHOOSING | cMD, selective REST2, AIS |
@@ -33,20 +31,16 @@ size.
 | **cMD** | alanine dipeptide, paracetamol, chignolin, barnase–barstar, TYK2 (1 µs) | published |
 | **REST2** | alanine dipeptide, paracetamol, chignolin, TYK2 (selective) | published |
 | **AIS** | alanine dipeptide, paracetamol; TYK2 as a measured LIMIT | published |
-| **Umbrella sampling** | alanine dipeptide (φ), protein–ligand and protein–protein (centre-of-mass distance) | page planned, 0.6.5 |
-| **Alchemical — decoupling** | [ethanol](ethanol/hydration.md) (hydration free energy) | published |
-| **Alchemical — relative, ligand to ligand** | [ethane → chloroethane](ethane-chloroethane/relative.md); protein-ligand planned | published |
+| **Umbrella sampling** | alanine dipeptide (φ), protein–ligand and protein–protein (centre-of-mass distance) | page planned |
 
 A planned row is listed so the shape of the set is visible; it is never linked to a page that does
-not exist. `Alchemical — decoupling` removes a molecule from its surroundings and is published;
-turning one ligand INTO another is a different plan and a different page, and it is not written.
+not exist. The tutorials are about conformational sampling; no alchemical transformation is
+taught here.
 
 Run on NVIDIA RTX 3080 GPUs with CUDA and mixed precision.
 
 | page | version it was run against |
 |---|---|
-| [ethanol / hydration free energy](ethanol/hydration.md) | `0.6.4` |
-| [ethane → chloroethane / relative hydration](ethane-chloroethane/relative.md) | `0.6.4` |
 | [paracetamol / cMD](paracetamol/cMD.md) | `0.6.1` |
 | [paracetamol / REST2](paracetamol/REST2.md) | `0.6.1` |
 | [paracetamol / AIS](paracetamol/AIS.md) | `0.6.1` |

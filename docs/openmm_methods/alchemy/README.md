@@ -21,8 +21,7 @@ The chain runs end to end, and what is and is not implemented is worth stating e
 * **Four modes.** `single`, `hybrid` and `dual` turn one ligand into another; `decoupling` removes
   one, which is what an absolute hydration or binding free energy needs.
 * **The answer has been checked twice**, against experiment and against a different alchemical
-  route through the same thermodynamics — see [validation.md](validation.md) and the
-  [ethanol hydration tutorial](../../tutorial/ethanol/hydration.md).
+  route through the same thermodynamics — see [validation.md](validation.md).
 
 The five λ components are named as OpenFE and `openmmtools` name them — `lambda_electrostatics`,
 `lambda_sterics`, `lambda_bonds`, `lambda_angles`, `lambda_torsions` — and the bonded three move

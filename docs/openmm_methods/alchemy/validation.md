@@ -120,7 +120,7 @@ is reported, never gated on.
 * **These nine legs were driven from Python** (`md_tools.alchemy.campaign`), because they predate
   `build-md` generating an alchemical directory. The generated route has since been run on the same
   calculation — three repeats, **−3.656 ± 0.075** against the −3.523 ± 0.025 below, agreeing to
-  1.7 σ (see the [ethanol hydration tutorial](../../tutorial/ethanol/hydration.md)). The plan the
+  1.7 σ. The plan the
   CLI builds is bit-identical to the plan these legs used, asserted by
   `tests/test_combine_decoupling.py` rather than assumed, and the `WindowSettings` match field for
   field.
