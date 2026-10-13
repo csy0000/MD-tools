@@ -54,12 +54,14 @@ CYCLO_GDR = "O=C1NCC(=O)N[C@H](CC(=O)[O-])C(=O)N[C@H]1CCCNC(N)=[NH2+]"
 CYCLO_NEUTRAL = "O=C1NCC(=O)N[C@H](CC(=O)O)C(=O)N[C@H]1CCCCN"
 
 
-def _build(tmp_path, smiles, kind, solvent="GBn2"):
+def _build(tmp_path, smiles, kind, solvent="GBn2", protonate=True):
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "in.smi").write_text(f"{smiles} CYC\n", encoding="utf-8")
     (tmp_path / "sys.config").write_text(
         f"solute:\n  kind: {kind}\n  ligand_forcefield: sage-2.2.1\n"
         f"  ligand_charge_method: am1bcc\nsolvent:\n  model: {solvent}\n"
+        + ("" if protonate else "protonation:\n  ligand_method: none\n")   # the acid IS neutral here
+        +
         f"constraints:\n  type: HBonds\nhydrogen_mass_repartitioning:\n  enabled: false\n",
         encoding="utf-8")
     done = subprocess.run(
@@ -98,7 +100,7 @@ def builds(tmp_path_factory):
     return {
         "like": _build(root / "like", CYCLO_GDR, "peptide-like"),
         "ligand": _build(root / "ligand", CYCLO_GDR, "ligand"),
-        "neutral": _build(root / "neutral", CYCLO_NEUTRAL, "peptide-like"),
+        "neutral": _build(root / "neutral", CYCLO_NEUTRAL, "peptide-like", protonate=False),
     }
 
 

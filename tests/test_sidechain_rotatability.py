@@ -240,8 +240,10 @@ def test_an_aromatic_ring_c_n_bond_is_not_an_undecided_amide(tmp_path):
     refusal could not be answered: the exclusions file only ADDS protection, which it has.
     """
     topology, sdf = _folate_topology_and_sdf(tmp_path)
+    # v4: this test is about the EVIDENCE path (what the amide test reads from bond orders), which a
+    # peptide-like residue takes; a ligand's amide is scaled without that test (see the next test).
     report = classify_unscaled_torsions(topology, list(range(topology.getNumAtoms())),
-                                        ligand_sdf=sdf)
+                                        ligand_sdf=sdf, peptide_like_residues=["FOL"])
 
     assert report["unclassified"] == [], (
         "an amide candidate another rule already classified must not block the build")
@@ -257,6 +259,21 @@ def test_an_aromatic_ring_c_n_bond_is_not_an_undecided_amide(tmp_path):
 
     # And the REAL amide is still an amide, not quietly swept into the same bucket.
     assert protected.get((6, 8)) == "amide_omega", protected
+
+
+@pytest.mark.slow
+def test_a_ligands_aromatic_lactam_is_protected_not_reported_as_a_scaled_amide(tmp_path):
+    """v4: a ligand's amide is scaled, but the pterin lactam is an aromatic ring bond and stays
+    protected. Reporting it under `ligand_amide_scaled_bonds` would say the opposite of what the
+    Hamiltonian does, while the benzoylglutamate amide is the one that really is scaled."""
+    topology, sdf = _folate_topology_and_sdf(tmp_path)
+    report = classify_unscaled_torsions(topology, list(range(topology.getNumAtoms())),
+                                        ligand_sdf=sdf)
+    protected = {tuple(e["bond"]): e["class"] for e in report["central_bonds"]}
+    assert protected.get((26, 28)) == "non_rotatable"
+    assert (6, 8) not in protected
+    scaled = {tuple(sorted(b)) for b in report["ligand_amide_scaled_bonds"]}
+    assert (26, 28) not in scaled and (6, 8) in scaled, scaled
 
 
 @pytest.mark.slow
@@ -360,7 +377,10 @@ def test_the_refusal_names_the_ATOMS_not_just_their_elements(tmp_path):
         residue.name = "FOL"
 
     with pytest.raises(UnclassifiedTorsionError) as refusal:
-        unscaled_torsions(topology, list(range(topology.getNumAtoms())))   # no ligand_sdf
+        # v4 scales a ligand's amide without asking for bond orders; the per-bond evidence lines
+        # this test reads are the peptide-like path's, so the residue is declared peptide-like.
+        unscaled_torsions(topology, list(range(topology.getNumAtoms())),
+                          peptide_like_residues=["FOL"])   # no ligand_sdf
 
     line = next(ln.strip() for ln in str(refusal.value).splitlines()
                 if ln.strip().startswith("bond "))

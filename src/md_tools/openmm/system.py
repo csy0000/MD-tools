@@ -1444,6 +1444,14 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
     # refused, and `bond: None` entries -- a whole residue with no bond orders at all -- are never
     # dropped, because nothing about that residue was classified.
     classified = {tuple(entry["bond"]) for entry in central}
+    # A ligand-amide candidate that the aromatic or double-bond rule placed is NOT scaled -- that
+    # rule protects it (folate's pterin lactam). Reporting it as "ligand amide scaled" would say
+    # the opposite of what the Hamiltonian does, so it is recorded as resolved by that rule instead.
+    protected_ligand = [c for c in ligand_amide if tuple(sorted(c["bond"])) in classified]
+    ligand_amide = [c for c in ligand_amide if c not in protected_ligand]
+    unknown = unknown + [dict(c, evidence_missing=False, ambiguous=(
+        "inside a ligand residue; the amide rule does not apply to it and the bond is protected "
+        "by another rule")) for c in protected_ligand]
     resolved = [u for u in unknown
                 if u["bond"] is not None and tuple(sorted(u["bond"])) in classified]
     unknown = [u for u in unknown if u not in resolved]

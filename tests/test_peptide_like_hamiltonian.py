@@ -230,7 +230,10 @@ def test_the_scaling_invariants_hold_over_the_corrected_system(trees, tau):
     # one non-standard residue, so the classifier reaches for the SDF's bond orders on the
     # strength of the residue name alone and lands on exactly the bonds `route="ligand"` used to
     # force. If that stops being true, the exclusion set and the peptide map below disagree.
-    classified = classify_unscaled_torsions(topology, solute, ligand_sdf=sdf)
+    # v4: the omega protection is for peptide-like residues, which the scaler reads from the build
+    # record's `solute.kind`; this test calls the classifier directly, so it declares the residue.
+    classified = classify_unscaled_torsions(topology, solute, ligand_sdf=sdf,
+                                            peptide_like_residues=["CYC"])
     excluded = [tuple(sorted(int(a) for a in pair))
                 for pair in classified["unscaled_central_bonds"]]
     amides = {frozenset(c["bond"]) for c in classified["amide_detail"]["unscaled"]}

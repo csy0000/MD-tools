@@ -265,7 +265,8 @@ def test_saved_ladder_states_of_a_peptide_like_solute_exclude_its_omegas(tmp_pat
 
     topology = PDBFile(str(build / "built.pdb")).topology
     classified = unscaled_torsions(topology, solute_atom_indices(topology),
-                                   ligand_sdf=build / "CYC.sdf")
+                                   ligand_sdf=build / "CYC.sdf",
+                                   peptide_like_residues=["CYC"])   # v4: the build record says so
     expected = {tuple(sorted(b)) for b in classified["unscaled_central_bonds"]}
     amides = [c for c in classified["central_bonds"] if c["class"] == "amide_omega"]
     assert len(amides) == 3, amides
