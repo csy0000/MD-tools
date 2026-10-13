@@ -163,6 +163,9 @@ class ScalingSelection:
         for pair in classified.get("ligand_amide_scaled_bonds") or []:
             labels.append({"bond": [int(i) for i in pair], "residues": None,
                            "reason": "ligand amide: SCALED, the omega protection is for peptides"})
+        for pair in classified.get("guanidinium_scaled_bonds") or []:
+            labels.append({"bond": [int(i) for i in pair], "residues": None,
+                           "reason": "ligand guanidinium C-N: SCALED, all three alike"})
         for pair in classified.get("proline_like_scaled_bonds") or []:
             labels.append({"bond": [int(i) for i in pair], "residues": None,
                            "reason": "proline-like: SCALED, no amide hydrogen to protect"})

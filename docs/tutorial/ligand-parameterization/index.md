@@ -12,7 +12,7 @@ Two molecules, one question each:
 | **Paracetamol** | a 20-atom ligand with one acetamide | how is a ligand protonated, parameterised, and scaled — with Sage's torsions, and with torsions refitted to MACE-OMOL? |
 | **c(RGDfV)** | a cyclic pentapeptide that is not a protein: `solute.kind: peptide-like` | which torsions does REST2 protect, and which does it heat? |
 
-Both are prepared the same way: **pH 7.4, AM1-BCC charges, Sage 2.2.1.** The three steps run in this
+Both are prepared the same way: **the default pH (7.0), AM1-BCC charges, Sage 2.2.1.** The three steps run in this
 order, and each is recorded in the build log:
 
 1. **Protonation at a stated pH**, by Open Babel.
@@ -22,16 +22,8 @@ order, and each is recorded in the build log:
 ## 1. Protonation comes first
 
 `protonation.ligand_method` is `openbabel` by default, and `protonation.ph` is the pH it is applied
-at. This page states `7.4` in every configuration:
-
-```yaml
-protonation:
-  ph: 7.4
-```
-
-!!! note "The default is 7.0"
-    `protonation.ph` defaults to `7.0` and is shared with the protein half of a build. Every
-    configuration on this page sets `7.4` explicitly, which is why you will see it in each log.
+at: **7.0** unless you state another. That key is shared with the protein half of a build. Every
+configuration on this page leaves it at the default, which is why the logs say pH 7.0.
 
 Open Babel's pH model (`OBMol.AddHydrogens(False, True, pH)`, the call behind `obabel -p`) runs on
 the molecule **before** the charges are calculated, for a `.smi`, `.sdf` or `.mol2`:
@@ -43,7 +35,7 @@ md-openmm build-top --parameterize -i acid.smi --config acid.config \
 ```
 
 ```text
-  coordinates   embedded from the SMILES CC(=O)[O-]; protonation: Open Babel 3.2.1 at pH 7.4:
+  coordinates   embedded from the SMILES CC(=O)[O-]; protonation: Open Babel 3.2.1 at pH 7.0:
                 net charge +0 -> -1; CC(=O)O -> CC(=O)[O-]
   package       LOCAL-QTBSBXVTEAMEQO/param_c565813e02ae   (created)
 ```
@@ -52,7 +44,6 @@ The acid was parameterised as acetate. To parameterise a molecule exactly as wri
 
 ```yaml
 protonation:
-  ph: 7.4
   ligand_method: none
 ```
 
@@ -76,7 +67,7 @@ Both molecules below are left unchanged — paracetamol has nothing to ionise, a
 already written as the zwitterion — and the log says so:
 
 ```text
-  ligand protonation   Open Babel 3.2.1 at pH 7.4: no change
+  ligand protonation   Open Babel 3.2.1 at pH 7.0: no change
 ```
 
 ## 2. A ligand: paracetamol with Sage's torsions
@@ -93,8 +84,6 @@ solute:
   compound_id: CHEMBL112
   aliases: [paracetamol, acetaminophen, TYL]
   parameters: generate
-protonation:
-  ph: 7.4
 ```
 
 ```bash
@@ -119,8 +108,6 @@ solute:
 solvent:
   model: TIP3P
   padding_nm: 1.0
-protonation:
-  ph: 7.4
 ```
 
 ```bash
@@ -129,7 +116,7 @@ cp ../parameter/TYL.sdf .        # the bond orders the scaler reads, beside the 
 ```
 
 ```text
-  ligand pH    : Open Babel 3.2.1 at pH 7.4: no change
+  ligand pH    : Open Babel 3.2.1 at pH 7.0: no change
   parameters   : CHEMBL112/param_e932f4c4f371 (reused (stated reference))
   solvation    : 580 waters, ions {'NA': 2, 'CL': 2}, box dodecahedron (18.5 nm^3)
 ```
@@ -201,6 +188,7 @@ The fit used here, for the record:
 | | |
 |---|---|
 | starting force field | Sage 2.2.1 (the unconstrained file BespokeFit fits against) |
+| protonation | Open Babel at pH 7.4 in the fitting pipeline; paracetamol is unchanged at 7.0 and 7.4, so it is the same molecule |
 | charges | the package's AM1-BCC charges, held fixed through every evaluation |
 | reference | MACE-OMOL-0 `extra_large`, on three GPUs |
 | scans | two 1-D torsion drives (24 points each, 15° grid), each point relaxed |
@@ -226,8 +214,6 @@ solute:
   parameters: generate
   torsion_refinement: mace-omol-bespokefit
   refinement_offxml: data/ligand_sage_mace.offxml
-protonation:
-  ph: 7.4
 ```
 
 ```bash
@@ -293,8 +279,6 @@ solute:
   residue_name: RGD
 solvent:
   model: GBn2
-protonation:
-  ph: 7.4
 ```
 
 ```bash
@@ -304,14 +288,15 @@ md-openmm build-top -i RGDfV.smi -os built.xml -op built.pdb -log built.log --co
 ```text
   built 79 particles, 1 residues, implicit GBn2
   ligand packages     LOCAL-YYQUWEHEBOMRPH/param_7b0e047357d8 (written)
-  ligand protonation  Open Babel 3.2.1 at pH 7.4: no change
+  ligand protonation  Open Babel 3.2.1 at pH 7.0: no change
 ```
 
 The same scaler command on this System:
 
 ```text
-  unscaled torsions   amide omega 5 bond(s), non rotatable 7 bond(s), impropers 63 term(s)
-                      131 torsion term(s) unscaled, 235 scaled
+  unscaled torsions   amide omega 5 bond(s), non rotatable 9 bond(s), impropers 63 term(s)
+                      139 torsion term(s) unscaled, 227 scaled
+  guanidinium C-N     0 bond(s), scaled (a ligand's; protected in a protein or peptide-like residue)
   ligand amides       0 bond(s), scaled (the omega protection is for peptides; peptide-like
                       residues: ['RGD'], from build record built.log (solute.kind: peptide-like))
 ```
@@ -331,44 +316,46 @@ python scaler_report.py built.pdb REST2/scaler.yaml
 amide omega          5
     RGD:N1-C5 (4-5)    RGD:N2-C14 (15-16)   RGD:N3-C18 (23-24)
     RGD:N4-C20 (27-28) RGD:N8-C26 (38-39)
-aromatic / double    7
-    the six phenyl ring bonds (9-10 ... 13-14), and RGD:C25-N7 (35-37), one guanidinium C-N
-scaled              23
+aromatic / double    9
+    the six phenyl ring bonds (9-10 ... 13-14), and the three guanidinium C-N bonds
+    RGD:N5-C25 (34-35)   RGD:C25-N6 (35-36)   RGD:C25-N7 (35-37)
+scaled              21
     every φ, ψ and side-chain rotation: RGD:C1-C2, C2-C3, C2-C4, C4-N1, C4-C26, C5-C6,
     C6-C7, C6-N2, C7-C8, C14-C15, C15-C16, C15-N3, C16-C17, C18-C19, C19-N4, C20-C21,
-    C21-C22, C21-N8, C22-C23, C23-C24, C24-N5, N5-C25, C25-N6
+    C21-C22, C21-N8, C22-C23, C23-C24, C24-N5
 improper terms      63  (unscaled)
 ```
 
 Everything that can rotate and is not an amide ω is scaled: the Cα–C and N–Cα bonds (φ, ψ), the
-valine, phenylalanine, aspartate and arginine side-chain rotations, 23 bonds in all. Only three
+valine, phenylalanine, aspartate and arginine side-chain rotations, 21 bonds in all. Only three
 kinds of bond stay at τ = 0:
 
 * the **amide ω** bonds, as above;
 * an **aromatic ring** bond or a **double** bond, which has no other conformer to reach: the
-  phenyl ring, and the guanidinium C=N;
+  phenyl ring, and the three guanidinium C–N bonds;
 * every **improper** term.
 
-!!! note "The guanidinium is protected through one bond"
-    Delocalised, all three guanidinium C–N bonds are partly double. The scaler reads the bond
-    orders of the SDF, where one of them is written as the double bond (`C25–N7`), and protects
-    that one; `N5–C25` and `C25–N6` are scaled. Which one carries the double bond is a
-    notational choice of the SMILES, so a different but equivalent writing can protect a different
-    C–N. To change an individual decision, list its central bond in `unscaled_list` or
-    `scaled_list` in `scaler.config`.
+!!! note "The guanidinium is protected as a group"
+    Delocalised, the three guanidinium C–N bonds are partly double, and which of them a SMILES
+    writes as the double bond is notation, not chemistry. In a peptide-like residue the scaler
+    protects **all three**, as it does for a protein's ARG; in a ligand it scales **all three**.
+    The classification never depends on how the SMILES was written. To change an individual
+    decision, list its central bond in `unscaled_list` or `scaled_list` in `scaler.config`.
 
 ### The same molecule as a ligand
 
 `kind` decides this, and nothing else does. Building the **same SMILES** with `kind: ligand`:
 
 ```text
-  unscaled torsions   amide omega 0 bond(s), non rotatable 7 bond(s), impropers 63 term(s)
-                      91 torsion term(s) unscaled, 275 scaled
+  unscaled torsions   amide omega 0 bond(s), non rotatable 6 bond(s), impropers 63 term(s)
+                      87 torsion term(s) unscaled, 279 scaled
+  guanidinium C-N     3 bond(s), scaled (a ligand's; protected in a protein or peptide-like residue)
   ligand amides       5 bond(s), scaled (the omega protection is for peptides; peptide-like
                       residues: none, from build record built.log (solute.kind: ligand))
 ```
 
-The five backbone amides are now scaled (275 scaled terms against 235, 91 unscaled against 131).
+The five backbone amides are now scaled, and so are the three guanidinium C–N bonds (279 scaled
+terms against 227, 87 unscaled against 139).
 If the molecule is a peptide, say so with `peptide-like`; if it is not, `ligand` is right. The
 choice can also be stated per residue with `peptide_like_residues` in `scaler.config`, which wins
 over the build record, an empty list included.

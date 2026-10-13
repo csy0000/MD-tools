@@ -899,6 +899,8 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
             # v4). Recorded so that "decided" never reads as "never noticed".
             "ligand_amide_scaled_bonds": [list(b) for b in
                                           unscaled.get("ligand_amide_scaled_bonds", ())],
+            "guanidinium_scaled_bonds": [list(b) for b in
+                                         unscaled.get("guanidinium_scaled_bonds", ())],
             "peptide_like_residues": list(config["peptide_like_residues"]),
             "peptide_like_residues_source": peptide_like_source,
             "unnamed_scaled_bonds": [
@@ -1007,6 +1009,8 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
                       f"{section['n_scaled_solute_torsion_terms']} scaled")
         log.field("proline-like amides", f"{len(section['proline_like_scaled_bonds'])} bond(s), "
                                          f"scaled")
+        log.field("guanidinium C-N", f"{len(section['guanidinium_scaled_bonds'])} bond(s), scaled "
+                                     f"(a ligand's; protected in a protein or peptide-like residue)")
         log.field("ligand amides", f"{len(section['ligand_amide_scaled_bonds'])} bond(s), scaled "
                                    f"(the omega protection is for peptides; peptide-like "
                                    f"residues: {section['peptide_like_residues'] or 'none'}, "

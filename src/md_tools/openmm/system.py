@@ -1264,6 +1264,7 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         return instance_info[residue_index]
 
     unscaled, proline, urea, ligand_amide, unknown = [], [], [], [], []
+    guanidinium_scaled: list = []
     for cand in candidates:
         if cand["ambiguous"]:
             unknown.append(dict(cand, evidence_missing=False)); continue
@@ -1423,6 +1424,16 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         for a, b in sorted(info["double_bonds"]):
             if a in members and b in members:
                 _add(a, b, "non_rotatable", residue, f"{evidence}: double bond")
+        # The guanidinium C-N bonds, as a group: protected in a protein or peptide-like residue
+        # (the same answer the protein table gives ARG), SCALED in a ligand, where they are
+        # ordinary rotors with a real barrier and the SMILES's choice of which one is the double
+        # bond must not decide what REST2 heats.
+        for a, b in sorted(info.get("guanidinium_bonds", ())):
+            if a in members and b in members:
+                if name in peptide_names:
+                    _add(a, b, "non_rotatable", residue, f"{evidence}: guanidinium C-N")
+                elif _central(a, b):
+                    guanidinium_scaled.append([a, b])
 
     central.sort(key=lambda e: (UNSCALED_BOND_CLASSES.index(e["class"]), e["bond"]))
 
@@ -1485,6 +1496,8 @@ def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
         # peptide-like), scaled by decision: the omega protection is for peptides. Recorded for the
         # same reason as the urea above, and with the residue it was found in.
         "ligand_amide_scaled_bonds": [c["bond"] for c in ligand_amide],
+        # A ligand's guanidine / guanidinium C-N bonds, scaled by decision, all three alike.
+        "guanidinium_scaled_bonds": guanidinium_scaled,
         "peptide_like_residues": sorted(peptide_names),
         "unclassified": [u for u in unknown if u.get("evidence_missing")],
         "unnamed_scaled_bonds": [u for u in unknown if not u.get("evidence_missing")],
@@ -1710,6 +1723,20 @@ def _sdf_bond_evidence(ligand_sdf, topology, atoms_to_map: set[int], max_ring: i
             aromatic_bonds.add(pair)
         elif bond.GetBondType() == Chem.BondType.DOUBLE:
             double_bonds.add(pair)
+    # A GUANIDINE or guanidinium carbon: sp2, not aromatic, three nitrogen neighbours and nothing
+    # else. All three C-N bonds are partly double (the charge is delocalised), so which one a
+    # SMILES writes as the double bond is notation, not chemistry. They are therefore classified
+    # as a GROUP, by residue kind, instead of by whichever one carries the double bond.
+    guanidinium_bonds = set()
+    for atom in mol.GetAtoms():
+        if atom.GetAtomicNum() != 6 or atom.GetIsAromatic() or atom.GetDegree() != 3:
+            continue
+        neighbours = list(atom.GetNeighbors())
+        if all(n.GetAtomicNum() == 7 and not mol.GetBondBetweenAtoms(
+                atom.GetIdx(), n.GetIdx()).GetIsAromatic() for n in neighbours):
+            for n in neighbours:
+                guanidinium_bonds.add(tuple(sorted((index_of[atom.GetIdx()], index_of[n.GetIdx()]))))
+    double_bonds -= guanidinium_bonds
     amide_bonds, small_ring_n, ring_sizes = set(), set(), {}
     ri = mol.GetRingInfo()
     for c_i, _o_i, n_i in mol.GetSubstructMatches(amide):
@@ -1721,7 +1748,7 @@ def _sdf_bond_evidence(ligand_sdf, topology, atoms_to_map: set[int], max_ring: i
                 small_ring_n.add(index_of[n_i])
     return {"amide_bonds": amide_bonds, "small_ring_nitrogens": small_ring_n,
             "ring_sizes": ring_sizes, "aromatic_bonds": aromatic_bonds,
-            "double_bonds": double_bonds}
+            "double_bonds": double_bonds, "guanidinium_bonds": guanidinium_bonds}
 
 
 def omega_central_bonds(topology, solute_atoms: Iterable[int]) -> list[tuple[int, int]]:

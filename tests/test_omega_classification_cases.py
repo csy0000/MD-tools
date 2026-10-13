@@ -512,3 +512,56 @@ def test_a_bond_the_evidence_could_not_name_is_scaled_and_recorded():
         f"the C-N must be recorded as seen-but-unnamed, got {result['unnamed_scaled_bonds']}")
     assert result["unnamed_scaled_bonds"][0]["evidence_missing"] is False
     assert result["unscaled_central_bonds"] == [], "and it is scaled, not protected"
+
+
+# --- the guanidine / guanidinium group (user decision 2026-10-13) --------------------------------
+
+#: The SAME cation written with each of its three N atoms carrying the double bond. All three C-N
+#: bonds are partly double, so the classification must not depend on which one the SMILES chose.
+GUANIDINIUM_WRITINGS = ["CCCNC(N)=[NH2+]", "CCCNC(=[NH2+])N", "CCCN=C(N)[NH3+]"]
+
+
+def _guanidinium_bonds(result, topology):
+    """The C-N pairs of the guanidinium carbon, found from the topology and not from the result."""
+    atoms = list(topology.atoms())
+    carbon = next(a.index for a in atoms if a.element.symbol == "C"
+                  and sum(1 for b in topology.bonds()
+                          if a in (b.atom1, b.atom2)
+                          and {b.atom1.element.symbol, b.atom2.element.symbol} == {"C", "N"}) == 3)
+    return {tuple(sorted((carbon, n.index))) for b in topology.bonds()
+            for n in (b.atom1, b.atom2) if n.element.symbol == "N"
+            and carbon in (b.atom1.index, b.atom2.index)}
+
+
+@pytest.mark.parametrize("smiles", GUANIDINIUM_WRITINGS)
+def test_a_ligands_guanidinium_cn_bonds_are_all_scaled_whichever_one_is_written_double(smiles):
+    from md_tools.openmm.system import unscaled_torsions
+
+    topology, solute, sdf = _ligand_topology(smiles, name="GUA")
+    result = unscaled_torsions(topology, solute, ligand_sdf=sdf)
+    pairs = _guanidinium_bonds(result, topology)
+    assert len(pairs) == 3
+    protected = {tuple(sorted(e["bond"])) for e in result["central_bonds"]}
+    assert not (pairs & protected), "a ligand's guanidinium C-N must be scaled"
+    assert {tuple(sorted(b)) for b in result["guanidinium_scaled_bonds"]} == pairs
+
+
+@pytest.mark.parametrize("smiles", GUANIDINIUM_WRITINGS)
+def test_a_peptide_like_guanidinium_protects_all_three_cn_bonds(smiles):
+    from md_tools.openmm.system import unscaled_torsions
+
+    topology, solute, sdf = _ligand_topology(smiles, name="GUA")
+    result = unscaled_torsions(topology, solute, ligand_sdf=sdf, peptide_like_residues=["GUA"])
+    pairs = _guanidinium_bonds(result, topology)
+    protected = {tuple(sorted(e["bond"])) for e in result["central_bonds"]}
+    assert pairs <= protected, "a peptide-like guanidinium keeps the protein ARG's protection"
+    assert result["guanidinium_scaled_bonds"] == []
+
+
+def test_a_guanidinium_is_not_confused_with_an_amide_or_an_amidine():
+    """Three nitrogens and nothing else is the rule: an amidine (two) and an acylguanidine's
+    carbonyl are other groups and keep the rules they had."""
+    from md_tools.openmm.system import unscaled_torsions
+
+    topology, solute, sdf = _ligand_topology("CC(N)=[NH2+]", name="AMI")      # amidinium
+    assert unscaled_torsions(topology, solute, ligand_sdf=sdf)["guanidinium_scaled_bonds"] == []

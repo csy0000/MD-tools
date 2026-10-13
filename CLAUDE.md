@@ -143,7 +143,8 @@ Do not change these without a failing test that demonstrates a defect.
   UNSCALED TORSION unscaled — each proper torsion across an ordinary amide C–N (omega) **of a
   protein or peptide-like residue** (a LIGAND's amide is scaled, user decision 2026-10-12; the
   scaler reads `solute.kind: peptide-like` from the build record, `peptide_like_residues` overrides),
-  an aromatic ring bond or another double bond (the ARG guanidinium included), and every improper; eligible
+  an aromatic ring bond or another double bond, the three C–N bonds of a guanidinium **in a protein or
+  peptide-like residue** (a ligand's are scaled, all three alike, user decision 2026-10-13), and every improper; eligible
   solute torsions and CMAP by `(1-tau)²`; solute–solute nonbonded and 1-4 by `(1-tau)²`;
   solute–environment by `(1-tau)`; generalized-Born by `(1-tau)`. Exchanges never rescale
   velocities. The runtime is NVT. One trajectory per fixed thermodynamic **state**

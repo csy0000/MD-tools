@@ -72,7 +72,7 @@ protect one ligand amide anyway, list its central bond in `unscaled_list`.
     recording v3. The states of a new build differ from a v3 build of the same ligand wherever it
     has an amide, so the two are two Hamiltonians with two digests. The exclusion is expressed as
 **central bonds**: every proper torsion term across such a bond is left unscaled, so no term is
-missed because it was enumerated differently. The ARG guanidinium counts as double bonds.
+missed because it was enumerated differently. The ARG guanidinium counts as double bonds, and so does the guanidinium of a peptide-like residue (all three C–N bonds). A **ligand's** guanidine or guanidinium C–N bonds are scaled, all three alike (v4, decided 2026-10-13), under `guanidinium_scaled_bonds`: the three bonds are partly double whichever one the SMILES writes as the double bond, so that notation must not decide what REST2 heats.
 
 **How a bond is classified.** Protein residues from a residue table (PHE, TYR, TRP, HIS rings; ARG
 NE–CZ, CZ–NH1, CZ–NH2). A small molecule from its bond orders, read from an SDF (see
