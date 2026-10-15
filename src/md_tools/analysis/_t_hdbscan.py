@@ -648,6 +648,66 @@ class THDBSCAN:
             out[c] = int(cand[int(np.argmin(total))])
         return out
 
+    def density_peak(self, cluster: int = 0) -> int:
+        """The frame at the densest point of a cluster: the member with the smallest core distance.
+
+        The core distance is the one the density criterion already used, the distance to the
+        `min_samples`-th nearest fitted frame under the symmetry-aware distance, so a frame in
+        another labelling is not counted as far. `cluster=0` is the most populated. An ACTUAL frame,
+        not a mean: a circular mean of a multimodal torsion can describe no configuration at all.
+        """
+        if not self.fitted_:
+            raise RuntimeError("call fit() before density_peak()")
+        if not self.symmetry:
+            raise NotImplementedError("density_peak() reads the symmetry-aware core distance; the "
+                                      "legacy route has none")
+        members = np.flatnonzero(self.labels_ == int(cluster))
+        if members.size == 0:
+            raise ValueError(f"cluster {cluster} has no members")
+        return int(members[int(np.argmin(self.core_distance_[members]))])
+
+    def align_all(self, reference: Optional[int] = None, *, per_cluster: bool = False) -> Dict[str, Any]:
+        """EVERY frame written in the labelling nearest a reference frame (Dirichlet-domain rule).
+
+        The reference is the density peak of the most populated cluster unless a frame index is
+        given. Unlike :meth:`aligned_angles`, which aligns each cluster to its own representative,
+        this puts all clusters in ONE labelling, so their histograms are drawn on the same axes.
+
+        With `per_cluster=False` every frame is compared with the one reference. A cluster far from
+        it sits near the wall between two labellings -- both images are about equally distant -- and
+        the choice is then arbitrary frame to frame: see the returned `margin`. With
+        `per_cluster=True` (two levels) each cluster's frames are aligned to THEIR OWN density
+        peak, and only that one peak is written in the labelling nearest the reference; clusters
+        stay compact, and the only arbitrary choice left is one frame per cluster. Frames in no
+        cluster are aligned to the reference directly.
+
+        Returns :meth:`SymmetricTorsionDescriptor.align_to_reference`'s record plus `reference`,
+        `selected` (the selected torsions' angles) and `cluster_references` (per cluster).
+        """
+        if not self.fitted_:
+            raise RuntimeError("call fit() before align_all()")
+        if not self.symmetry:
+            raise NotImplementedError("align_all() needs the symmetry-first route")
+        ref = self.density_peak(0) if reference is None else int(reference)
+        d = self.descriptor_
+        out = d.align_to_reference(self.closed_theta_, self.closed_theta_[ref])
+        cluster_refs = {c: ref for c in range(self.n_clusters_)}
+        if per_cluster:
+            for c in range(self.n_clusters_):
+                peak = ref if c == 0 else self.density_peak(c)
+                lead = d.align_to_reference(self.closed_theta_[[peak]], self.closed_theta_[ref])
+                local = lead["angles"][0]                     # the peak, in the reference's labelling
+                members = np.flatnonzero(self.labels_ == c)
+                sub = d.align_to_reference(self.closed_theta_[members], local)
+                for key in ("angles", "operations", "distance", "distance_identity", "margin"):
+                    out[key][members] = sub[key]
+                cluster_refs[c] = peak
+        out["angles"] = np.angle(np.exp(1j * out["angles"]))
+        out["reference"] = ref
+        out["cluster_references"] = cluster_refs
+        out["selected"] = out["angles"][:, :self.n_torsions_]
+        return out
+
     def aligned_angles(self, cluster: int, reference: Optional[int] = None) -> Dict[str, Any]:
         """The SELECTED torsions of a cluster's members, each frame written in the labelling
         closest to the reference frame.

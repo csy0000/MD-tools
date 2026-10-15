@@ -146,9 +146,14 @@ nav:
               - Symmetry-first clustering: tutorial/paracetamol/analysis/clustering.ipynb
               - Old and new clustering compared: tutorial/paracetamol/analysis/clustering-comparison.ipynb
               - Which torsions move together: tutorial/paracetamol/analysis/mutual-information.ipynb
+              - Torsions in one labelling: tutorial/paracetamol/analysis/symmetry-alignment.ipynb
       - Ligand parameterization:
           - tutorial/ligand-parameterization/index.md
           - Bespoke torsion fit: tutorial/ligand-parameterization/bespoke-fit.md
+      - c(RGDfV):
+          - Analysis:
+              - tutorial/rgdfv/analysis/index.md
+              - Conformations of a cyclic peptide: tutorial/rgdfv/analysis/clustering.ipynb
       - Chignolin:
           - The system: tutorial/chignolin/index.md
           - cMD: tutorial/chignolin/cMD.md
@@ -200,6 +205,7 @@ nav:
               - Implementation: openmm_methods/AIS/AIS_implementation.md
       - Analysis:
           - openmm_methods/analysis/README.md
+          - Symmetry and the torsion representation: openmm_methods/analysis/clustering-and-symmetry.md
   - On hold:
       - on-hold/index.md
       - Alchemical transformation:

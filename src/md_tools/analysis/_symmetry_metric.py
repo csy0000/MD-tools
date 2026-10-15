@@ -665,6 +665,39 @@ class SymmetricTorsionDescriptor:
         k = int(np.argmax(values <= best + self._tie()))
         return float(np.sqrt(best)), k
 
+    def align_to_reference(self, theta: np.ndarray, reference: np.ndarray) -> Dict[str, Any]:
+        """Write every frame in the labelling nearest to ONE reference (the Dirichlet-domain rule).
+
+        `theta` is `(n, n_columns)` closed angles and `reference` one closed row. Each frame is
+        relabelled by the operation `g` that minimises `||Phi(reference) - Phi(g theta)||`, the
+        same one-sided minimum the clustering distance uses, and the operation acts on the WHOLE
+        row at once, never column by column. Moves no atom and drops no frame.
+
+        Returns `angles` (the relabelled closed angles, wrapped to (-pi, pi]), `operations`
+        (the minimising operation per frame, earlier operation on a tie), `distance` (the
+        minimum), `distance_identity` (the distance with no relabelling) and `margin` (second-best
+        operation's distance minus the best: small where a frame sits near the boundary between two
+        labellings and the choice is arbitrary).
+        """
+        th = np.asarray(theta, dtype=np.float64)
+        ref = self.embed(np.asarray(reference, dtype=np.float64).reshape(1, -1))[0]
+        per_op = np.empty((len(self.operations), th.shape[0]))
+        for op in self.operations:
+            per_op[op.index] = np.linalg.norm(self.embed(self.transform(th, op.index)) - ref, axis=1)
+        best = per_op.min(axis=0)
+        tie = self._tie()
+        ops = np.argmax(per_op ** 2 <= best[None] ** 2 + tie, axis=0).astype(np.int64)
+        if per_op.shape[0] > 1:
+            second = np.sort(per_op, axis=0)[1]
+        else:
+            second = np.full(th.shape[0], np.inf)
+        aligned = np.empty_like(th)
+        for k in np.unique(ops):
+            sel = ops == k
+            aligned[sel] = self.transform(th[sel], int(k))
+        return {"angles": np.angle(np.exp(1j * aligned)), "operations": ops, "distance": best,
+                "distance_identity": per_op[0], "margin": second - best}
+
     def exhaustive_distance(self, theta_x: np.ndarray, theta_y: np.ndarray
                             ) -> Tuple[float, Tuple[int, int]]:
         """Two-sided `min_{g,h} ||Phi(g x) - Phi(h y)||` and the first minimising `(g, h)`.

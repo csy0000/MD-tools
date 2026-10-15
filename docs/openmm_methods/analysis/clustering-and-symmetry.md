@@ -1,0 +1,249 @@
+# Symmetry-aware clustering and the torsion representation
+
+This page explains four things the torsional analysis does, in the order a frame meets them: how a
+symmetric torsion is **duplicated and weighted**, how the **distance is minimised over
+permutations**, how **HDBSCAN is used with a 1 % floor**, and how a frame is **written in one
+labelling** (the Dirichlet-domain rule). The tool reference is [Analysis](README.md); the results are
+on the [paracetamol](../../tutorial/paracetamol/analysis/symmetry-alignment.ipynb) and
+[c(RGDfV)](../../tutorial/rgdfv/analysis/clustering.ipynb) pages.
+
+!!! note "What is released"
+    The distance, the clustering and the weights are in 0.6.5. `THDBSCAN.density_peak`,
+    `THDBSCAN.align_all` and `SymmetricTorsionDescriptor.align_to_reference`, which implement section 4,
+    are not in a release yet.
+
+## The problem
+
+A torsion is measured through four **named** atoms, and a molecular symmetry renames atoms without
+moving any. Paracetamol's phenyl ring flip renames C5 as C10, so the same configuration is
+`aryl = -16` degrees when measured through C5 and `aryl = 164` degrees when measured through C10.
+Two consequences follow for anything built on the stored columns:
+
+* a **distance** between frames that ignores this calls one configuration two, and a clustering
+  built on it returns one cluster per naming;
+* a **histogram** of one stored column is the sum of one conformer written twice, with peaks half a
+  turn apart that are not two states.
+
+Sections 1-3 fix the first, section 4 the second. In all four, **relabelling is not motion**: no atom
+moves, and no frame is added or dropped.
+
+## 1. Duplicating torsion bonds, with weights
+
+The molecule is matched against itself with RDKit (`uniquify=False`, `useChirality=True`). Every
+match is a graph automorphism: an element-, bond-order- and stereo-preserving permutation of the atoms.
+c(RGDfV) has 36 864 of them and paracetamol has 12. Most do nothing to the torsions that were
+selected, so permutations that act identically on the descriptor collapse to one **operation**:
+
+| molecule | automorphisms | distinct operations on the selected torsions | what they are |
+|---|---|---|---|
+| paracetamol | 12 | 2 | identity, the ring flip (the 3! orderings of the methyl hydrogens move no selected torsion) |
+| c(RGDfV), 17 torsions | 36 864 | 4 | identity, the Phe ring flip, the Val methyl swap, both |
+
+An operation maps a selected quadruplet to another quadruplet with the same central bond and a
+different outer atom: `aryl` (1-3-4-5) becomes 1-3-4-10. If nobody selected 1-3-4-10, it is added.
+The descriptor is **closed**: every image of a selected torsion becomes a column of its own, named
+`<torsion>@<atoms>`, and its value is **recomputed from coordinates**. It is never approximated by a
+180 degree shift: ring distortion moves the outer atoms independently of the central bond, and on
+paracetamol the shift is wrong by up to 25 degrees.
+
+Closing makes the operations act as **permutations of columns**, which is what makes the distance in
+section 2 exact. It also duplicates a torsion, and a duplicated torsion would count twice. So each
+**orbit** of columns (the columns an operation can exchange) carries the summed weight of the
+torsions selected in it, **split equally among its columns**:
+
+| | column | weight |
+|---|---|---|
+| paracetamol | `omega` | 1 |
+| | `aryl`, `aryl@1-3-4-10`, `phenol`, `phenol@9-7-8-17` | 0.5 each |
+| c(RGDfV) | the 15 backbone phi, psi, omega | 1 each |
+| | `Val:chi1`, `Val:chi1@4-3-1-2`, `Phe:chi2`, `Phe:chi2@7-8-9-14` | 0.5 each |
+
+The ring orientation therefore counts once, as it should. Two torsions selected in one orbit must
+have equal weights, or the constructor refuses: nothing says which one the orbit should follow. The
+group closure and the isometry property of section 2 are **checked when the descriptor is built**,
+and it raises if either fails.
+
+Each column contributes `sqrt(w) (cos θ, sin θ)` to the embedding `Φ(θ)`, so a torsion is compared as
+a point on a circle: `-π` and `π` are the same place.
+
+## 2. The distance, minimised through the permutations
+
+```text
+d_sym(x, y) = min over g in G of || Φ(x) - Φ(g y) ||
+```
+
+`g y` is `y` with its columns permuted by operation `g`. The one-sided minimum is exact when every
+operation is an isometry of the embedding, which holds exactly when each operation permutes the
+columns and the weights are constant on every orbit; section 1 guarantees both and checks them. The
+two-sided minimum over `g, h` is kept as `exhaustive_distance`, and the test suite checks the two
+agree, including on a molecule with a three-fold axis where an operation and its inverse differ.
+
+Cost: `|G|` matrix products, because every embedded point has the same squared norm `W` (the total
+weight), so `||a - b||² = 2W - 2 a·b`. For c(RGDfV) that is 4, not 36 864.
+
+**The operation acts on the whole row.** In para-disubstituted benzene the flip moves `aryl` and
+`phenol` together. Folding each torsion into its own period independently would also identify the
+configuration where only one of them turned, which is a different conformer. Ties go to the earlier
+operation, with the identity first.
+
+**What is not done.** Choosing a canonical labelling per frame and taking ordinary Euclidean distances
+between the representatives breaks pairs that sit on either side of the canonicalisation boundary.
+Relabelling is never appended to the data as extra frames, which would multiply the frame counts and
+the statistical weights by the group order.
+
+Because `d_sym` is a minimum over relabellings and not Euclidean in any fixed embedding, it is
+passed to HDBSCAN as an exact dense matrix (`metric="precomputed"`): `8 n²` bytes per copy. Above
+10 000 frames the fit refuses and names the subset route (`resampling=N`).
+
+## 3. HDBSCAN, with a floor of 1 %
+
+HDBSCAN is fitted on the `d_sym` matrix, so frames that differ only by a relabelling are at distance
+zero **before** the density is built, and symmetry-related basins share a cluster during the fit.
+Nothing is merged afterwards.
+
+Two numbers set the density estimate, and both are **fractions of the fitted frames**:
+
+| | rule | paracetamol, n = 4000 | c(RGDfV), n = 4002 |
+|---|---|---|---|
+| `min_cluster_size` (the floor) | `ceil(0.01 n)` | 40 | 41 |
+| `min_samples` (the core-distance k) | `round(0.01 n)` | 40 | 40 |
+
+* **The floor is a mass, not a count.** A cluster holding under 1 % of the ensemble cannot be a
+  cluster; its frames become noise. A fraction asks the same question at every dataset size; the
+  earlier absolute default of 500 frames loosened the floor to 0.17 % at 300 000 frames.
+* **`min_samples` is pinned separately.** sklearn lets `min_samples` follow `min_cluster_size`, and
+  `min_samples` sets the core distances, so raising the floor alone changes the density estimate
+  instead of filtering clusters out of a fixed one. Measured on 15 000 hot c(RGDfV) frames, a 5 % floor
+  with `min_samples` following turned all frames into noise; pinned, the same floor returned the two
+  clusters above 5 %.
+* **Tying `min_samples` to `n` has a cost**, measured on alanine dipeptide: it smooths away a marginal
+  state (a 1.44 % basin was absorbed). `min_samples=25` restores the pinned behaviour.
+
+Then every frame, fitted or not, is classified with the **same distance** by an absolute vote of its
+20 nearest clustered neighbours (18 of 20 assigns). A frame whose `min_samples`-th neighbour is
+farther than that of any clustered frame is density noise (label `-2`); one whose neighbours disagree
+is ambiguous (`-1`, which is not evidence of a barrier). Clusters are numbered by population, `0` is
+the largest, and `allow_single_cluster` defaults to True: with False a unimodal ensemble cannot come
+back as one state. See [Analysis](README.md#t_hdbscan) for both.
+
+**A cluster is a density basin, not a metastable state.** Nothing here looks at time.
+
+**The choice of torsions moves the answer.** On c(RGDfV) the 17 columns (15 backbone plus the two
+symmetric side-chain columns) give two clusters, 0.834 and 0.145, whichever way `allow_single_cluster`
+is set. All 24 heavy-atom torsions give one cluster when it is True and two when it is False: the Arg
+chi angles and the Asp carboxylate rotation are close to uniform, and they dilute the density that
+separates the backbone conformers. The torsion set is an input, and the
+[c(RGDfV) page](../../tutorial/rgdfv/analysis/clustering.ipynb#10-the-choice-of-torsions-matters) shows
+the table.
+
+## 4. The Dirichlet-domain rule: one labelling for the histogram
+
+The clustering needs no choice of labelling. A histogram does. Each frame is written in the labelling
+**nearest one reference frame**:
+
+```text
+g*(x) = argmin over g in G of || Φ(ref) - Φ(g x) ||          frame x is shown as g*(x) x
+```
+
+This picks one point from each orbit of frames, the one in the **Dirichlet domain** of the
+reference: the region of the torus closer to the reference than to any of its images. The reference
+is the **density peak of the largest cluster**, an actual frame (the one with the smallest core
+distance), not a mean, since a circular mean of a multimodal torsion can describe no configuration.
+
+```python
+fit = t_hdbscan(torsions, molecule=mol, torsion_definitions=definitions,
+                coordinates=traj, atom_mapping=mapping).fit()
+ref = fit.density_peak(0)                      # densest frame of the largest cluster
+al = fit.align_all(per_cluster=True)           # every frame in the labelling nearest `ref`
+al["selected"]                                 # (n_frames, n_selected) angles, new labelling
+al["angles"]                                   # every closed column, images included
+al["operations"], al["margin"]                 # the operation used, and how safe the choice was
+```
+
+**The same rule as a function of the descriptor**: `descriptor.align_to_reference(closed, ref_row)`
+returns the aligned angles, the operation per frame, the distance, the distance with no
+relabelling, and the margin.
+
+**The margin** is the second-best operation's distance minus the best. A small margin means the frame
+sits on the wall between two labellings, and the choice for that frame is arbitrary.
+
+### One reference or two levels
+
+With one reference, every frame is compared with the one frame. A cluster **far from it** can sit
+astride the wall: both of its labellings are about equally far from the reference, so the choice
+flips from frame to frame and the cluster is cut in two. On paracetamol this is exactly the case.
+Cluster B differs from A by half a turn in the aryl, or, written through the flip, by half a turn in
+the phenol; B is equidistant from A's peak under either labelling, and 58 % of its frames have a
+margin below 0.1. Its `aryl` histogram shows two peaks.
+
+`align_all(per_cluster=True)` uses **two levels**. Each cluster's frames are aligned to the cluster's
+own density peak, and only that one peak is written in the labelling nearest the global reference.
+Each cluster is then compact, and the one arbitrary choice left is a single frame per cluster, which
+fixes where the cluster is drawn and nothing about the cluster itself. On paracetamol no frame has a
+margin below 0.1 any more.
+
+On c(RGDfV) the two agree to the precision of the figures (margin below 0.1 for 2-4 % of frames in
+either), because the clusters differ in the backbone and are not equidistant. The two-level
+alignment is therefore the safe default, and it costs one extra alignment per cluster.
+
+### Fold one angle, leave the partner free?
+
+A natural shortcut for a **symmetric pair**, such as the two ring torsions: fold one angle into a
+window of width `2π/N` around the reference value, and leave the other unfolded. This is a valid
+fundamental domain **only when each frame has exactly one image in the window**. That holds when the
+operation acts on the orbit as a rotor, N columns spaced `2π/N` apart, and nothing sits near the window
+edge. The test is cheap: for every frame count the **distinct** images of the first column inside the
+window.
+
+| orbit (c(RGDfV) frames) | no image in window | exactly one | two | median spacing of the pair |
+|---|---|---|---|---|
+| `Phe:chi2` / its ring image | 0.05 % | 99.93 % | 0.02 % | 175 degrees |
+| `Val:chi1` / its methyl image | 37.4 % | 62.6 % | 0 | 122 degrees |
+
+The phenyl ring passes: its two columns are half a turn apart, so one of them always lands in a
+window of width π. The valine isopropyl fails: its two methyl torsions are 120 degrees apart, and a
+window of width π catches neither for 37 % of the frames. **The fold-one shortcut is not a general
+rule**; the Dirichlet rule has no such condition and covers it.
+
+The two are not the same cut either. They are different fundamental domains of one group action:
+the Dirichlet domain is defined by the distance of the **whole row** to the reference, so the
+operation chosen for a frame can depend on its other torsions, while fold-one looks at one column. On
+paracetamol fold-one places both clusters at `aryl` near 0 and separates them by the phenol; the
+two-level rule places cluster B at `aryl` near 180 degrees, where its own peak is.
+
+The second angle of a ring pair is not a free torsion. It is `aryl + 180 degrees + δ`, where `δ` is
+the small ring distortion. The flip swaps the two columns, so it maps `δ` to `-δ`: the sign of `δ`
+is a property of the labelling. On the paracetamol trajectory `δ` is symmetric about zero (mean 0.1
+degrees, standard deviation 7.1), so relabelling does not change its histogram.
+
+### What this does and does not establish
+
+* **Where the cut falls.** A rotor and its relatives give a clean picture. A peak that crosses the
+  wall appears at both ends of the axis, as a peak at `±π` does on any circle. The cut belongs to the
+  display; it is not in the data.
+* **The reference changes where a cluster is drawn**, never the clusters, the frames in them or their
+  populations.
+* **Fixed points.** The operations are permutations of columns, never reflections: matching is
+  stereo-aware, so a mirror image is not an automorphism. A permutation that swaps two columns fixes
+  the frames where the two are equal, and frames near one are nearly equidistant to two labellings;
+  the margin reports them.
+* **Structural, not thermodynamic.** A graph automorphism says two configurations are one conformer
+  under another naming. It does not make their populations equal: an atom-specific restraint or a
+  REST2 region covering one side breaks the energetic symmetry and leaves the graph unchanged
+  (`broken_by=[...]`).
+* **Resonance is not in the graph.** The carboxylate oxygens and the guanidinium nitrogens are
+  equivalent by resonance, but a graph with localised bond orders and charges holds them apart, so
+  they give no operation. The carboxylate rotation (Asp `chi2`) therefore keeps both peaks half a
+  turn apart: its stored circular resultant length over the 4002 c(RGDfV) frames is 0.010, a nearly
+  uniform circle. The guanidinium torsion is left out of the torsion set for the same reason.
+* **Weights.** Populations are weighted sums over frames and the density the fit sees is that of the
+  fitted frames, as in [Analysis](README.md#t_hdbscan).
+
+The idea, minimising over the automorphisms, is the same one symmetry-corrected RMSD uses for atom
+coordinates; here it acts on a descriptor of torsions instead.
+
+## Where this is used
+
+* [Paracetamol: torsion distributions in one labelling](../../tutorial/paracetamol/analysis/symmetry-alignment.ipynb)
+* [Paracetamol: symmetry-first clustering](../../tutorial/paracetamol/analysis/clustering.ipynb)
+* [c(RGDfV): conformations of a cyclic peptide](../../tutorial/rgdfv/analysis/clustering.ipynb)

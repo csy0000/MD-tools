@@ -1,6 +1,6 @@
 # Analysis: paracetamol
 
-Four notebooks over the runs the [cMD](../cMD.md) and [REST2](../REST2.md) pages produced.
+Five notebooks over the runs the [cMD](../cMD.md) and [REST2](../REST2.md) pages produced.
 
 | notebook | what it shows |
 |---|---|
@@ -8,6 +8,7 @@ Four notebooks over the runs the [cMD](../cMD.md) and [REST2](../REST2.md) pages
 | [`clustering.ipynb`](clustering.ipynb) | symmetry-first clustering: the symmetry enumerated, the distance built from it, HDBSCAN, the 18-of-20 assignment, populations and representative structures |
 | [`clustering-comparison.ipynb`](clustering-comparison.ipynb) | the historical cluster-then-merge workflow, the new vote alone, and symmetry-first, on the same frames |
 | [`mutual-information.ipynb`](mutual-information.ipynb) | which torsions move together, and the estimator's own bias |
+| [`symmetry-alignment.ipynb`](symmetry-alignment.ipynb) | the same fit, every frame written in the labelling nearest the density peak of the largest cluster: one reference against two levels, and the ring pair |
 
 **Committed with their outputs**, and rendered here as pages: the figures and numbers come from
 the runs these tutorials describe. To run them yourself:
@@ -45,5 +46,6 @@ the two workflows agree on 3998 of 4000 frames and why the other two differ.
 ## Related
 
 * [Methods: analysis](../../../openmm_methods/analysis/README.md) — the theory behind the tools, and the migration from the old call
+* [Methods: symmetry-aware clustering and the torsion representation](../../../openmm_methods/analysis/clustering-and-symmetry.md) — duplicated torsions and their weights, the minimised distance, the 1 % floor, the Dirichlet-domain rule
 * [REST2: paracetamol](../REST2.md) — where the protected bonds are decided
 * [ALA analysis](../../ALA/analysis/index.md) — PMFs on a smaller system

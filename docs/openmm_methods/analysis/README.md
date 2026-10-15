@@ -158,6 +158,9 @@ Two kinds of unassigned frame, with different codes and different meanings:
 are weighted sums over every frame; the density the fit sees is that of the fitted frames,
 unweighted unless `resampling=N`.
 
+**Duplicated torsions, the minimised distance, the 1 % floor and how a frame is written in one
+labelling** are explained on [their own page](clustering-and-symmetry.md).
+
 ### Migrating an existing call
 
 | before | now |
@@ -337,7 +340,10 @@ recorded on every accepted pair.
 
 ## Where these are used
 
+* [Symmetry-aware clustering and the torsion representation](clustering-and-symmetry.md)
 * [Paracetamol: symmetry-first clustering](../../tutorial/paracetamol/analysis/clustering.ipynb)
+* [Paracetamol: torsions in one labelling](../../tutorial/paracetamol/analysis/symmetry-alignment.ipynb)
+* [c(RGDfV): conformations of a cyclic peptide](../../tutorial/rgdfv/analysis/clustering.ipynb)
 * [Paracetamol: the old and new workflows compared](../../tutorial/paracetamol/analysis/clustering-comparison.ipynb)
 * [Paracetamol: which torsions move together](../../tutorial/paracetamol/analysis/index.md)
 * [Archived 0.6.4: cluster, then merge by symmetry](../../tutorial/archived/0.6.4/paracetamol/clustering.ipynb)
