@@ -5,7 +5,7 @@ registered:
 
 | notebook | what it shows |
 |---|---|
-| [`clustering.ipynb`](clustering.ipynb) | the symmetry enumerated (four operations on the torsions), the columns and their weights, `t_hdbscan` with the 1 % floor, every frame written in the labelling nearest the density peak, the fold-one test orbit by orbit, the backbone table, representative structures, and how the choice of torsions changes the answer |
+| [`clustering.ipynb`](clustering.ipynb) | the symmetry enumerated (four operations on the torsions), the columns and their weights, `t_hdbscan` with the 1 % floor, every frame written in the labelling nearest the density peak, the backbone table, representative structures, and how the choice of torsions changes the answer |
 
 The explanation is in
 [Methods: symmetry-aware clustering and the torsion representation](../../../openmm_methods/analysis/clustering-and-symmetry.md);
