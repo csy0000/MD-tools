@@ -158,8 +158,10 @@ Two kinds of unassigned frame, with different codes and different meanings:
 are weighted sums over every frame; the density the fit sees is that of the fitted frames,
 unweighted unless `resampling=N`.
 
-**Duplicated torsions, the minimised distance, the 1 % floor and how a frame is written in one
-labelling** are explained on [their own page](clustering-and-symmetry.md).
+**Duplicated torsions, resonance-equivalent atoms (the two oxygens of a carboxylate, the nitrogens of a
+guanidinium), the minimised distance, the 1 % floor and how a frame is written in one labelling**
+are explained on [their own page](clustering-and-symmetry.md). `enumerate_symmetry`, the descriptor and
+`t_hdbscan` take `resonance=True` by default; `resonance=False` compares the drawn structure.
 
 ### Migrating an existing call
 

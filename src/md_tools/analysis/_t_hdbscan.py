@@ -174,7 +174,7 @@ class THDBSCAN:
                  allow_single_cluster: bool = ALLOW_SINGLE_CLUSTER_DEFAULT,
                  max_precomputed_frames: int = MAX_PRECOMPUTED_FRAMES_DEFAULT,
                  max_matches: Optional[int] = None, use_chirality: bool = True,
-                 stored_tolerance: Optional[float] = None,
+                 resonance: bool = True, stored_tolerance: Optional[float] = None,
                  broken_by: Optional[Sequence[str]] = None):
         self.theta_ = validate_angles(torsions, units)
         self.n_frames_, self.n_torsions_ = self.theta_.shape
@@ -256,7 +256,7 @@ class THDBSCAN:
             self.descriptor_ = SymmetricTorsionDescriptor(
                 molecule, torsion_definitions, metric_weights=metric_weights,
                 max_matches=(MAX_AUTOMORPHISMS if max_matches is None else int(max_matches)),
-                use_chirality=use_chirality)
+                use_chirality=use_chirality, resonance=resonance)
             self._coordinate_kwargs = dict(atom_mapping=atom_mapping, periodic=periodic,
                                            topology=topology)
             self.stored_tolerance = (STORED_AGREEMENT_TOLERANCE if stored_tolerance is None

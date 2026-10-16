@@ -10,7 +10,7 @@ on the [paracetamol](../../tutorial/paracetamol/analysis/symmetry-alignment.ipyn
 !!! note "What is released"
     The distance, the clustering and the weights are in 0.6.5. `THDBSCAN.density_peak`,
     `THDBSCAN.align_all` and `SymmetricTorsionDescriptor.align_to_reference`, which implement section 4,
-    are not in a release yet.
+    and the `resonance` option of section 1b are not in a release yet.
 
 ## The problem
 
@@ -31,13 +31,16 @@ moves, and no frame is added or dropped.
 
 The molecule is matched against itself with RDKit (`uniquify=False`, `useChirality=True`). Every
 match is a graph automorphism: an element-, bond-order- and stereo-preserving permutation of the atoms.
-c(RGDfV) has 36 864 of them and paracetamol has 12. Most do nothing to the torsions that were
-selected, so permutations that act identically on the descriptor collapse to one **operation**:
+c(RGDfV) has 147 456 of them and paracetamol has 12 (c(RGDfV) has 36 864 if the drawn structure is
+compared instead of the resonance hybrid, see [section 1b](#1b-resonance-atoms-the-drawing-keeps-apart)).
+Most do nothing to the torsions that were selected, so permutations that act identically on the
+descriptor collapse to one **operation**:
 
 | molecule | automorphisms | distinct operations on the selected torsions | what they are |
 |---|---|---|---|
 | paracetamol | 12 | 2 | identity, the ring flip (the 3! orderings of the methyl hydrogens move no selected torsion) |
-| c(RGDfV), 17 torsions | 36 864 | 4 | identity, the Phe ring flip, the Val methyl swap, both |
+| c(RGDfV), 17 torsions | 147 456 | 4 | identity, the Phe ring flip, the Val methyl swap, both |
+| c(RGDfV), 19 torsions (adding Asp `chi2`, Arg `chi5`) | 147 456 | 16 | those four exchanges, the carboxylate oxygens and the guanidinium nitrogens, in every combination |
 
 An operation maps a selected quadruplet to another quadruplet with the same central bond and a
 different outer atom: `aryl` (1-3-4-5) becomes 1-3-4-10. If nobody selected 1-3-4-10, it is added.
@@ -65,6 +68,72 @@ and it raises if either fails.
 
 Each column contributes `sqrt(w) (cos θ, sin θ)` to the embedding `Φ(θ)`, so a torsion is compared as
 a point on a circle: `-π` and `π` are the same place.
+
+## 1b. Resonance: atoms the drawing keeps apart
+
+A graph with localised bond orders and charges draws a carboxylate as `C=O` and `C-O-`. RDKit's
+self-match compares those, finds the two oxygens different, and returns no permutation that
+exchanges them: the torsion measured to one oxygen is never folded onto the torsion measured to the
+other, half a turn away. The same holds for the two terminal nitrogens of a guanidinium.
+
+`enumerate_symmetry` therefore compares the **resonance hybrid** (`resonance=True`, the default).
+The charge of each atom and the order of each bond are averaged over the resonance structures that
+RDKit's `ResonanceMolSupplier` generates, and two atoms with the same hybrid values, the same
+element and the same neighbours are one atom. A molecule with no delocalised group gets back exactly
+its own integers, so nothing else changes.
+
+Three rules keep this from over-reaching:
+
+* **Aromatic atoms and bonds keep their own values.** The supplier returns an aromatic ring
+  Kekulised, and averaging the alternating 1 and 2 would break the ring's own symmetry (phenol would
+  lose its ring flip). A ring is already one delocalised system.
+* **The structure count is a limit that refuses.** A result of 1000 structures cannot be told from a
+  truncated one, and is not used (`max_structures`).
+* **Every returned permutation is re-verified** against the hybrid values, as before against the
+  drawn ones.
+
+RDKit does not generate the alternative drawings of a hypervalent group, so one rule is added: the
+**terminal oxygens (or sulfurs) of a sulfur, phosphorus or chlorine centre** are one atom, whichever
+way the group is drawn.
+
+Measured automorphism counts, drawn structure against hybrid (hydrogens explicit):
+
+| group | example | drawn | hybrid |
+|---|---|---|---|
+| carboxylate | acetate | 6 | 12 |
+| carboxylate on a ring | benzoate | 2 | 4 |
+| guanidinium | N-methylguanidinium | 24 | 48 |
+| amidinium | acetamidinium | 24 | 48 |
+| nitro | nitromethane | 6 | 12 |
+| nitrate | nitrate | 2 | 6 |
+| carbonate | carbonate | 2 | 6 |
+| sulfonate (rule) | methanesulfonate | 12 | 36 |
+| phosphate monoester (rule) | methyl phosphate | 12 | 36 |
+| unchanged | acetic acid, acetamide, urea, phenol, paracetamol, phenolate, an asymmetric azide | = | = |
+
+**Other places the same thing happens**, not measured here but by the same mechanism: thiocarboxylates,
+sulfates and phosphonates (the last two through the rule), and the charged side chains of Glu and the
+C terminus. Enolates and 1,3-dicarbonyl anions are exchanged through resonance only when the
+drawing is not already symmetric. A carboxylic acid is **not** one: `C=O` and `C-OH` are different
+atoms, and so are the two oxygens of an ester.
+
+**What this does not cover.**
+
+* **Tautomers are not resonance.** Moving a hydrogen (imidazole N-H, keto-enol) changes the graph,
+  and a protomer or tautomer is a different molecule, not a relabelling.
+* **The hybrid weights the structures equally.** RDKit lists the structures, not their
+  contributions. For a group whose two sides contribute unequally, an equal average could make two
+  atoms look alike that are not; none of the groups above is such a case.
+* **The legacy post-hoc route** (`TorsionSymmetry`, `t_symmetry`) still compares the drawn
+  structure. The default `t_hdbscan` route, the descriptor and `enumerate_symmetry` use the hybrid.
+* **A larger group.** Resonance multiplies the automorphism count (c(RGDfV): 36 864 to 147 456,
+  and about 14 s to enumerate), and the 200 000 cap applies as before.
+
+On c(RGDfV) the 17 torsions of the tutorial are not moved by the carboxylate and guanidinium
+exchanges, so their four operations and their clusters are unchanged. Adding Asp `chi2` and Arg
+`chi5`, which those exchanges do move, folds each of their two peaks half a turn apart into one, and
+the descriptor has 16 operations; see the
+[c(RGDfV) page](../../tutorial/rgdfv/analysis/clustering.ipynb#11-resonance-the-carboxylate-and-the-guanidinium).
 
 ## 2. The distance, minimised through the permutations
 
@@ -231,11 +300,8 @@ degrees, standard deviation 7.1), so relabelling does not change its histogram.
   under another naming. It does not make their populations equal: an atom-specific restraint or a
   REST2 region covering one side breaks the energetic symmetry and leaves the graph unchanged
   (`broken_by=[...]`).
-* **Resonance is not in the graph.** The carboxylate oxygens and the guanidinium nitrogens are
-  equivalent by resonance, but a graph with localised bond orders and charges holds them apart, so
-  they give no operation. The carboxylate rotation (Asp `chi2`) therefore keeps both peaks half a
-  turn apart: its stored circular resultant length over the 4002 c(RGDfV) frames is 0.010, a nearly
-  uniform circle. The guanidinium torsion is left out of the torsion set for the same reason.
+* **Resonance is in the graph now**, by the hybrid of section 1b, and the carboxylate and
+  guanidinium torsions fold. Atoms that are equivalent only by tautomerism are not.
 * **Weights.** Populations are weighted sums over frames and the density the fit sees is that of the
   fitted frames, as in [Analysis](README.md#t_hdbscan).
 

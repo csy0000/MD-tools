@@ -67,7 +67,7 @@ TIE_RELATIVE_TOLERANCE = 1e-12
 #: float32 dihedral code disagree with float64 at 1e-5.
 STORED_AGREEMENT_TOLERANCE = 1e-3
 
-__all__ = ["IncompleteSymmetryEnumeration", "MissingCoordinatesError", "SymmetryEnumeration",
+__all__ = ["IncompleteSymmetryEnumeration", "ResonanceInfo", "resonance_hybrid", "MissingCoordinatesError", "SymmetryEnumeration",
            "DescriptorOperation", "SymmetricTorsionDescriptor", "enumerate_symmetry",
            "check_atom_mapping", "whole_molecule_coordinates", "minimum_image",
            "draw_symmetry_operation",
@@ -101,6 +101,7 @@ class SymmetryEnumeration:
     use_chirality: bool
     cap: int
     rejected_by_stereo_check: int
+    resonance: Optional[Dict[str, Any]] = None
 
     @property
     def order(self) -> int:
@@ -112,15 +113,24 @@ class SymmetryEnumeration:
                 "rejected_by_stereo_check": self.rejected_by_stereo_check,
                 "method": "RDKit self-substructure match, uniquify=False, whole molecule "
                           "(not restricted to rings); every match re-verified as a bond- and "
-                          "element-preserving bijection"}
+                          "element-preserving bijection",
+                "resonance": self.resonance}
 
 
-def _graph_invariants(molecule):
-    atoms = [(a.GetAtomicNum(), a.GetFormalCharge(), a.GetIsotope()) for a in molecule.GetAtoms()]
+def _graph_invariants(molecule, info=None):
+    """Element, charge and isotope per atom, bond kind per bond. With `info` (a ResonanceInfo) the
+    charge and the bond order are the resonance hybrid's, to six places, so two atoms that
+    resonance makes one atom compare equal."""
+    if info is None:
+        atoms = [(a.GetAtomicNum(), a.GetFormalCharge(), a.GetIsotope()) for a in molecule.GetAtoms()]
+    else:
+        atoms = [(a.GetAtomicNum(), f"{info.atom_charge[a.GetIdx()]:.6f}", a.GetIsotope())
+                 for a in molecule.GetAtoms()]
     bonds = {}
     for b in molecule.GetBonds():
         i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
-        bonds[(min(i, j), max(i, j))] = str(b.GetBondType())
+        key = (min(i, j), max(i, j))
+        bonds[key] = str(b.GetBondType()) if info is None else f"{info.bond_order[key]:.6f}"
     return atoms, bonds
 
 
@@ -181,8 +191,132 @@ def _stereo_preserved(perm, labels) -> bool:
     return True
 
 
+#: How many resonance structures the supplier may return before the answer is refused. RDKit's own
+#: default; a result of exactly this size is indistinguishable from a truncated one.
+MAX_RESONANCE_STRUCTURES = 1000
+
+#: A terminal atom of these elements, on one of these central atoms, is the oxo/thio of a hypervalent
+#: group (sulfonate, sulfate, phosphate, phosphonate, perchlorate, ...). Whether such a group is
+#: drawn with S=O or S+-O- is a drawing convention, and RDKit's resonance enumeration does not
+#: generate the alternative, so the equivalence is stated here as a rule.
+_HYPERVALENT_CENTRES = frozenset({15, 16, 17, 33, 34, 35, 53})        # P S Cl As Se Br I
+_HYPERVALENT_TERMINALS = frozenset({8, 16, 34})                        # O S Se
+
+
+class ResonanceInfo:
+    """What was delocalised: the atom charges and bond orders AVERAGED over the resonance forms.
+
+    `atom_charge[i]` and `bond_order[(i, j)]` are the hybrid's values, used in place of the single
+    drawn structure's integers. Two atoms that one drawing distinguishes (`C=O` and `C-O-`) have the
+    same hybrid values when resonance makes them one atom, and nothing else changes: a molecule with
+    no delocalised group gets back exactly its own charges and orders.
+    """
+
+    def __init__(self, atom_charge, bond_order, n_structures, groups):
+        self.atom_charge = atom_charge
+        self.bond_order = bond_order
+        self.n_structures = int(n_structures)
+        self.groups = groups
+
+    def describe(self) -> Dict[str, Any]:
+        return {"n_resonance_structures": self.n_structures, "delocalised_groups": self.groups}
+
+
+def resonance_hybrid(molecule, *, max_structures: int = MAX_RESONANCE_STRUCTURES) -> ResonanceInfo:
+    """Average formal charge per atom and bond order per bond over the resonance structures.
+
+    Two sources, both reported. RDKit's `ResonanceMolSupplier` supplies the structures that move
+    electrons through conjugated groups: carboxylate, guanidinium, amidinium, nitro, nitrate,
+    carbonate, enolates and other delocalised anions and cations. The terminal oxygens of a
+    hypervalent S, P or Cl centre are added by rule, because the supplier does not generate those.
+
+    Raises `IncompleteSymmetryEnumeration` when the structure count reaches `max_structures`:
+    a result that may have been cut short is not used.
+    """
+    from rdkit import Chem
+
+    mol = _clean_for_automorphism(molecule)
+    n_at = mol.GetNumAtoms()
+    sup = Chem.ResonanceMolSupplier(mol, maxStructs=int(max_structures))
+    n = len(sup)
+    if n >= int(max_structures):
+        raise IncompleteSymmetryEnumeration(
+            f"{n} resonance structures were generated, the limit; the enumeration may be "
+            f"incomplete. Pass `resonance=False` to match the drawn structure, or raise "
+            f"max_structures.")
+    charge = np.zeros(n_at)
+    order = {}
+    for k in range(max(n, 1)):
+        form = sup[k] if n else mol
+        for a in form.GetAtoms():
+            charge[a.GetIdx()] += a.GetFormalCharge() / max(n, 1)
+        for b in form.GetBonds():
+            key = (min(b.GetBeginAtomIdx(), b.GetEndAtomIdx()), max(b.GetBeginAtomIdx(), b.GetEndAtomIdx()))
+            order[key] = order.get(key, 0.0) + b.GetBondTypeAsDouble() / max(n, 1)
+    # An aromatic ring is already a delocalised system, written once and symmetrically as aromatic
+    # bonds. The supplier returns it Kekulised, whose alternating 1 and 2 would BREAK the ring's
+    # own symmetry if averaged, so aromatic atoms and bonds keep their own values.
+    for atom in mol.GetAtoms():
+        if atom.GetIsAromatic():
+            charge[atom.GetIdx()] = atom.GetFormalCharge()
+    for bond in mol.GetBonds():
+        if bond.GetIsAromatic():
+            order[(min(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()),
+                   max(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()))] = bond.GetBondTypeAsDouble()
+    groups = []
+    # rule: terminal oxo/thio atoms of one hypervalent centre are one atom
+    for centre in mol.GetAtoms():
+        if centre.GetAtomicNum() not in _HYPERVALENT_CENTRES:
+            continue
+        ends = [nb for nb in centre.GetNeighbors()
+                if nb.GetDegree() == 1 and nb.GetAtomicNum() in _HYPERVALENT_TERMINALS]
+        for element in {nb.GetAtomicNum() for nb in ends}:
+            same = [nb.GetIdx() for nb in ends if nb.GetAtomicNum() == element]
+            if len(same) < 2:
+                continue
+            c = centre.GetIdx()
+            mean_q = float(np.mean([charge[i] for i in same]))
+            keys = [(min(c, i), max(c, i)) for i in same]
+            mean_o = float(np.mean([order[k] for k in keys]))
+            for i, k in zip(same, keys):
+                charge[i], order[k] = mean_q, mean_o
+            groups.append({"rule": "hypervalent terminal atoms", "centre": c, "atoms": sorted(same)})
+    # report the delocalised groups the supplier found: atoms whose hybrid value is not their own
+    moved = sorted(i for i in range(n_at)
+                   if abs(charge[i] - mol.GetAtomWithIdx(i).GetFormalCharge()) > 1e-9)
+    bonds_moved = sorted(k for k, v in order.items()
+                         if abs(v - mol.GetBondBetweenAtoms(*k).GetBondTypeAsDouble()) > 1e-9)
+    if moved or bonds_moved:
+        groups.append({"rule": "resonance structures (RDKit)", "atoms_with_shared_charge": moved,
+                       "bonds_with_shared_order": [list(k) for k in bonds_moved]})
+    return ResonanceInfo({i: float(charge[i]) for i in range(n_at)}, order, n, groups)
+
+
+def _hybrid_copy(molecule, info: "ResonanceInfo"):
+    """A copy for the matcher: every atom/bond whose hybrid value is not its drawn value is stripped
+    of the drawn value (charge 0, bond type OTHER) and carries the hybrid value as a property, which
+    the matcher compares instead. Everything not delocalised is untouched."""
+    from rdkit import Chem
+
+    clean = _clean_for_automorphism(molecule)
+    rw = Chem.RWMol(clean)
+    for a in rw.GetAtoms():
+        q = info.atom_charge[a.GetIdx()]
+        a.SetProp("_hybrid_q", f"{q:.6f}")
+        if abs(q - a.GetFormalCharge()) > 1e-9:
+            a.SetFormalCharge(0)
+    for b in rw.GetBonds():
+        key = (min(b.GetBeginAtomIdx(), b.GetEndAtomIdx()), max(b.GetBeginAtomIdx(), b.GetEndAtomIdx()))
+        o = info.bond_order[key]
+        b.SetProp("_hybrid_o", f"{o:.6f}")
+        if abs(o - b.GetBondTypeAsDouble()) > 1e-9:
+            b.SetBondType(Chem.BondType.OTHER)
+    return rw.GetMol()
+
+
 def enumerate_symmetry(molecule, *, max_matches: int = MAX_AUTOMORPHISMS,
-                       use_chirality: bool = True) -> SymmetryEnumeration:
+                       use_chirality: bool = True, resonance: bool = True,
+                       max_structures: int = MAX_RESONANCE_STRUCTURES) -> SymmetryEnumeration:
     """Every whole-molecule atom permutation that preserves the chemical graph. Refuses if incomplete.
 
     RDKit matches the molecule against ITSELF with `uniquify=False`, which enumerates every
@@ -197,12 +331,33 @@ def enumerate_symmetry(molecule, *, max_matches: int = MAX_AUTOMORPHISMS,
     returns more than `max_matches`, the search was cut short and this raises
     `IncompleteSymmetryEnumeration`. A molecule with many equivalent hydrogens has a factorially
     large group (three methyls alone contribute 6^3 = 216), so the cap is reachable.
+
+    RESONANCE (`resonance=True`, the default). A graph with localised bond orders and charges holds
+    the two oxygens of a carboxylate apart (`C=O` and `C-O-`), and so no permutation exchanges them
+    and the torsions measured to them are never folded. With `resonance` the charges and bond orders
+    compared are the resonance hybrid's (see `resonance_hybrid`): the carboxylate oxygens, the three
+    guanidinium nitrogens, the oxygens of a nitro, sulfonate or phosphate group, and so on, become
+    one atom each. `resonance=False` compares the drawn structure, as before.
     """
     if int(max_matches) < 1:
         raise ValueError("max_matches must be at least 1")
     clean = _clean_for_automorphism(molecule)
-    raw = clean.GetSubstructMatches(clean, uniquify=False, useChirality=bool(use_chirality),
-                                    maxMatches=int(max_matches) + 1, useQueryQueryMatches=True)
+    info = resonance_hybrid(molecule, max_structures=max_structures) if resonance else None
+    if info is None:
+        raw = clean.GetSubstructMatches(clean, uniquify=False, useChirality=bool(use_chirality),
+                                        maxMatches=int(max_matches) + 1, useQueryQueryMatches=True)
+    else:
+        from rdkit.Chem import rdchem
+
+        hybrid = _hybrid_copy(molecule, info)
+        params = rdchem.SubstructMatchParameters()
+        params.uniquify = False
+        params.useChirality = bool(use_chirality)
+        params.useQueryQueryMatches = True
+        params.maxMatches = int(max_matches) + 1
+        params.atomProperties = ["_hybrid_q"]
+        params.bondProperties = ["_hybrid_o"]
+        raw = hybrid.GetSubstructMatches(hybrid, params)
     if len(raw) > int(max_matches):
         raise IncompleteSymmetryEnumeration(
             f"the automorphism search found more than max_matches={int(max_matches)} atom "
@@ -212,7 +367,7 @@ def enumerate_symmetry(molecule, *, max_matches: int = MAX_AUTOMORPHISMS,
             f"max_matches, or (when the selected torsions involve no hydrogens) pass the "
             f"heavy-atom molecule, whose group is smaller because equivalent hydrogens no longer "
             f"multiply it.")
-    atoms, bonds = _graph_invariants(clean)
+    atoms, bonds = _graph_invariants(clean, info)
     labels = _stereo_labels(molecule) if use_chirality else None
     kept, rejected = set(), 0
     for match in raw:
@@ -229,7 +384,8 @@ def enumerate_symmetry(molecule, *, max_matches: int = MAX_AUTOMORPHISMS,
     ordered = (identity,) + tuple(sorted(p for p in kept if p != identity))
     return SymmetryEnumeration(permutations=ordered, n_atoms=clean.GetNumAtoms(),
                                use_chirality=bool(use_chirality), cap=int(max_matches),
-                               rejected_by_stereo_check=int(rejected))
+                               rejected_by_stereo_check=int(rejected),
+                               resonance=None if info is None else info.describe())
 
 
 # --------------------------------------------------------------------------- the descriptor
@@ -295,7 +451,8 @@ class SymmetricTorsionDescriptor:
 
     def __init__(self, molecule, torsions: TorsionDefinitions, *, metric_weights=None,
                  enumeration: Optional[SymmetryEnumeration] = None,
-                 max_matches: int = MAX_AUTOMORPHISMS, use_chirality: bool = True):
+                 max_matches: int = MAX_AUTOMORPHISMS, use_chirality: bool = True,
+                 resonance: bool = True):
         if molecule is None:
             raise ValueError("a reference molecule is required; symmetry is a property of it")
         if not isinstance(torsions, TorsionDefinitions):
@@ -321,7 +478,7 @@ class SymmetricTorsionDescriptor:
         self.molecule = molecule
         self.definitions = torsions
         self.enumeration = enumeration or enumerate_symmetry(
-            molecule, max_matches=max_matches, use_chirality=use_chirality)
+            molecule, max_matches=max_matches, use_chirality=use_chirality, resonance=resonance)
         if self.enumeration.n_atoms != n_atoms:
             raise ValueError("the enumeration belongs to a different molecule")
         perms = self.enumeration.permutations
