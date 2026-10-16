@@ -855,6 +855,44 @@ class SymmetricTorsionDescriptor:
         return {"angles": np.angle(np.exp(1j * aligned)), "operations": ops, "distance": best,
                 "distance_identity": per_op[0], "margin": second - best}
 
+    def nearest_labelling(self, candidates: np.ndarray, reference: np.ndarray) -> Dict[str, Any]:
+        """Of several candidate descriptions of ONE configuration, the one nearest a reference.
+
+        A crystal ligand matched onto the simulated molecule has one atom assignment per graph match
+        (the two oxygens of a carboxylate, the two sides of a ring), and each assignment writes the
+        same structure as a different row of closed angles. `candidates` is `(m, n_columns)` closed
+        angles in radians, `NaN` where a column cannot be measured (a torsion through a hydrogen, in
+        a structure without hydrogens); `reference` is one closed row. The distance is the one the
+        clustering uses, `||Phi(reference) - Phi(candidate)||`, taken over the columns measurable in
+        EVERY candidate, so the candidates are compared on the same terms. Ties go to the earlier
+        candidate.
+
+        Returns `index`, `angles` (the chosen row, `NaN` kept), `distance`, `margin` (the second
+        best candidate's distance minus the best; 0 for one candidate means nothing to compare) and
+        `columns_used`. This is the Dirichlet-domain rule for a reference that is not a simulation
+        frame: write it in the labelling nearest the one the histograms are drawn in.
+        """
+        cand = np.atleast_2d(np.asarray(candidates, dtype=np.float64))
+        ref = np.asarray(reference, dtype=np.float64).ravel()
+        if cand.shape[1] != self.n_columns or ref.size != self.n_columns:
+            raise ValueError(f"expected rows of {self.n_columns} closed angles; got "
+                             f"{cand.shape[1]} and {ref.size}")
+        if not np.all(np.isfinite(ref)):
+            raise ValueError("the reference row has an unmeasurable column; pass a simulation frame's "
+                             "closed angles")
+        used = np.flatnonzero(np.all(np.isfinite(cand), axis=0))
+        if used.size == 0:
+            raise ValueError("no column is measurable in every candidate")
+        w = self.column_weights[used]
+        diff = np.exp(1j * cand[:, used]) - np.exp(1j * ref[used])[None, :]
+        dist = np.sqrt((w[None, :] * np.abs(diff) ** 2).sum(axis=1))
+        best = float(dist.min())
+        index = int(np.argmax(dist <= best + self._tie()))
+        order = np.sort(dist)
+        return {"index": index, "angles": cand[index].copy(), "distance": best,
+                "margin": float(order[1] - order[0]) if order.size > 1 else 0.0,
+                "columns_used": [int(c) for c in used]}
+
     def exhaustive_distance(self, theta_x: np.ndarray, theta_y: np.ndarray
                             ) -> Tuple[float, Tuple[int, int]]:
         """Two-sided `min_{g,h} ||Phi(g x) - Phi(h y)||` and the first minimising `(g, h)`.

@@ -179,3 +179,26 @@ def test_one_reference_cuts_a_cluster_that_is_equidistant_and_two_levels_does_no
     aryl = fit.descriptor_.names.index("aryl")
     spread = lambda x: 1.0 - np.hypot(np.cos(x).mean(), np.sin(x).mean())
     assert spread(two["angles"][b, aryl]) < spread(one["angles"][b, aryl])
+
+
+def test_a_crystal_with_two_assignments_is_written_in_the_labelling_nearest_the_reference():
+    """A crystal ligand matched onto the molecule has one assignment per graph match. Written through
+    the ring flip, the same structure is a different row. The nearest labelling to the reference is
+    the one that is not the flip of it, whichever order the candidates arrive in, and a column that
+    cannot be measured (through a hydrogen) takes no part."""
+    mol, defs = _para()
+    d = SymmetricTorsionDescriptor(mol, defs)
+    reference = d.closed_angles(None, coordinates=_frames(mol, [(0.6, 0.2)], noise=0.0), 
+                                atom_mapping=list(range(mol.GetNumAtoms())), periodic=False,
+                                topology=_topology(mol))[0]
+    crystal = reference.copy()
+    crystal[[1, 3]] += 0.1                        # aryl and its image, a little off the reference
+    flipped = crystal[list(d.operations[1].sigma)]
+    for rows in (np.vstack([crystal, flipped]), np.vstack([flipped, crystal])):
+        rows = rows.copy()
+        rows[:, [2, 4]] = np.nan                  # the phenol columns go through H17 / H18
+        out = d.nearest_labelling(rows, reference)
+        assert np.allclose(wrap(out["angles"][[0, 1, 3]] - crystal[[0, 1, 3]]), 0.0, atol=1e-12)
+        assert out["columns_used"] == [0, 1, 3] and out["margin"] > 0.5
+    with pytest.raises(ValueError, match="reference row has an unmeasurable"):
+        d.nearest_labelling(crystal[None], np.where(np.arange(5) == 2, np.nan, reference))

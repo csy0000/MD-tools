@@ -285,6 +285,23 @@ the small ring distortion. The flip swaps the two columns, so it maps `δ` to `-
 is a property of the labelling. On the paracetamol trajectory `δ` is symmetric about zero (mean 0.1
 degrees, standard deviation 7.1), so relabelling does not change its histogram.
 
+### A crystal structure, or any other reference
+
+A crystal ligand drawn over the histograms follows the same rule. Matching it onto the simulated
+molecule gives one **atom assignment per graph match** (the two oxygens of a carboxylate, the two
+sides of a ring, a swapped methyl), and each assignment writes the same structure as a different row
+of closed angles. Drawing a line per assignment puts several lines on a panel for one structure.
+
+`descriptor.nearest_labelling(candidates, reference)` chooses **one**: the candidate row nearest the
+reference under the same distance, taken over the columns measurable in every candidate (a torsion
+through a hydrogen is `NaN` in a structure without hydrogens and takes no part). The reference is
+the row the histograms are drawn in: the density peak of cluster A for a panel pooling the clusters,
+and a cluster's own density peak, already relabelled, for that cluster's row. Frames drawn **as
+stored**, in any labelling, keep every assignment, because each is a legitimate place for the crystal.
+
+The crystal's line can still sit far from a cluster's histogram; that is a statement about the
+conformation, and the labelling no longer contributes to it.
+
 ### What this does and does not establish
 
 * **Where the cut falls.** A rotor and its relatives give a clean picture. A peak that crosses the
