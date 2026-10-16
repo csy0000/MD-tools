@@ -1,0 +1,70 @@
+TYL
+  ModelServer 0.9.13
+
+ 11 11  0  0  0  0  0  0  0  0  0
+  -18.0870   27.5550   -0.1700 C   0  0  0  0  0  0  0  0  0  0  0  0
+  -16.7810   28.0140   -0.3630 C   0  0  0  0  0  0  0  0  0  0  0  0
+  -16.2490   29.0210    0.4440 C   0  0  0  0  0  0  0  0  0  0  0  0
+  -17.0250   29.5770    1.4570 C   0  0  0  0  0  0  0  0  0  0  0  0
+  -18.3220   29.1210    1.6430 C   0  0  0  0  0  0  0  0  0  0  0  0
+  -18.8490   28.1240    0.8440 C   0  0  0  0  0  0  0  0  0  0  0  0
+  -18.5740   26.5500   -1.0470 N   0  0  0  0  0  0  0  0  0  0  0  0
+  -19.8320   26.0460   -1.1380 C   0  0  0  0  0  0  0  0  0  0  0  0
+  -20.0260   24.9690   -2.1700 C   0  0  0  0  0  0  0  0  0  0  0  0
+  -16.5310   30.5620    2.2670 O   0  0  0  0  0  0  0  0  0  0  0  0
+  -20.7570   26.4260   -0.4420 O   0  0  0  0  0  0  0  0  0  0  0  0
+  1  2  2  0  0  0  0
+  1  6  1  0  0  0  0
+  1  7  1  0  0  0  0
+  2  3  1  0  0  0  0
+  3  4  2  0  0  0  0
+  4  5  1  0  0  0  0
+  4 10  1  0  0  0  0
+  5  6  2  0  0  0  0
+  7  8  1  0  0  0  0
+  8  9  1  0  0  0  0
+  8 11  2  0  0  0  0
+M  END
+> <model_server_result.job_id>
+XxAqII6hsX5Bz2r1uXzKvw
+
+> <model_server_result.datetime_utc>
+2026-10-16 14:44:32
+
+> <model_server_result.server_version>
+0.9.13
+
+> <model_server_result.query_name>
+ligand
+
+> <model_server_result.source_id>
+pdb-bcif
+
+> <model_server_result.entry_id>
+4A9K
+
+> <model_server_params.name>
+atom_site
+
+> <model_server_params.value>
+{"label_comp_id":"TYL"}
+
+> <model_server_stats.io_time_ms>
+19
+
+> <model_server_stats.parse_time_ms>
+5
+
+> <model_server_stats.create_model_time_ms>
+2
+
+> <model_server_stats.query_time_ms>
+161
+
+> <model_server_stats.encode_time_ms>
+0
+
+> <model_server_stats.element_count>
+11
+
+$$$$

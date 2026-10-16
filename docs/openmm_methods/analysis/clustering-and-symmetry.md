@@ -355,6 +355,8 @@ the row the histograms are drawn in: the density peak of cluster A for a panel p
 and a cluster's own density peak, already relabelled, for that cluster's row. Frames drawn **as
 stored**, in any labelling, keep every assignment, because each is a legitimate place for the crystal.
 
+The [paracetamol notebook](../../tutorial/paracetamol/analysis/symmetry-alignment.ipynb#8-paracetamol-in-a-crystal-one-structure-two-assignments) does this with two PDB entries. `reference_assignments(structure, molecule, descriptor.quads)` returns the candidate rows, one per graph match; for paracetamol there are two for each crystal.
+
 The crystal's line can still sit far from a cluster's histogram; that is a statement about the
 conformation, and the labelling no longer contributes to it.
 

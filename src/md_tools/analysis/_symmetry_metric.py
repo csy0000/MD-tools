@@ -67,7 +67,8 @@ TIE_RELATIVE_TOLERANCE = 1e-12
 #: float32 dihedral code disagree with float64 at 1e-5.
 STORED_AGREEMENT_TOLERANCE = 1e-3
 
-__all__ = ["IncompleteSymmetryEnumeration", "ResonanceInfo", "resonance_hybrid", "MissingCoordinatesError", "SymmetryEnumeration",
+__all__ = ["IncompleteSymmetryEnumeration", "ResonanceInfo", "resonance_hybrid",
+           "reference_assignments", "MissingCoordinatesError", "SymmetryEnumeration",
            "DescriptorOperation", "SymmetricTorsionDescriptor", "enumerate_symmetry",
            "check_atom_mapping", "whole_molecule_coordinates", "minimum_image",
            "draw_symmetry_operation",
@@ -912,6 +913,116 @@ class SymmetricTorsionDescriptor:
         tie = self._tie()
         pair = min(k for k, v in values.items() if v <= best + tie)
         return float(np.sqrt(best)), pair
+
+
+# ------------------------------------------------------------------- a reference structure
+
+def _heavy_skeleton(mol):
+    """Heavy atoms only, every bond single, nothing aromatic: element and connectivity alone, so a
+    match does not depend on how a structure file assigned bond orders or charges."""
+    from rdkit import Chem
+
+    heavy = [a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() > 1]
+    rw = Chem.RWMol()
+    new = {}
+    for i in heavy:
+        atom = Chem.Atom(mol.GetAtomWithIdx(i).GetAtomicNum())
+        atom.SetNoImplicit(True)
+        new[i] = rw.AddAtom(atom)
+    for b in mol.GetBonds():
+        a, c = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
+        if a in new and c in new:
+            rw.AddBond(new[a], new[c], Chem.BondType.SINGLE)
+    skeleton = rw.GetMol()
+    skeleton.UpdatePropertyCache(strict=False)
+    return skeleton, heavy
+
+
+def _dihedral_points(p) -> float:
+    b0, b1, b2 = p[0] - p[1], p[2] - p[1], p[3] - p[2]
+    b1 = b1 / np.linalg.norm(b1)
+    v = b0 - np.dot(b0, b1) * b1
+    w = b2 - np.dot(b2, b1) * b1
+    return float(np.arctan2(np.dot(np.cross(b1, v), w), np.dot(v, w)))
+
+
+def _handedness(xyz, centre, neighbours) -> bool:
+    return bool(np.linalg.det(xyz[neighbours] - xyz[centre]) > 0)
+
+
+def reference_assignments(reference, molecule, quads, *, max_matches: int = 100_000,
+                          tolerance: float = np.deg2rad(2.0)) -> np.ndarray:
+    """Every description of a reference structure's torsions in the molecule's atom numbering.
+
+    `reference` is an RDKit molecule with 3D coordinates (a crystal ligand: hydrogens not needed,
+    bond orders not trusted) or a path to an SDF/MOL file. `molecule` is the simulated molecule and
+    `quads` the quadruplets to measure, normally `descriptor.quads`, so the images are included.
+
+    The reference is matched onto the molecule on element and connectivity of the heavy atoms.
+    Each match is one ASSIGNMENT of the reference atoms to the molecule's, and the same structure is
+    a different row of torsions under each (the two oxygens of a carboxylate, the two sides of a
+    ring). Matching ignores chirality, so a mirror-image assignment is also returned; those are
+    dropped when the molecule has stereocentres, keeping only assignments under which every
+    centre has the same handedness in the reference. Returns `(assignments, len(quads))` in
+    radians, `NaN` where a quadruplet goes through a hydrogen, rows equal within `tolerance` kept
+    once. Choosing ONE row is `SymmetricTorsionDescriptor.nearest_labelling`.
+    """
+    from rdkit import Chem
+
+    if isinstance(reference, (str, bytes)) or hasattr(reference, "__fspath__"):
+        loaded = Chem.MolFromMolFile(str(reference), removeHs=False, sanitize=False)
+        if loaded is None:
+            raise ValueError(f"RDKit could not read the reference structure {reference!r}")
+        reference = loaded
+    if reference.GetNumConformers() == 0:
+        raise ValueError("the reference structure has no coordinates")
+    sim_skeleton, sim_heavy = _heavy_skeleton(molecule)
+    ref_skeleton, ref_heavy = _heavy_skeleton(reference)
+    if sim_skeleton.GetNumAtoms() != ref_skeleton.GetNumAtoms():
+        raise ValueError(f"the reference has {ref_skeleton.GetNumAtoms()} heavy atoms, the molecule "
+                         f"{sim_skeleton.GetNumAtoms()}")
+    matches = sim_skeleton.GetSubstructMatches(ref_skeleton, uniquify=False, useChirality=False,
+                                               maxMatches=int(max_matches) + 1)
+    if not matches:
+        raise ValueError("the reference's heavy-atom graph does not match the molecule")
+    if len(matches) > int(max_matches):
+        raise IncompleteSymmetryEnumeration(
+            f"more than max_matches={int(max_matches)} atom assignments; the list would be "
+            f"incomplete")
+    xyz = reference.GetConformer().GetPositions()
+    sim_pos = {atom: k for k, atom in enumerate(sim_heavy)}
+
+    if molecule.GetNumConformers():
+        probe = Chem.Mol(molecule)
+        Chem.AssignStereochemistryFrom3D(probe)
+        sim_xyz = molecule.GetConformer().GetPositions()
+        centres = []
+        for c, _ in Chem.FindMolChiralCenters(probe, includeUnassigned=False):
+            nbrs = [n.GetIdx() for n in probe.GetAtomWithIdx(c).GetNeighbors() if n.GetAtomicNum() > 1]
+            if len(nbrs) >= 3:
+                centres.append((c, nbrs[:3], _handedness(sim_xyz, c, nbrs[:3])))
+        if centres:
+            def keeps(m):
+                inv = {sa: r for r, sa in enumerate(m)}
+                pick = lambda a: ref_heavy[inv[sim_pos[a]]]
+                return all(_handedness(xyz, pick(c), [pick(n) for n in nb]) == sign
+                           for c, nb, sign in centres)
+            kept = [m for m in matches if keeps(m)]
+            matches = kept or matches          # no assignment keeps them: the reference is another isomer
+
+    rows = []
+    for m in matches:
+        inv = {sa: r for r, sa in enumerate(m)}
+        row = np.array([np.nan if any(a not in sim_pos for a in q)
+                        else _dihedral_points(xyz[[ref_heavy[inv[sim_pos[a]]] for a in q]])
+                        for q in quads])
+        for other in rows:
+            if np.array_equal(np.isnan(row), np.isnan(other)) and np.all(
+                    np.abs(np.angle(np.exp(1j * (row - other))))[~np.isnan(row)] <= tolerance):
+                break
+        else:
+            rows.append(row)
+    return np.array(rows)
 
 
 # --------------------------------------------------------------------------- coordinates

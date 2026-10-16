@@ -8,7 +8,7 @@ Five notebooks over the runs the [cMD](../cMD.md) and [REST2](../REST2.md) pages
 | [`clustering.ipynb`](clustering.ipynb) | symmetry-first clustering: the symmetry enumerated, the distance built from it, HDBSCAN, the 18-of-20 assignment, populations and representative structures |
 | [`clustering-comparison.ipynb`](clustering-comparison.ipynb) | the historical cluster-then-merge workflow, the new vote alone, and symmetry-first, on the same frames |
 | [`mutual-information.ipynb`](mutual-information.ipynb) | which torsions move together, and the estimator's own bias |
-| [`symmetry-alignment.ipynb`](symmetry-alignment.ipynb) | the same fit, every frame written in the labelling nearest the density peak of the largest cluster: and the ring pair |
+| [`symmetry-alignment.ipynb`](symmetry-alignment.ipynb) | the same fit, every frame written in the labelling nearest the density peak of the largest cluster: the ring pair, and paracetamol from two PDB entries written in one labelling, one line per panel where the stored columns need two |
 
 **Committed with their outputs**, and rendered here as pages: the figures and numbers come from
 the runs these tutorials describe. To run them yourself:
@@ -42,6 +42,13 @@ symmetry-aware distance ([methods](../../../openmm_methods/analysis/README.md#t_
 The [previous page](../../archived/0.6.4/paracetamol/clustering.ipynb), archived unchanged, found
 four clusters and merged them into the same two groups afterwards; the comparison notebook shows
 the two workflows agree on 3998 of 4000 frames and why the other two differ.
+
+## The crystal structures
+
+`symmetry-alignment.ipynb` draws paracetamol from two entries of the Protein Data Bank, **4YJI**
+(1.73 A) and **4A9K** (1.81 A), over the histograms. Their ligand coordinates are in `data/`
+(`4YJI_TYL.sdf`, `4A9K_TYL.sdf`, component `TYL`, from the PDB model server). They are the drug bound
+to a protein, not its own crystal, and a crystal has no hydrogens, so the `phenol` torsion has no line.
 
 ## Related
 

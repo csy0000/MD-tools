@@ -202,3 +202,28 @@ def test_a_crystal_with_two_assignments_is_written_in_the_labelling_nearest_the_
         assert out["columns_used"] == [0, 1, 3] and out["margin"] > 0.5
     with pytest.raises(ValueError, match="reference row has an unmeasurable"):
         d.nearest_labelling(crystal[None], np.where(np.arange(5) == 2, np.nan, reference))
+
+
+def test_a_crystal_ligand_has_one_assignment_per_graph_match_and_the_rows_are_the_flip_of_each_other():
+    """A crystal ligand without hydrogens, atoms in another order. Paracetamol's heavy-atom graph has
+    ONE nontrivial match (the ring flip), so there are two assignments, their rows are the two
+    labellings of one structure, and the torsion through the phenol H is NaN."""
+    from md_tools.analysis._symmetry_metric import reference_assignments
+
+    mol, defs = _para()
+    d = SymmetricTorsionDescriptor(mol, defs)
+    xyz = _frames(mol, [(0.6, 0.2)], noise=0.0)
+    conf = mol.GetConformer()
+    for i, p in enumerate(xyz[0]):
+        conf.SetAtomPosition(i, p.tolist())
+    heavy = Chem.RemoveHs(mol)
+    order = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]                        # reversed: another atom order
+    crystal = Chem.RenumberAtoms(heavy, order)
+    rows = reference_assignments(crystal, mol, d.quads)
+    assert rows.shape == (2, d.n_columns)
+    assert np.isnan(rows[:, [2, 4]]).all() and np.isfinite(rows[:, [0, 1, 3]]).all()   # phenol columns
+    flip = rows[0][list(d.operations[1].sigma)]
+    assert any(np.allclose(wrap(r[[0, 1, 3]] - flip[[0, 1, 3]]), 0.0, atol=1e-6) for r in rows)
+    assert not np.allclose(wrap(rows[0][[1, 3]] - rows[1][[1, 3]]), 0.0, atol=0.1)
+    with pytest.raises(ValueError, match="heavy atoms"):
+        reference_assignments(Chem.RenumberAtoms(heavy, order), Chem.AddHs(Chem.MolFromSmiles("CCO")), d.quads)
