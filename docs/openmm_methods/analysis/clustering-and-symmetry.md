@@ -111,6 +111,62 @@ Measured automorphism counts, drawn structure against hybrid (hydrogens explicit
 | phosphate monoester (rule) | methyl phosphate | 12 | 36 |
 | unchanged | acetic acid, acetamide, urea, phenol, paracetamol, phenolate, an asymmetric azide | = | = |
 
+### An example: propionate
+
+One torsion to a carboxylate oxygen, `C0-C1-C2-O3`, in `CCC(=O)[O-]` (atoms C0 C1 C2 O3 O4).
+
+```python
+import types
+import numpy as np
+from rdkit import Chem
+from rdkit.Chem import AllChem, rdMolTransforms
+from md_tools.analysis import TorsionDefinitions, SymmetricTorsionDescriptor, enumerate_symmetry
+
+mol = Chem.AddHs(Chem.MolFromSmiles("CCC(=O)[O-]"))
+AllChem.EmbedMolecule(mol, randomSeed=3)
+torsions = TorsionDefinitions(quads=((0, 1, 2, 3),), names=("chi",),
+                              indexing="zero-based", units="radian")
+
+enumerate_symmetry(mol, resonance=False).order        # the drawn structure
+enumerate_symmetry(mol).order                         # the resonance hybrid (the default)
+
+for flag in (False, True):
+    d = SymmetricTorsionDescriptor(mol, torsions, resonance=flag)
+    print(flag, d.names, list(d.column_weights), len(d.operations))
+
+# one frame, and the same frame with the two oxygens named the other way round
+conf = mol.GetConformer(); rdMolTransforms.SetDihedralRad(conf, 0, 1, 2, 3, 0.4)
+xyz = conf.GetPositions()[None]
+swap = list(range(mol.GetNumAtoms())); swap[3], swap[4] = 4, 3
+atoms = [types.SimpleNamespace(index=a.GetIdx(), element=types.SimpleNamespace(symbol=a.GetSymbol()))
+         for a in mol.GetAtoms()]
+top = types.SimpleNamespace(atoms=atoms, n_atoms=len(atoms), bonds=[
+    (atoms[b.GetBeginAtomIdx()], atoms[b.GetEndAtomIdx()]) for b in mol.GetBonds()])
+kw = dict(atom_mapping=list(range(mol.GetNumAtoms())), periodic=False, topology=top)
+
+d = SymmetricTorsionDescriptor(mol, torsions)
+a = d.closed_angles(None, coordinates=xyz, **kw)[0]
+b = d.closed_angles(None, coordinates=xyz[:, swap, :], **kw)[0]
+d.distance(a, b)                                      # (distance, minimising operation)
+d.nearest_labelling(np.vstack([a, b]), reference=a)   # a crystal that offers both assignments
+```
+
+```text
+automorphisms, drawn structure : 12
+automorphisms, resonance hybrid: 24
+resonance=False: columns ('chi',), weights [1.0], operations 1
+resonance=True : columns ('chi', 'chi@0-1-2-4'), weights [0.5, 0.5], operations 2
+frame, O named one way : [  22.9 -156.2] ('chi', 'chi@0-1-2-4')
+same frame, O swapped  : [-156.2   22.9]
+distance between them  : 0.0 (minimising operation 1)
+crystal candidates -> chosen assignment 0 angles [  22.9 -156.2]
+```
+
+The same frame is `chi` = 22.9 degrees named one way and -156.2 degrees named the other, a difference
+of 179 degrees, which is the two-peak split of a carboxylate torsion in a histogram of the stored
+column. Without `resonance` the descriptor has one column and one operation and nothing relates
+the two; with it they are at distance zero.
+
 **Other places the same thing happens**, not measured here but by the same mechanism: thiocarboxylates,
 sulfates and phosphonates (the last two through the rule), and the charged side chains of Glu and the
 C terminus. Enolates and 1,3-dicarbonyl anions are exchanged through resonance only when the
