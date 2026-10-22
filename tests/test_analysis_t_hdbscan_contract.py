@@ -155,27 +155,25 @@ def test_the_metric_is_periodic_so_the_wrap_does_not_split_a_basin():
 
 
 @requires_sklearn
-def test_a_unimodal_ensemble_comes_back_as_ONE_state_by_default():
-    """The reason this module's default departs from sklearn's. With allow_single_cluster False,
-    EOM refuses the root of the condensed tree and one Gaussian blob is SPLIT -- a silent,
-    confident error that reports several plausible populations where the truth is one state. Both
-    directions are measured, because the default is only defensible if the False behaviour is
-    actually wrong on this fixture."""
+def test_the_default_excludes_a_single_cluster_and_the_opt_in_allows_one():
+    """The default is sklearn's (False) since 2026-10-22. Its known cost is pinned in BOTH
+    directions: EOM refuses the root of the condensed tree, so one Gaussian blob is SPLIT by default
+    -- a silent, confident error -- and `allow_single_cluster=True` is what lets an ensemble that
+    may be one state come back as one. The summary says which was in force."""
     rng = np.random.default_rng(71)
     th = rng.normal(0.0, 0.15, size=(4000, 1))
-    assert t_hdbscan(th, mass_floor=0.02).fit().n_clusters_ == 1, "the default must allow one state"
-    assert t_hdbscan(th, mass_floor=0.02, allow_single_cluster=False).fit().n_clusters_ > 1
+    default = t_hdbscan(th, mass_floor=0.02).fit()
+    assert default.n_clusters_ > 1 and default.summary()["single_cluster_excluded_by_construction"]
+    assert t_hdbscan(th, mass_floor=0.02, allow_single_cluster=True).fit().n_clusters_ == 1
 
 
 @requires_sklearn
-def test_the_default_still_separates_a_genuinely_multi_state_ensemble():
-    """The cost of allow_single_cluster=True is the OPPOSITE error -- a real multi-state ensemble
-    collapsing into one cluster when the between-basin density does not beat the root's stability.
-    This pins that it does not happen on well-separated basins, which is what makes the default
-    safe to take rather than merely convenient."""
+def test_the_default_separates_a_genuinely_multi_state_ensemble():
+    """The reason the default is False: a real multi-state ensemble must not collapse into one
+    cluster. Well-separated basins give three clusters under the default."""
     rng = np.random.default_rng(72)
     c = t_hdbscan(three_blobs(rng)).fit()
-    assert c.allow_single_cluster is True
+    assert c.allow_single_cluster is False
     assert c.n_clusters_ == 3
 
 
@@ -191,8 +189,8 @@ def test_resampling_is_off_by_default():
     # the vote default: 20 neighbours, absolute winning fraction 0.90 (18 of 20)
     assert c.vote_rule == "fraction" and c.k == 20 and c.min_vote_fraction == 0.9
     assert c.min_vote is None
-    # NOT sklearn's default, deliberately: see ALLOW_SINGLE_CLUSTER_DEFAULT
-    assert c.allow_single_cluster is ALLOW_SINGLE_CLUSTER_DEFAULT is True
+    # sklearn's default since 2026-10-22: see ALLOW_SINGLE_CLUSTER_DEFAULT
+    assert c.allow_single_cluster is ALLOW_SINGLE_CLUSTER_DEFAULT is False
 
 
 @requires_sklearn
@@ -389,8 +387,8 @@ def test_summary_says_when_a_single_cluster_was_impossible_by_construction():
     as a FIELD, so a reader who gets 3 can see why 1 was excluded."""
     rng = np.random.default_rng(19)
     th = rng.normal(0.0, 0.15, size=(4000, 1))
-    off = t_hdbscan(th, mass_floor=0.02, allow_single_cluster=False).fit().summary()
-    on = t_hdbscan(th, mass_floor=0.02).fit().summary()
+    off = t_hdbscan(th, mass_floor=0.02).fit().summary()                         # the default
+    on = t_hdbscan(th, mass_floor=0.02, allow_single_cluster=True).fit().summary()
     assert off["single_cluster_excluded_by_construction"] is True
     assert off["allow_single_cluster"] is False and off["n_clusters"] > 1
     assert on["single_cluster_excluded_by_construction"] is False

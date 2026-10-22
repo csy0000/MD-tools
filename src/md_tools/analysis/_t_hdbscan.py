@@ -69,19 +69,18 @@ from ._torsions import (K_NEIGHBOURS_DEFAULT, K_NEIGHBOURS_LEGACY,
                         legacy_vote_argument_error, validate_angles, validate_frame_weights,
                         validate_metric_weights, vote, weighted_resample, wrap)
 
-#: DEFAULT TRUE since 2026-10-01, which is NOT sklearn's default and is the one place this
-#: estimator deliberately departs from it.
+#: DEFAULT FALSE, which is sklearn's default. It was True from 2026-10-01 to 2026-10-22 and was
+#: changed back by decision, because on the ensembles this is used for (a ligand's torsional states)
+#: allowing the root of the condensed tree let a multi-state ensemble collapse into one cluster as
+#: soon as a torsion was added: c(RGDfV) with 19 torsion columns gave ONE cluster with it True and
+#: TWO with it False, while the 17-column set gave two either way.
 #:
-#: sklearn's EOM selection refuses the root of the condensed tree unless this is set, so with it
-#: False a UNIMODAL ensemble cannot be reported as one state -- the blob is split instead, and the
-#: failure is silent and confident: measured, a 4000-frame single Gaussian returns 2-3 clusters
-#: with a plausible mass split and nothing in the output saying one state was never a candidate.
-#:
-#: THE COST OF TRUE IS REAL AND POINTS THE OTHER WAY: allowing the root lets a genuinely
-#: multi-state ensemble collapse into one cluster when the between-basin density is not low enough
-#: to beat the root's stability. Over-splitting is the harder error to notice, so it is the one the
-#: default avoids. `summary()` records the flag either way.
-ALLOW_SINGLE_CLUSTER_DEFAULT = True
+#: THE COST OF FALSE IS REAL AND POINTS THE OTHER WAY: EOM selection refuses the root, so a
+#: UNIMODAL ensemble cannot be reported as one state -- the blob is split, and the failure is
+#: silent and confident: measured, a 4000-frame single Gaussian returns 2-3 clusters with a
+#: plausible mass split. `summary()` records the flag and says so in a caveat either way, and
+#: `allow_single_cluster=True` is the opt-in for an ensemble that may be one state.
+ALLOW_SINGLE_CLUSTER_DEFAULT = False
 
 #: A frame the DENSITY test excludes: its neighbourhood is thinner than that of any frame the fit
 #: put in a cluster. "Nowhere in particular."
@@ -174,7 +173,8 @@ class THDBSCAN:
                  allow_single_cluster: bool = ALLOW_SINGLE_CLUSTER_DEFAULT,
                  max_precomputed_frames: int = MAX_PRECOMPUTED_FRAMES_DEFAULT,
                  max_matches: Optional[int] = None, use_chirality: bool = True,
-                 resonance: bool = True, stored_tolerance: Optional[float] = None,
+                 canonicalize: bool = True, resonance: Optional[bool] = None,
+                 stored_tolerance: Optional[float] = None,
                  broken_by: Optional[Sequence[str]] = None):
         self.theta_ = validate_angles(torsions, units)
         self.n_frames_, self.n_torsions_ = self.theta_.shape
@@ -256,7 +256,7 @@ class THDBSCAN:
             self.descriptor_ = SymmetricTorsionDescriptor(
                 molecule, torsion_definitions, metric_weights=metric_weights,
                 max_matches=(MAX_AUTOMORPHISMS if max_matches is None else int(max_matches)),
-                use_chirality=use_chirality, resonance=resonance)
+                use_chirality=use_chirality, canonicalize=canonicalize, resonance=resonance)
             self._coordinate_kwargs = dict(atom_mapping=atom_mapping, periodic=periodic,
                                            topology=topology)
             self.stored_tolerance = (STORED_AGREEMENT_TOLERANCE if stored_tolerance is None
@@ -708,6 +708,83 @@ class THDBSCAN:
         out["selected"] = out["angles"][:, :self.n_torsions_]
         return out
 
+    def assign_reference(self, candidates) -> Dict[str, Any]:
+        """Which cluster a reference structure's torsions (a crystal ligand) resemble.
+
+        `candidates` is `(m, n_columns)` closed angles in radians, one row per atom assignment of
+        the reference (`reference_assignments(structure, molecule, descriptor.quads)`), `NaN` where a
+        column cannot be measured (a torsion through a hydrogen). For each cluster the candidate
+        NEAREST that cluster's density peak is used (`SymmetricTorsionDescriptor.nearest_labelling`,
+        in the labelling the cluster is drawn in), so one structure is not counted once per
+        assignment. Distances are the clustering's own, over the columns measurable in every
+        candidate.
+
+        Per cluster: `distance_to_peak`; `nearest_member_distance` (to the closest frame of the
+        cluster); `peak_percentile`, the fraction of the cluster's frames that are at least as near
+        its density peak as the reference is. Near 1 means the reference lies inside the cluster's
+        own spread, near 0 means it is beyond it. `best_cluster` is the one with the smallest
+        `nearest_member_distance`, or None when the measurable columns cannot separate it from
+        another cluster: the two density peaks are then within a cluster's own spread (the 90th
+        percentile of its frames' distance to its peak), in some labelling, and they differ only in
+        columns the reference does not have. `consistent_with` lists the clusters it cannot be
+        told from and `indistinguishable` the pairs, with the peak gap and the spread. This says
+        which cluster the conformation resembles on those torsions, not which is more populated or
+        lower in free energy.
+        """
+        if not self.fitted_:
+            raise RuntimeError("call fit() before assign_reference()")
+        if not self.symmetry:
+            raise NotImplementedError("assign_reference() needs the symmetry-first route")
+        d = self.descriptor_
+        cand = np.atleast_2d(np.asarray(candidates, dtype=np.float64))
+        if cand.shape[1] != d.n_columns:
+            raise ValueError(f"expected rows of {d.n_columns} closed angles; got {cand.shape[1]}")
+        used = np.flatnonzero(np.all(np.isfinite(cand), axis=0))
+        if used.size == 0:
+            raise ValueError("no column is measurable in every candidate")
+        w = d.column_weights[used]
+        al = self.align_all(per_cluster=True)
+        ang = al["angles"][:, used]
+
+        def dist(rows, ref):
+            return np.sqrt((w[None, :] * np.abs(np.exp(1j * rows) - np.exp(1j * ref)[None, :]) ** 2).sum(axis=1))
+
+        out = {}
+        for c in range(self.n_clusters_):
+            members = np.flatnonzero(self.labels_ == c)
+            peak = int(al["cluster_references"][c])
+            pick = d.nearest_labelling(cand, al["angles"][peak])
+            row = pick["angles"][used]
+            to_ref = dist(ang[members], row)
+            peak_spread = dist(ang[members], ang[peak])
+            out[c] = {"assignment": pick["index"], "angles": pick["angles"],
+                      "distance_to_peak": float(pick["distance"]),
+                      "nearest_member_distance": float(to_ref.min()),
+                      "median_member_distance": float(np.median(to_ref)),
+                      "peak_percentile": float(np.mean(peak_spread <= pick["distance"] + 1e-12)),
+                      "margin": float(pick["margin"])}
+        # Can the measurable columns tell the clusters apart at all? Two clusters whose density peaks
+        # coincide on those columns, in SOME labelling, differ only in columns the reference does not
+        # have (a crystal has no hydrogen), and assigning the reference to either would be arbitrary.
+        spread = {}
+        for c in out:
+            members = np.flatnonzero(self.labels_ == c)
+            peak = int(al["cluster_references"][c])
+            spread[c] = float(np.percentile(dist(ang[members], ang[peak]), 90))
+        indistinct = []
+        for c1 in range(self.n_clusters_):
+            for c2 in range(c1 + 1, self.n_clusters_):
+                p1, p2 = al["angles"][int(al["cluster_references"][c1])], al["angles"][int(al["cluster_references"][c2])]
+                gap = min(float(dist(p2[list(op.sigma)][used][None, :], p1[used])[0]) for op in d.operations)
+                if gap <= max(spread[c1], spread[c2]):
+                    indistinct.append({"clusters": (c1, c2), "peak_gap": gap,
+                                       "spread": max(spread[c1], spread[c2])})
+        best = min(out, key=lambda c: out[c]["nearest_member_distance"])
+        same = sorted({best} | {c for pair in indistinct for c in pair["clusters"] if best in pair["clusters"]})
+        return {"clusters": out, "best_cluster": int(best) if len(same) == 1 else None,
+                "consistent_with": same, "indistinguishable": indistinct,
+                "columns_used": [d.names[i] for i in used]}
+
     def aligned_angles(self, cluster: int, reference: Optional[int] = None) -> Dict[str, Any]:
         """The SELECTED torsions of a cluster's members, each frame written in the labelling
         closest to the reference frame.
@@ -822,7 +899,7 @@ class THDBSCAN:
             out.append("allow_single_cluster is False, so a UNIMODAL ensemble cannot be reported "
                        "as one state: EOM refuses the root of the condensed tree.")
         else:
-            out.append("allow_single_cluster is True (this module's default, NOT sklearn's): a "
+            out.append("allow_single_cluster is True (set explicitly; the default is False): a "
                        "unimodal ensemble CAN be one state, and a multi-state one can collapse "
                        "into one cluster; check n_clusters == 1 against the marginals.")
         if not self.weights_uniform_ and self.resampling is False:

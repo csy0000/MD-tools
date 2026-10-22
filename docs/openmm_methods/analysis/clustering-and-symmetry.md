@@ -8,9 +8,10 @@ on the [paracetamol](../../tutorial/paracetamol/analysis/symmetry-alignment.ipyn
 [c(RGDfV)](../../tutorial/rgdfv/analysis/clustering.ipynb) pages.
 
 !!! note "What is released"
-    The distance, the clustering and the weights are in 0.6.5. `THDBSCAN.density_peak`,
-    `THDBSCAN.align_all` and `SymmetricTorsionDescriptor.align_to_reference`, which implement section 4,
-    and the `resonance` option of section 1b are not in a release yet.
+    The distance, the clustering and the weights are in 0.6.5. The canonicalization of section 1b,
+    `THDBSCAN.density_peak`, `THDBSCAN.align_all`, `THDBSCAN.assign_reference`,
+    `SymmetricTorsionDescriptor.align_to_reference` and `nearest_labelling`, `reference_assignments` and
+    the symmetry-corrected RMSD are new in 0.6.5.1, and `allow_single_cluster` now defaults to False.
 
 ## The problem
 
@@ -32,7 +33,7 @@ moves, and no frame is added or dropped.
 The molecule is matched against itself with RDKit (`uniquify=False`, `useChirality=True`). Every
 match is a graph automorphism: an element-, bond-order- and stereo-preserving permutation of the atoms.
 c(RGDfV) has 147 456 of them and paracetamol has 12 (c(RGDfV) has 36 864 if the drawn structure is
-compared instead of the resonance hybrid, see [section 1b](#1b-resonance-atoms-the-drawing-keeps-apart)).
+compared instead of the canonical form, see [section 1b](#1b-canonicalization-atoms-the-drawing-keeps-apart)).
 Most do nothing to the torsions that were selected, so permutations that act identically on the
 descriptor collapse to one **operation**:
 
@@ -69,15 +70,16 @@ and it raises if either fails.
 Each column contributes `sqrt(w) (cos θ, sin θ)` to the embedding `Φ(θ)`, so a torsion is compared as
 a point on a circle: `-π` and `π` are the same place.
 
-## 1b. Resonance: atoms the drawing keeps apart
+## 1b. Canonicalization: atoms the drawing keeps apart
 
 A graph with localised bond orders and charges draws a carboxylate as `C=O` and `C-O-`. RDKit's
 self-match compares those, finds the two oxygens different, and returns no permutation that
 exchanges them: the torsion measured to one oxygen is never folded onto the torsion measured to the
 other, half a turn away. The same holds for the two terminal nitrogens of a guanidinium.
 
-`enumerate_symmetry` therefore compares the **resonance hybrid** (`resonance=True`, the default).
-The charge of each atom and the order of each bond are averaged over the resonance structures that
+`enumerate_symmetry` therefore **canonicalises** the molecule before it matches (`canonicalize=True`,
+the default; `resonance=` is the former name and still works, with a deprecation warning).
+The canonical form is the resonance hybrid: the charge of each atom and the order of each bond are averaged over the resonance structures that
 RDKit's `ResonanceMolSupplier` generates, and two atoms with the same hybrid values, the same
 element and the same neighbours are one atom. A molecule with no delocalised group gets back exactly
 its own integers, so nothing else changes.
@@ -127,11 +129,11 @@ AllChem.EmbedMolecule(mol, randomSeed=3)
 torsions = TorsionDefinitions(quads=((0, 1, 2, 3),), names=("chi",),
                               indexing="zero-based", units="radian")
 
-enumerate_symmetry(mol, resonance=False).order        # the drawn structure
-enumerate_symmetry(mol).order                         # the resonance hybrid (the default)
+enumerate_symmetry(mol, canonicalize=False).order     # the drawn structure
+enumerate_symmetry(mol).order                         # canonicalised (the default)
 
 for flag in (False, True):
-    d = SymmetricTorsionDescriptor(mol, torsions, resonance=flag)
+    d = SymmetricTorsionDescriptor(mol, torsions, canonicalize=flag)
     print(flag, d.names, list(d.column_weights), len(d.operations))
 
 # one frame, and the same frame with the two oxygens named the other way round
@@ -154,8 +156,8 @@ d.nearest_labelling(np.vstack([a, b]), reference=a)   # a crystal that offers bo
 ```text
 automorphisms, drawn structure : 12
 automorphisms, resonance hybrid: 24
-resonance=False: columns ('chi',), weights [1.0], operations 1
-resonance=True : columns ('chi', 'chi@0-1-2-4'), weights [0.5, 0.5], operations 2
+canonicalize=False: columns ('chi',), weights [1.0], operations 1
+canonicalize=True : columns ('chi', 'chi@0-1-2-4'), weights [0.5, 0.5], operations 2
 frame, O named one way : [  22.9 -156.2] ('chi', 'chi@0-1-2-4')
 same frame, O swapped  : [-156.2   22.9]
 distance between them  : 0.0 (minimising operation 1)
@@ -164,7 +166,7 @@ crystal candidates -> chosen assignment 0 angles [  22.9 -156.2]
 
 The same frame is `chi` = 22.9 degrees named one way and -156.2 degrees named the other, a difference
 of 179 degrees, which is the two-peak split of a carboxylate torsion in a histogram of the stored
-column. Without `resonance` the descriptor has one column and one operation and nothing relates
+column. Without `canonicalize` the descriptor has one column and one operation and nothing relates
 the two; with it they are at distance zero.
 
 **Other places the same thing happens**, not measured here but by the same mechanism: thiocarboxylates,
@@ -189,7 +191,7 @@ On c(RGDfV) the 17 torsions of the tutorial are not moved by the carboxylate and
 exchanges, so their four operations and their clusters are unchanged. Adding Asp `chi2` and Arg
 `chi5`, which those exchanges do move, folds each of their two peaks half a turn apart into one, and
 the descriptor has 16 operations; see the
-[c(RGDfV) page](../../tutorial/rgdfv/analysis/clustering.ipynb#11-resonance-the-carboxylate-and-the-guanidinium).
+[c(RGDfV) page](../../tutorial/rgdfv/analysis/clustering.ipynb#11-canonicalization-the-carboxylate-and-the-guanidinium).
 
 ## 2. The distance, minimised through the permutations
 
@@ -248,7 +250,7 @@ Then every frame, fitted or not, is classified with the **same distance** by an 
 20 nearest clustered neighbours (18 of 20 assigns). A frame whose `min_samples`-th neighbour is
 farther than that of any clustered frame is density noise (label `-2`); one whose neighbours disagree
 is ambiguous (`-1`, which is not evidence of a barrier). Clusters are numbered by population, `0` is
-the largest, and `allow_single_cluster` defaults to True: with False a unimodal ensemble cannot come
+the largest, and `allow_single_cluster` defaults to False, as in sklearn: with it a unimodal ensemble cannot come
 back as one state. See [Analysis](README.md#t_hdbscan) for both.
 
 **A cluster is a density basin, not a metastable state.** Nothing here looks at time.
@@ -357,6 +359,14 @@ stored**, in any labelling, keep every assignment, because each is a legitimate 
 
 The [paracetamol notebook](../../tutorial/paracetamol/analysis/symmetry-alignment.ipynb#8-paracetamol-in-a-crystal-one-structure-two-assignments) does this with two PDB entries. `reference_assignments(structure, molecule, descriptor.quads)` returns the candidate rows, one per graph match; for paracetamol there are two for each crystal.
 
+`fit.assign_reference(candidates)` then says which cluster the structure resembles: per cluster the
+distance to its density peak, to its nearest frame, and the fraction of the cluster's frames that are
+nearer the peak than the crystal is. **It returns no best cluster when the measurable columns cannot
+separate two clusters** (`best_cluster` is `None`, with `consistent_with` and `indistinguishable`): two
+clusters whose peaks coincide on those columns, in some labelling, differ only in columns a crystal
+does not have. On paracetamol that is the case: A and B differ in the hydroxyl hydrogen (`phenol`), so
+neither PDB structure can be assigned to either, and the notebook says so.
+
 The crystal's line can still sit far from a cluster's histogram; that is a statement about the
 conformation, and the labelling no longer contributes to it.
 
@@ -375,13 +385,59 @@ conformation, and the labelling no longer contributes to it.
   under another naming. It does not make their populations equal: an atom-specific restraint or a
   REST2 region covering one side breaks the energetic symmetry and leaves the graph unchanged
   (`broken_by=[...]`).
-* **Resonance is in the graph now**, by the hybrid of section 1b, and the carboxylate and
+* **Canonicalization puts resonance in the graph**, as in section 1b, and the carboxylate and
   guanidinium torsions fold. Atoms that are equivalent only by tautomerism are not.
 * **Weights.** Populations are weighted sums over frames and the density the fit sees is that of the
   fitted frames, as in [Analysis](README.md#t_hdbscan).
 
 The idea, minimising over the automorphisms, is the same one symmetry-corrected RMSD uses for atom
 coordinates; here it acts on a descriptor of torsions instead.
+
+## Symmetry-corrected RMSD
+
+An RMSD by atom index calls a structure with its carboxylate oxygens named the other way round
+different from itself. The correction is the same minimum over the symmetry operations as the
+torsional distance, with a superposition in place of the circle embedding:
+
+```text
+RMSD_sym(x, y) = min over g in G of  min over rotations R, translations t of  RMSD(x, R g y + t)
+```
+
+For one fixed operation `g` the optimal rotation is Kabsch's, so the minimum over operations of the
+Kabsch RMSD is the **global** minimum over rotation and permutation together. Nothing alternates and
+nothing is greedy.
+
+```python
+from md_tools.analysis import (enumerate_symmetry, heavy_atoms, operations_on_atoms,
+                               symmetric_rmsd, intercluster_rmsd)
+
+atoms = heavy_atoms(mol)
+operations = operations_on_atoms(enumerate_symmetry(mol), atoms)     # c(RGDfV): 16, not 147 456
+rmsd = symmetric_rmsd(X[:, atoms], ref[None, atoms], operations)     # (n_frames, 1), same units as X
+table = intercluster_rmsd(X[:, atoms], fit.labels_, operations)      # mean and std between and within clusters
+```
+
+* **Heavy atoms.** The operations are the whole-molecule permutations as they act on the chosen atoms,
+  so the cost is the number of distinct ones: 16 for the 41 heavy atoms of c(RGDfV), 2 for the 11 of
+  paracetamol. The atom set must be a union of symmetry orbits, or `operations_on_atoms` refuses.
+  Hydrogens are left out by choice: all 79 atoms would need all 147 456 operations.
+* **Cost.** About 2.6 us per pair and operation in numpy (covariances for all pairs by matrix
+  multiplication, then a batched 3x3 SVD, which dominates). 4000 frames, all pairs and 16 operations
+  is roughly 5 minutes on one core: an estimate from that rate, not a run of that size.
+* **Between and within clusters.** `intercluster_rmsd` returns the mean and standard deviation for
+  every pair of clusters; the diagonal is the spread over distinct pairs inside a cluster. Large
+  clusters are subsampled (`max_per_cluster`, seeded) and the frames used are recorded.
+* **Compared with other tools** (measured on c(RGDfV), 41 heavy atoms): spyrmsd, which takes the
+  minimum over all graph isomorphisms, agrees with this to 0.002 A; cpptraj `symmrmsd`, which fits
+  once, assigns each symmetric group by a Hungarian assignment and fits again, stays within 0.004 A on
+  heavy atoms but gave an RMSD **below** the valid minimum on 29 of 100 frames (up to 0.07 A) once polar
+  hydrogens were added, so it is not used as a reference here. spyrmsd matches atoms by atomic number
+  and adjacency only, so it ignores bond orders and chirality; this uses the canonicalised, chirality-
+  checked group.
+* **Not done.** The exchangeable atoms that nothing else couples (the two carboxylate oxygens, the two
+  valine methyls) could be assigned by a small Hungarian problem and only the coupled operations (the
+  phenyl flip) enumerated. In a test on 100 frames that matched the exhaustive minimum to 0.0001 A,
+  but alternating assignment and fit is exact only for a fixed alignment, so it is not what this does.
 
 ## Where this is used
 

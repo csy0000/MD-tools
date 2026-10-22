@@ -56,6 +56,8 @@ Each method page carries a minimal, runnable `example.config` beside it.
 
 | page | |
 |---|---|
+| [v0.6.5.1](release-notes/v0.6.5.1.md) | torsional analysis: canonicalization of resonance-equivalent atoms, crystal-to-cluster assignment, symmetry-corrected RMSD; `allow_single_cluster` now defaults to False |
+| [v0.6.5](release-notes/v0.6.5.md) | ligand parameterisation: protonation at a stated pH, the ligand amide is scaled, MACE-assisted bespoke torsions |
 | [v0.6.1](release-notes/v0.6.1.md) | selective explicit-solvent REST2, validated on CUDA with one energy check recorded FAIL: — residue masks for backbone and sidechains, individually chosen ligand instances, and the two helpers that make a pocket selectable |
 | [v0.6.0](release-notes/v0.6.0.md) | released 2026-09-19: reusable ligand parameter packages, protonation as a stated choice, assemblies and missing atoms, placement measured on real cards |
 | [v0.5.4](release-notes/v0.5.4.md) | one shape of generated run, the whole chain checked before it is written, and AIS as a transformation between two topologies |

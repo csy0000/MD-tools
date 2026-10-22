@@ -161,7 +161,9 @@ unweighted unless `resampling=N`.
 **Duplicated torsions, resonance-equivalent atoms (the two oxygens of a carboxylate, the nitrogens of a
 guanidinium), the minimised distance, the 1 % floor and how a frame is written in one labelling**
 are explained on [their own page](clustering-and-symmetry.md). `enumerate_symmetry`, the descriptor and
-`t_hdbscan` take `resonance=True` by default; `resonance=False` compares the drawn structure.
+`t_hdbscan` take `canonicalize=True` by default; `canonicalize=False` compares the drawn structure.
+`allow_single_cluster` defaults to False (see below). A symmetry-corrected RMSD and the assignment of a
+crystal structure to a cluster are on the same page.
 
 ### Migrating an existing call
 
@@ -200,23 +202,20 @@ fitted on the sampled ensemble. `resampling=N` draws N frames with probability p
 the weights (Madow systematic, WITHOUT replacement, because duplicate frames give zero distances
 and a core distance of zero) and fits the target distribution itself.
 
-### `allow_single_cluster` defaults to True, unlike sklearn
+### `allow_single_cluster` defaults to False, as in sklearn
 
 With it False, HDBSCAN's excess-of-mass selection refuses the root of the condensed tree, so a
 **unimodal ensemble cannot come back as one state** — it is split into two or three with a
-plausible mass split and nothing saying one state was never a candidate. Measured here: a 4000-frame single Gaussian
-splits into 2.
+plausible mass split and nothing saying one state was never a candidate. Measured here: a 4000-frame
+single Gaussian splits into 2. That is the cost of the default, and `summary()` carries it
+(`single_cluster_excluded_by_construction`, and a caveat).
 
-The cost of True points the other way: a genuinely multi-state ensemble can collapse into one
-cluster when the between-basin density does not beat the root's stability. True is still the
-better default because the two errors are not equally visible. One state reported where there are
-three is a single population that looks wrong and prompts a check; three reported where there is
-one is several plausible populations that look like a result. **Over-splitting is the harder
-error to notice.**
-
-`summary()` carries `single_cluster_excluded_by_construction` either way, so which case you are in
-is reported rather than inferred — and when the answer IS one cluster, a caveat tells you to check
-it against the torsion marginals first.
+It was True from 2026-10-01 to 2026-10-22 and was changed back, because on a ligand's torsional
+states the opposite error was the one that mattered: allowing the root let a multi-state ensemble
+collapse into one cluster as soon as a torsion was added. c(RGDfV) with 19 torsion columns gave
+**one** cluster with it True and **two** with it False; the 17-column set gave two either way. If
+your ensemble may be one state, pass `allow_single_cluster=True` and check `n_clusters == 1` against
+the marginals.
 
 ---
 

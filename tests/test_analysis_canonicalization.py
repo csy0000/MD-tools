@@ -1,8 +1,8 @@
-"""Resonance-equivalent atoms in the symmetry enumeration.
+"""Canonicalization: resonance-equivalent atoms are one atom in the symmetry enumeration.
 
 A graph with localised bond orders and charges draws a carboxylate as `C=O` and `C-O-`, and RDKit's
-self-match then finds no permutation that exchanges the two oxygens. With `resonance=True` the
-charges and bond orders compared are the resonance hybrid's. Each test names the mistake it exists
+self-match then finds no permutation that exchanges the two oxygens. With `canonicalize=True` the
+charges and bond orders compared are the canonical form's, the resonance hybrid's. Each test names the mistake it exists
 to catch: a delocalised group left asymmetric, an aromatic ring broken by averaging its Kekule
 forms, a group of different shape merged with a similar one, and a torsion to one oxygen that is not
 folded onto the torsion to the other.
@@ -27,7 +27,7 @@ def _h(smiles):
 
 def _orders(smiles):
     m = _h(smiles)
-    return enumerate_symmetry(m, resonance=False).order, enumerate_symmetry(m).order
+    return enumerate_symmetry(m, canonicalize=False).order, enumerate_symmetry(m).order
 
 
 @pytest.mark.parametrize("smiles, drawn, hybrid", [
@@ -59,10 +59,10 @@ def test_nothing_is_merged_that_chemistry_keeps_apart(smiles):
     assert drawn == hybrid
 
 
-def test_a_resonance_free_call_is_the_old_enumeration_and_says_so():
+def test_a_call_without_canonicalization_is_the_old_enumeration_and_says_so():
     m = _h("CC(=O)[O-]")
-    assert enumerate_symmetry(m, resonance=False).describe()["resonance"] is None
-    desc = enumerate_symmetry(m).describe()["resonance"]
+    assert enumerate_symmetry(m, canonicalize=False).describe()["canonicalization"] is None
+    desc = enumerate_symmetry(m).describe()["canonicalization"]
     assert desc["n_resonance_structures"] == 2
     assert any(g["rule"].startswith("resonance") for g in desc["delocalised_groups"])
 
@@ -100,7 +100,7 @@ def test_a_torsion_to_one_carboxylate_oxygen_is_folded_onto_the_other():
     mol = _propionate()
     defs = TorsionDefinitions(quads=((0, 1, 2, 3),), names=("chi",), indexing="zero-based",
                               units="radian")
-    plain = SymmetricTorsionDescriptor(mol, defs, resonance=False)
+    plain = SymmetricTorsionDescriptor(mol, defs, canonicalize=False)
     assert plain.is_trivial and plain.n_columns == 1
 
     d = SymmetricTorsionDescriptor(mol, defs)
@@ -123,3 +123,12 @@ def test_a_torsion_to_one_carboxylate_oxygen_is_folded_onto_the_other():
     dist = [d.distance(th[i], th_swapped[i])[0] for i in range(2)]
     assert dist == pytest.approx([0.0, 0.0], abs=1e-9)
     assert np.linalg.norm(d.embed(th) - d.embed(th_swapped)) > 1.0              # not the same row
+
+
+def test_the_former_name_still_works_and_says_it_is_the_former_name():
+    m = _h("CC(=O)[O-]")
+    with pytest.warns(DeprecationWarning, match="canonicalize"):
+        old = enumerate_symmetry(m, resonance=False).order
+    assert old == enumerate_symmetry(m, canonicalize=False).order == 6
+    with pytest.warns(DeprecationWarning):
+        assert enumerate_symmetry(m, resonance=True).order == 12

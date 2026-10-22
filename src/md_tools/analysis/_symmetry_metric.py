@@ -102,7 +102,7 @@ class SymmetryEnumeration:
     use_chirality: bool
     cap: int
     rejected_by_stereo_check: int
-    resonance: Optional[Dict[str, Any]] = None
+    canonicalization: Optional[Dict[str, Any]] = None
 
     @property
     def order(self) -> int:
@@ -115,7 +115,7 @@ class SymmetryEnumeration:
                 "method": "RDKit self-substructure match, uniquify=False, whole molecule "
                           "(not restricted to rings); every match re-verified as a bond- and "
                           "element-preserving bijection",
-                "resonance": self.resonance}
+                "canonicalization": self.canonicalization}
 
 
 def _graph_invariants(molecule, info=None):
@@ -243,7 +243,7 @@ def resonance_hybrid(molecule, *, max_structures: int = MAX_RESONANCE_STRUCTURES
     if n >= int(max_structures):
         raise IncompleteSymmetryEnumeration(
             f"{n} resonance structures were generated, the limit; the enumeration may be "
-            f"incomplete. Pass `resonance=False` to match the drawn structure, or raise "
+            f"incomplete. Pass `canonicalize=False` to match the drawn structure, or raise "
             f"max_structures.")
     charge = np.zeros(n_at)
     order = {}
@@ -315,9 +315,21 @@ def _hybrid_copy(molecule, info: "ResonanceInfo"):
     return rw.GetMol()
 
 
+def _canonicalize_option(canonicalize: bool, resonance: Optional[bool]) -> bool:
+    """`resonance=` was this option's name before it was released; it still works, and says so."""
+    if resonance is None:
+        return bool(canonicalize)
+    import warnings
+
+    warnings.warn("`resonance=` is the former name of `canonicalize=`; use `canonicalize=`.",
+                  DeprecationWarning, stacklevel=3)
+    return bool(resonance)
+
+
 def enumerate_symmetry(molecule, *, max_matches: int = MAX_AUTOMORPHISMS,
-                       use_chirality: bool = True, resonance: bool = True,
-                       max_structures: int = MAX_RESONANCE_STRUCTURES) -> SymmetryEnumeration:
+                       use_chirality: bool = True, canonicalize: bool = True,
+                       max_structures: int = MAX_RESONANCE_STRUCTURES,
+                       resonance: Optional[bool] = None) -> SymmetryEnumeration:
     """Every whole-molecule atom permutation that preserves the chemical graph. Refuses if incomplete.
 
     RDKit matches the molecule against ITSELF with `uniquify=False`, which enumerates every
@@ -333,17 +345,19 @@ def enumerate_symmetry(molecule, *, max_matches: int = MAX_AUTOMORPHISMS,
     `IncompleteSymmetryEnumeration`. A molecule with many equivalent hydrogens has a factorially
     large group (three methyls alone contribute 6^3 = 216), so the cap is reachable.
 
-    RESONANCE (`resonance=True`, the default). A graph with localised bond orders and charges holds
+    CANONICALIZATION (`canonicalize=True`, the default). A graph with localised bond orders and charges holds
     the two oxygens of a carboxylate apart (`C=O` and `C-O-`), and so no permutation exchanges them
-    and the torsions measured to them are never folded. With `resonance` the charges and bond orders
-    compared are the resonance hybrid's (see `resonance_hybrid`): the carboxylate oxygens, the three
+    and the torsions measured to them are never folded. With `canonicalize` the charges and bond orders
+    compared are those of the canonical form, the resonance hybrid (see `resonance_hybrid`): the carboxylate oxygens, the three
     guanidinium nitrogens, the oxygens of a nitro, sulfonate or phosphate group, and so on, become
-    one atom each. `resonance=False` compares the drawn structure, as before.
+    one atom each. `canonicalize=False` compares the drawn structure, as before. `resonance=` is the
+    former name of this option, accepted with a DeprecationWarning.
     """
     if int(max_matches) < 1:
         raise ValueError("max_matches must be at least 1")
     clean = _clean_for_automorphism(molecule)
-    info = resonance_hybrid(molecule, max_structures=max_structures) if resonance else None
+    canonicalize = _canonicalize_option(canonicalize, resonance)
+    info = resonance_hybrid(molecule, max_structures=max_structures) if canonicalize else None
     if info is None:
         raw = clean.GetSubstructMatches(clean, uniquify=False, useChirality=bool(use_chirality),
                                         maxMatches=int(max_matches) + 1, useQueryQueryMatches=True)
@@ -386,7 +400,7 @@ def enumerate_symmetry(molecule, *, max_matches: int = MAX_AUTOMORPHISMS,
     return SymmetryEnumeration(permutations=ordered, n_atoms=clean.GetNumAtoms(),
                                use_chirality=bool(use_chirality), cap=int(max_matches),
                                rejected_by_stereo_check=int(rejected),
-                               resonance=None if info is None else info.describe())
+                               canonicalization=None if info is None else info.describe())
 
 
 # --------------------------------------------------------------------------- the descriptor
@@ -453,7 +467,7 @@ class SymmetricTorsionDescriptor:
     def __init__(self, molecule, torsions: TorsionDefinitions, *, metric_weights=None,
                  enumeration: Optional[SymmetryEnumeration] = None,
                  max_matches: int = MAX_AUTOMORPHISMS, use_chirality: bool = True,
-                 resonance: bool = True):
+                 canonicalize: bool = True, resonance: Optional[bool] = None):
         if molecule is None:
             raise ValueError("a reference molecule is required; symmetry is a property of it")
         if not isinstance(torsions, TorsionDefinitions):
@@ -479,7 +493,8 @@ class SymmetricTorsionDescriptor:
         self.molecule = molecule
         self.definitions = torsions
         self.enumeration = enumeration or enumerate_symmetry(
-            molecule, max_matches=max_matches, use_chirality=use_chirality, resonance=resonance)
+            molecule, max_matches=max_matches, use_chirality=use_chirality,
+            canonicalize=_canonicalize_option(canonicalize, resonance))
         if self.enumeration.n_atoms != n_atoms:
             raise ValueError("the enumeration belongs to a different molecule")
         perms = self.enumeration.permutations

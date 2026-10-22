@@ -227,3 +227,38 @@ def test_a_crystal_ligand_has_one_assignment_per_graph_match_and_the_rows_are_th
     assert not np.allclose(wrap(rows[0][[1, 3]] - rows[1][[1, 3]]), 0.0, atol=0.1)
     with pytest.raises(ValueError, match="heavy atoms"):
         reference_assignments(Chem.RenumberAtoms(heavy, order), Chem.AddHs(Chem.MolFromSmiles("CCO")), d.quads)
+
+
+@requires_sklearn
+def test_a_reference_is_assigned_to_the_cluster_it_resembles_whichever_way_it_is_labelled():
+    """A reference made from a frame of cluster A (then from a frame of B), offered under both of its
+    atom assignments. It is assigned to the cluster the frame came from, the answer does not depend
+    on which assignment comes first, and the other cluster is farther. With the phenol columns
+    unmeasurable (a crystal has no hydrogen) the two clusters, which differ only there, can no longer
+    be told apart, and the result says which columns it used."""
+    mol, defs = _para()
+    xyz = _ensemble(mol)
+    fit = _fit(mol, defs, xyz, mass_floor=0.05)
+    sigma = list(fit.descriptor_.operations[1].sigma)
+    labels = fit.labels_
+    for frame in (5, 350):
+        row = fit.closed_theta_[frame]
+        flipped = row[sigma]
+        want = int(labels[frame])
+        for rows in (np.vstack([row, flipped]), np.vstack([flipped, row])):
+            out = fit.assign_reference(rows)
+            assert out["best_cluster"] == want and out["consistent_with"] == [want] and len(out["columns_used"]) == 5
+            assert out["indistinguishable"] == []
+            near, far = out["clusters"][want], out["clusters"][1 - want]
+            assert near["nearest_member_distance"] < 0.2 < far["nearest_member_distance"]
+            assert 0.0 < near["peak_percentile"] <= 1.0
+        blind = np.vstack([row, flipped]).copy()
+        blind[:, [2, 4]] = np.nan
+        out = fit.assign_reference(blind)
+        assert out["columns_used"] == ["omega", "aryl", "aryl@1-3-4-10"]
+        # the clusters differ only in the unmeasured columns, so the reference is NOT assigned to one
+        assert out["best_cluster"] is None and out["consistent_with"] == [0, 1]
+        assert len(out["indistinguishable"]) == 1
+        assert out["indistinguishable"][0]["peak_gap"] < out["indistinguishable"][0]["spread"]
+    with pytest.raises(ValueError, match="closed angles"):
+        fit.assign_reference(np.zeros((1, 3)))
