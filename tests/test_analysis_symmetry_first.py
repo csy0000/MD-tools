@@ -659,7 +659,9 @@ def test_the_legacy_fit_uses_the_same_multiplicities_as_its_classifier():
 
     rng = np.random.default_rng(8)
     th = wrap(np.concatenate([rng.normal(0.4, 0.1, 600), rng.normal(0.4 + np.pi, 0.1, 600)]))
-    fit = t_hdbscan(th[:, None], symmetry=False, multiplicities=[2],
+    # a unimodal ensemble once folded, so the single-cluster opt-in is part of the question being
+    # asked (the default is False since 0.6.5.1: a unimodal ensemble is otherwise split)
+    fit = t_hdbscan(th[:, None], symmetry=False, multiplicities=[2], allow_single_cluster=True,
                     multiplicity_justification="test: a two-fold rotor").fit()
     assert fit.n_clusters_ == 1
 
