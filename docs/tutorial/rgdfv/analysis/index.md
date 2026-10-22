@@ -5,7 +5,7 @@ registered:
 
 | notebook | what it shows |
 |---|---|
-| [`clustering.ipynb`](clustering.ipynb) | the symmetry enumerated (four operations on the torsions, sixteen once the carboxylate and the guanidinium are included), the columns and their weights, `t_hdbscan` with the 1 % floor, every frame written in the labelling nearest the density peak, the backbone table, representative structures, how the choice of torsions changes the answer, the canonicalization of the Asp and Arg side chains, and the symmetry-corrected heavy-atom RMSD between the clusters of a backbone-only and of a heavy-atom-torsion clustering |
+| [`clustering.ipynb`](clustering.ipynb) | the symmetry enumerated (four operations on the torsions, sixteen once the carboxylate and the guanidinium are included), the columns and their weights, `t_hdbscan` with the 1 % floor, every frame written in the labelling nearest the density peak, the backbone table, representative structures, how the choice of torsions changes the answer, the canonicalization of the Asp and Arg side chains drawn as chemical schematics, the clustering on all 24 heavy-atom torsions, and the symmetry-corrected heavy-atom RMSD between the clusters of a backbone-only and of a heavy-atom-torsion clustering |
 
 The explanation is in
 [Methods: symmetry-aware clustering and the torsion representation](../../../openmm_methods/analysis/clustering-and-symmetry.md);
