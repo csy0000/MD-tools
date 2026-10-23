@@ -902,9 +902,14 @@ class ReplicaRun:
 
         # PHASE 1 -- READ ONLY, and complete. Nothing local exists yet, so a refusal here
         # leaves no half-created extension directory behind to be mistaken for a run.
+        # An extension parent's file holds ITS OWN segment, which can be shorter than the original
+        # request the identity records (50 ns on top of a run created to make 500 ns). Its manifest
+        # says how many rows the segment recorded; an original run has no such field and is judged
+        # against its request, as before.
         check = replica_validate.validate_replica_output(
             analysis=str(files["analysis"]), checkpoint=str(files["checkpoint"]),
-            expect_completed=True, reconcilable=False)
+            expect_completed=True, reconcilable=False,
+            expected_exchanges=replica_validate.segment_exchanges(manifest))
         if not check.ok:
             raise storage.StorageError(replica_validate.format_report(
                 check, title=f"{parent} cannot be extended"))
