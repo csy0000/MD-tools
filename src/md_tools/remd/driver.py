@@ -902,9 +902,14 @@ class ReplicaRun:
 
         # PHASE 1 -- READ ONLY, and complete. Nothing local exists yet, so a refusal here
         # leaves no half-created extension directory behind to be mistaken for a run.
+        # An extension parent's file holds ITS OWN segment, which can be shorter than the original
+        # request the identity records (50 ns on top of a run created to make 500 ns). Its manifest
+        # says how many rows the segment recorded; an original run has no such field and is judged
+        # against its request, as before.
         check = replica_validate.validate_replica_output(
             analysis=str(files["analysis"]), checkpoint=str(files["checkpoint"]),
-            expect_completed=True, reconcilable=False)
+            expect_completed=True, reconcilable=False,
+            expected_exchanges=replica_validate.segment_exchanges(manifest))
         if not check.ok:
             raise storage.StorageError(replica_validate.format_report(
                 check, title=f"{parent} cannot be extended"))
@@ -2100,14 +2105,35 @@ class ReplicaRun:
             inherited_proposed = int(parent_overall.get("proposed") or 0)
             inherited_complete = bool(parent_overall)
             totals = "parent is an original run"
-        elif parent.get("extension_format") == self.EXTENSION_FORMAT:
+        elif (parent.get("extension_format") == self.EXTENSION_FORMAT
+              and parent_chain.get("segments") is not None
+              and parent_chain.get("exchanges") is not None):
             inherited_segments = int(parent_chain["segments"])
             inherited_exchanges = int(parent_chain["exchanges"])
             parent_acceptance = parent_chain.get("neighbouring_acceptance") or {}
-            inherited_accepted = int(parent_acceptance.get("accepted") or 0)
-            inherited_proposed = int(parent_acceptance.get("proposed") or 0)
-            inherited_complete = bool(parent_acceptance.get("complete"))
-            totals = "summed over the parent's chain"
+            if (parent_acceptance.get("accepted") is None
+                    or parent_acceptance.get("proposed") is None):
+                # `int(None or 0)` here used to turn a missing count into 0 and ADD it, so the
+                # chain acceptance covered only the last segment under a name that says whole chain.
+                inherited_accepted = inherited_proposed = None
+                inherited_complete = False
+                totals = ("summed over the parent's chain; the parent's acceptance counts are "
+                          "unavailable, so the chain acceptance is left empty")
+            else:
+                inherited_accepted = int(parent_acceptance["accepted"])
+                inherited_proposed = int(parent_acceptance["proposed"])
+                inherited_complete = bool(parent_acceptance.get("complete"))
+                totals = "summed over the parent's chain"
+        elif parent.get("extension_format") == self.EXTENSION_FORMAT:
+            # A v2 parent that is itself unsummable: it extended a v1 chain and honestly wrote None
+            # for its totals. Unavailable stays unavailable down the chain. This used to be
+            # `int(None)`, at COMPLETION, after the compute, with no manifest left behind.
+            inherited_segments = inherited_exchanges = None
+            inherited_accepted = inherited_proposed = None
+            inherited_complete = False
+            totals = ("unavailable: the parent is itself an extension whose chain totals are "
+                      "unavailable (it extended a chain recorded in an older format). This "
+                      "segment's own counts are exact; re-walk the chain to total it.")
         else:
             inherited_segments = inherited_exchanges = None
             inherited_accepted = inherited_proposed = None

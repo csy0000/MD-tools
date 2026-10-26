@@ -94,9 +94,33 @@ def _check_manifest_cv_series(manifest_path, record, result):
         result.fail(f"collective variables: {problem}")
 
 
+def segment_exchanges(record):
+    """How many exchange rows an EXTENSION segment's own storage should hold, from its manifest.
+
+    An extension records its own rows under `extends.segment.exchanges`; an original run has no such
+    field and returns None. The distinction matters because everything else in an extension's
+    manifest describes the CHAIN: `schedule.number_of_exchanges` is the chain's total (105 000 for a
+    500 + 500 + 50 ns chain of a run created to make 50 000), and the scientific identity still
+    records the ORIGINAL request. Neither is what a segment's own file holds.
+    """
+    if isinstance(record, dict):
+        extends = record.get("extends")
+        if isinstance(extends, dict) and isinstance(extends.get("segment"), dict):
+            rows = extends["segment"].get("exchanges")
+            if rows is not None:
+                return int(rows)
+    return None
+
+
 def validate_replica_output(*, analysis, checkpoint=None, manifest=None, expect_completed=True,
-                            reconcilable=False):
-    """Open the storage and decide whether it is a complete, coherent replica-exchange run."""
+                            reconcilable=False, expected_exchanges=None):
+    """Open the storage and decide whether it is a complete, coherent replica-exchange run.
+
+    `expected_exchanges` is the number of exchange rows THIS storage should hold, when the caller
+    knows it from a manifest it does not otherwise pass (`segment_exchanges`). Without it the
+    storage is judged against the original request, which is right for an original run and wrong for
+    an extension segment shorter than that request.
+    """
     result = ValidationResult()
     analysis_path = Path(analysis)
     result.note("analysis_netcdf", str(analysis_path))
@@ -117,7 +141,8 @@ def validate_replica_output(*, analysis, checkpoint=None, manifest=None, expect_
         except storage.StorageError as failure:
             return result.fail(str(failure))
         _validate(reporter, analysis_path, checkpoint, record, result,
-                  expect_completed=expect_completed, reconcilable=reconcilable)
+                  expect_completed=expect_completed, reconcilable=reconcilable,
+                  expected_exchanges=expected_exchanges)
     finally:
         if reporter is not None:
             reporter.close()
@@ -125,7 +150,7 @@ def validate_replica_output(*, analysis, checkpoint=None, manifest=None, expect_
 
 
 def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_completed,
-              reconcilable=False):
+              reconcilable=False, expected_exchanges=None):
     schema = reporter.schema
     result.note("schema", schema)
     if schema in storage.SUPERSEDED_SCHEMAS:
@@ -287,7 +312,17 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
             schedule = record.get("schedule")
             if isinstance(schedule, dict):
                 actual_budget = schedule.get("number_of_exchanges")
-        if actual_budget is not None:
+        # An EXTENSION segment holds only its own rows. Its manifest's schedule count is the chain's
+        # total and the identity's is the original request, so neither is a statement about this
+        # file; the rows the segment recorded for itself are.
+        own = expected_exchanges if expected_exchanges is not None else segment_exchanges(record)
+        if own is not None:
+            result.note("segment_exchanges", int(own))
+            if expect_completed and stats["exchanges_committed"] != int(own):
+                result.fail(
+                    f"the storage holds {stats['exchanges_committed']} exchange row(s) but this "
+                    f"extension segment recorded {int(own)}")
+        elif actual_budget is not None:
             result.note("budget_exchanges", int(actual_budget))
             if expect_completed and stats["exchanges_committed"] != int(actual_budget):
                 result.fail(
