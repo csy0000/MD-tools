@@ -87,7 +87,9 @@ BUILD_SCHEMA = Schema(
                       "classification.\n"
                       "  peptide       -- read -i as a peptide/protein .pdb, or as a .seq holding "
                       "one line of residue names that tleap's `sequence` builds (extended), and "
-                      "parameterise it with the protein force field. Sage never touches it.\n"
+                      "parameterise it with the protein force field. Sage never touches it. A .pdb or .cif "
+                      "keeps its chains and crystal waters (`--strip-water` removes the waters) and is "
+                      "refused if it holds ions, crystallisation additives or ligands.\n"
                       "  ligand        -- read -i as a .smi or .sdf and parameterise the whole "
                       "molecule with the small-molecule force field. One residue, no peptide "
                       "chemistry is claimed or read. A .smi states the chemistry and the "
@@ -1058,7 +1060,8 @@ def recorded_configuration(config_path: Path | None) -> tuple[dict[str, Any], di
 
 def build_topology(*, input_path: Path, config_path: Path | None = None,
                    out_system: Path, out_pdb: Path, out_log: Path,
-                   overwrite: bool = False, echo: bool = True) -> dict[str, Any]:
+                   overwrite: bool = False, strip_water: bool = False,
+                   echo: bool = True) -> dict[str, Any]:
     """Build one System. Returns the machine record that was written into `out_log`."""
     from openmm import XmlSerializer, app
 
@@ -1094,6 +1097,10 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     if peptide and suffix not in (".pdb", ".seq") and not (suffix == ".cif" and assembly_id):
         raise ConfigError(f"-i {input_path}: solute.kind is 'peptide', so the input must be "
                           f"a .pdb or .seq file (or a .cif with input.assembly), not {suffix}")
+    if strip_water and not (peptide and suffix in (".pdb", ".cif")):
+        raise ConfigError(f"--strip-water removes the crystal waters of a protein structure, so it "
+                          f"needs solute.kind: peptide and a .pdb or .cif input (kind is {kind!r}, "
+                          f"input is {suffix})")
     if complex_build and suffix not in (".pdb", ".cif"):
         raise ConfigError(f"-i {input_path}: solute.kind is 'complex', so the input must be a "
                           f".pdb or .cif structure, not {suffix}")
@@ -1145,6 +1152,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     assembly_record = None
     prepared_pdb_bytes = None
     completion_record = None
+    n_stripped = 0
     assembly_scratch = None
     # What was done to `-i` before the structure was read, for the refusals that follow: they name
     # the file the caller typed, not the temporary copy, which is gone by the time they read it.
@@ -1178,14 +1186,24 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         reader = _app.PDBxFile if structure_input.suffix.lower() == ".cif" else _app.PDBFile
         try:
             original = reader(str(structure_input))
+            source_topology, source_positions = original.topology, original.positions
+            if peptide:
+                from ..openmm.completion import require_protein_only, strip_waters
+
+                require_protein_only(source_topology)
+                if strip_water:
+                    source_topology, source_positions, n_stripped = strip_waters(
+                        source_topology, source_positions)
             completed_topology, completed_positions, completion_record = inspect_structure(
-                original.topology, original.positions,
+                source_topology, source_positions,
                 missing_atoms=resolved["input"]["missing_atoms"])
         except CompletionError as exc:
             if assembly_scratch is not None:
                 assembly_scratch.cleanup()
             raise ConfigError(f"-i {input_path}: {exc}") from None
-        if completion_record["atoms_added"]:
+        if n_stripped:
+            prepared_by.append(f"--strip-water: {n_stripped} water residue(s) removed")
+        if completion_record["atoms_added"] or n_stripped:
             if assembly_scratch is None:
                 assembly_scratch = tempfile.TemporaryDirectory(prefix="build-top-assembly-")
             completed = Path(assembly_scratch.name) / "completed.pdb"
@@ -1193,8 +1211,9 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                 _app.PDBFile.writeFile(completed_topology, completed_positions, handle, keepIds=True)
             structure_input = completed
             prepared_pdb_bytes = completed.read_bytes()
-            prepared_by.append(f"input.missing_atoms: add, "
-                               f"{len(completion_record['atoms_added'])} atom(s)")
+            if completion_record["atoms_added"]:
+                prepared_by.append(f"input.missing_atoms: add, "
+                                   f"{len(completion_record['atoms_added'])} atom(s)")
 
     mapped = None
     out_mapping = out_system.parent / "ligand_mapping.json"
@@ -1274,6 +1293,8 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                           for a in completion_record["atoms_added"]}
         log.field("missing atoms", f"{len(completion_record['atoms_added'])} atom(s) added to "
                                    f"{len(added_residues)} residue(s) (input.missing_atoms: add)")
+    if n_stripped:
+        log.field("crystal waters", f"{n_stripped} water residue(s) removed (--strip-water)")
     log.field("config", config_path if config_path else "(none -- built-in defaults)")
     log.field("system out", out_system)
     log.field("topology out", out_pdb)
@@ -1678,6 +1699,8 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             written_outputs["prepared_structure"] = file_facts(out_prepared)
         if completion_record is not None:
             log.update(structure_completion=completion_record)
+        if strip_water:
+            log.update(strip_water={"water_residues_removed": n_stripped})
         protonation = (record.get("protonation") or {}).get("protonation")
         if protonation is not None:
             log.update(protonation=protonation)
