@@ -56,6 +56,7 @@ Each method page carries a minimal, runnable `example.config` beside it.
 
 | page | |
 |---|---|
+| [v0.6.5.2](release-notes/v0.6.5.2.md) | REST2 extension: a short segment can be extended again and a chain with empty totals completes; `kind: peptide` takes chains and crystal waters only, with `--strip-water`; a gauge for drawing torsions |
 | [v0.6.5.1](release-notes/v0.6.5.1.md) | torsional analysis: canonicalization of resonance-equivalent atoms, crystal-to-cluster assignment, symmetry-corrected RMSD; `allow_single_cluster` now defaults to False |
 | [v0.6.5](release-notes/v0.6.5.md) | ligand parameterisation: protonation at a stated pH, the ligand amide is scaled, MACE-assisted bespoke torsions |
 | [v0.6.1](release-notes/v0.6.1.md) | selective explicit-solvent REST2, validated on CUDA with one energy check recorded FAIL: — residue masks for backbone and sidechains, individually chosen ligand instances, and the two helpers that make a pocket selectable |
