@@ -11,6 +11,9 @@ filled, and a gauge that leaks into the clustering.
 """
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -19,8 +22,15 @@ pytest.importorskip("rdkit", reason="symmetry needs the `analysis` extra")
 from md_tools.analysis._symmetry_metric import SymmetricTorsionDescriptor        # noqa: E402
 from md_tools.analysis._t_symmetry import wrap                                   # noqa: E402
 
-from test_analysis_dirichlet_alignment import (_closed, _ensemble, _fit, _frames, _para,   # noqa: E402
-                                               requires_sklearn)
+# The fixtures of the Dirichlet-alignment tests, loaded BY PATH: the tests directory is not a
+# package and is on sys.path only when pytest is started from inside it, which CI does not do.
+_spec = importlib.util.spec_from_file_location(
+    "_dirichlet_alignment_fixtures", Path(__file__).with_name("test_analysis_dirichlet_alignment.py"))
+_fixtures = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_fixtures)
+_closed, _ensemble, _fit, _flip, _frames, _para, requires_sklearn = (
+    _fixtures._closed, _fixtures._ensemble, _fixtures._fit, _fixtures._flip, _fixtures._frames,
+    _fixtures._para, _fixtures.requires_sklearn)
 
 HALF = (-np.pi / 2, np.pi / 2)
 
@@ -55,8 +65,6 @@ def test_the_gauge_column_lands_in_the_window_and_its_partner_moves_with_it():
 
 
 def test_a_frame_and_its_relabelled_copy_are_written_identically_under_a_gauge():
-    from test_analysis_dirichlet_alignment import _flip
-
     mol, d, th = _setup([(0.6, 0.2), (-1.0, 3.0), (2.5, -2.0)])
     xyz = _frames(mol, [(0.6, 0.2), (-1.0, 3.0), (2.5, -2.0)])
     th_rel = _closed(d, xyz[:, list(_flip(d.enumeration)), :], mol)
