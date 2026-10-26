@@ -666,7 +666,8 @@ class THDBSCAN:
             raise ValueError(f"cluster {cluster} has no members")
         return int(members[int(np.argmin(self.core_distance_[members]))])
 
-    def align_all(self, reference: Optional[int] = None, *, per_cluster: bool = False) -> Dict[str, Any]:
+    def align_all(self, reference: Optional[int] = None, *, per_cluster: bool = False,
+                  gauge=None) -> Dict[str, Any]:
         """EVERY frame written in the labelling nearest a reference frame (Dirichlet-domain rule).
 
         The reference is the density peak of the most populated cluster unless a frame index is
@@ -681,6 +682,13 @@ class THDBSCAN:
         stay compact, and the only arbitrary choice left is one frame per cluster. Frames in no
         cluster are aligned to the reference directly.
 
+        `gauge=(column, lo, hi)`, or `gauge=(column, width)` for a window of that width centred on the
+        reference's value of the column (the density peak, so the bulk of the cluster sits mid-window
+        and the cut falls in the gap), restricts every frame to the operations that write that column in
+        the half-open window (a presentation choice for a symmetry that moves several columns
+        together; see :meth:`SymmetricTorsionDescriptor.align_to_reference`). It never touches the
+        clustering, whose distance is the minimum over all operations.
+
         Returns :meth:`SymmetricTorsionDescriptor.align_to_reference`'s record plus `reference`,
         `selected` (the selected torsions' angles) and `cluster_references` (per cluster).
         """
@@ -690,7 +698,11 @@ class THDBSCAN:
             raise NotImplementedError("align_all() needs the symmetry-first route")
         ref = self.density_peak(0) if reference is None else int(reference)
         d = self.descriptor_
-        out = d.align_to_reference(self.closed_theta_, self.closed_theta_[ref])
+        if gauge is not None:
+            # ONE window for every cluster, resolved once from the global reference: a width is
+            # centred on the reference's own value, never on each cluster's local reference.
+            gauge = d._gauge_column(gauge, self.closed_theta_[ref])
+        out = d.align_to_reference(self.closed_theta_, self.closed_theta_[ref], gauge=gauge)
         cluster_refs = {c: ref for c in range(self.n_clusters_)}
         if per_cluster:
             for c in range(self.n_clusters_):
@@ -698,8 +710,10 @@ class THDBSCAN:
                 lead = d.align_to_reference(self.closed_theta_[[peak]], self.closed_theta_[ref])
                 local = lead["angles"][0]                     # the peak, in the reference's labelling
                 members = np.flatnonzero(self.labels_ == c)
-                sub = d.align_to_reference(self.closed_theta_[members], local)
-                for key in ("angles", "operations", "distance", "distance_identity", "margin"):
+                sub = d.align_to_reference(self.closed_theta_[members], local, gauge=gauge)
+                for key in ("angles", "operations", "distance", "distance_identity", "margin",
+                            *(("gauge_satisfied", "gauge_edge_distance") if gauge is not None
+                              else ())):
                     out[key][members] = sub[key]
                 cluster_refs[c] = peak
         out["angles"] = np.angle(np.exp(1j * out["angles"]))

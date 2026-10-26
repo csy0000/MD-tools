@@ -343,6 +343,64 @@ the small ring distortion. The flip swaps the two columns, so it maps `δ` to `-
 is a property of the labelling. On the paracetamol trajectory `δ` is symmetric about zero (mean 0.1
 degrees, standard deviation 7.1), so relabelling does not change its histogram.
 
+### A gauge on one column, for a symmetry that moves several columns
+
+Folding is valid column by column only when an operation moves **one** column. A ring flip does not:
+on paracetamol it replaces `aryl` by `aryl + 180 degrees` **and** `phenol` by `phenol + 180 degrees`
+in the same step, and every one of its operations moves both or neither. Folding each into a half-circle
+on its own would identify `(0, 0)`, `(0, 180)`, `(180, 0)` and `(180, 180)`, where the flip identifies only
+`(0, 0)` with `(180, 180)` and `(0, 180)` with `(180, 0)`: two real conformers merged.
+
+What is valid is to **fix the gauge of one column and let the others follow it**. Choose a half-open
+window `[lo, hi)` for a gauge column `c`. Each frame is written with the operation that puts `c` in the
+window, and every other column goes with it, because the operation acts on the whole row. The
+columns it moved together keep their full circle: `phenol` is not folded, it is carried.
+
+**Centre the window on the peak.** A window fixed at `[-90, 90)` degrees puts the cut wherever zero
+happens to fall, and a cluster whose `aryl` peak is near it is split between the two ends. Give a
+**width** instead of the limits, and the window is centred on the reference's own value of the column
+(the density peak): the bulk of the cluster sits in the middle, the cut falls half a width away in the
+gap, and the histogram is one continuous bump. A half-turn is the width for a two-fold ring flip.
+
+```python
+al = fit.align_all(per_cluster=True, gauge=("aryl", np.pi))     # a half-turn window centred on the peak
+al["selected"]                  # aryl in the window, phenol written with it
+al["gauge_window"]              # (column, lo, hi) that was used, in radians
+al["gauge_satisfied"]           # False where no operation lands aryl in the window
+al["gauge_edge_distance"]       # radians from aryl to the nearest edge of the window
+```
+
+The same argument is on `descriptor.align_to_reference(closed, ref_row, gauge=...)`, which takes
+either `(column, width)` or the explicit `(column, lo, hi)`. The column is a name or an index, the window
+must be wider than 0 and at most one turn, and anything else is refused by name. `align_all` resolves
+the window **once**, from the global reference, so every cluster is drawn on the same axis.
+
+**What is chosen.** Among the operations that satisfy the window, the nearest to the reference is taken,
+so whatever the window leaves free (a carboxylate swap acting on other columns, say) is still settled by
+the Dirichlet rule above. With `per_cluster=True` each cluster is aligned to its own peak under the same
+window. A full-turn window, or no gauge, gives the plain alignment.
+
+**It is for drawing, and the cut is not hidden.**
+
+* The clustering never sees it. Its distance is the minimum over every operation and has no cut, which is
+  why a gauge is not applied *before* the distance: two frames at `aryl = 89` and `91` degrees are one
+  conformer, but the window writes them half a turn apart, and a distance on the written rows would split
+  a cluster there. A gauge placed with no mass near its edges does not do this, which is what centring on the peak aims
+  for and the edge count checks.
+* A frame near an edge may fall on either side with noise. `gauge_edge_distance` says how near, and a
+  count of the frames below a small threshold belongs beside any figure.
+* The two images of a ring torsion are half a turn apart only up to the noise in each, so a frame **on
+  the cut** can have both just outside the window. It takes the operation that lands the column nearest the
+  window, and `gauge_satisfied` is `False` for it, with `gauge_edge_distance` giving how far outside it is.
+  It is never silently moved into the window.
+* It needs an operation that can reach the window. For an orbit whose images are not evenly spread (the
+  valine isopropyl) a half-circle may be missed by every image; those frames are flagged the same way.
+
+The [paracetamol notebook](../../tutorial/paracetamol/analysis/symmetry-alignment.ipynb#10-a-gauge-on-one-torsion-aryl-in-a-half-circle-phenol-following)
+shows it: `aryl` in a half-turn window centred on its peak, `phenol` carried with it, and the frames near the cut counted. It has
+not been run on a ligand with a different joint symmetry; the folic-acid ring (two torsions moved together
+by a ring flip) is the same structure and has not been tried on a trajectory.
+
 ### A crystal structure, or any other reference
 
 A crystal ligand drawn over the histograms follows the same rule. Matching it onto the simulated

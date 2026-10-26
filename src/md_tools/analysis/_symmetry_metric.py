@@ -838,7 +838,48 @@ class SymmetricTorsionDescriptor:
         k = int(np.argmax(values <= best + self._tie()))
         return float(np.sqrt(best)), k
 
-    def align_to_reference(self, theta: np.ndarray, reference: np.ndarray) -> Dict[str, Any]:
+    def _gauge_column(self, gauge, reference=None) -> Tuple[int, float, float]:
+        """`(column, lo, hi)` from `gauge`: a column name or index and a half-open window.
+
+        `gauge=(column, lo, hi)` gives the window in radians. `gauge=(column, width)` centres a window
+        of that width on the reference row's value of the column, so the reference itself sits in the
+        middle of the window and the cut falls half a width away from it.
+        """
+        try:
+            if len(gauge) not in (2, 3):
+                raise TypeError
+            if len(gauge) == 2:
+                column, width = gauge
+                lo = hi = None
+            else:
+                column, lo, hi = gauge
+        except (TypeError, ValueError):
+            raise ValueError("gauge must be (column, lo, hi) or (column, width): a column name or "
+                             "index and the half-open window [lo, hi) in radians, or its width, "
+                             "centred on the reference") from None
+        if isinstance(column, str):
+            if column not in self.names:
+                raise ValueError(f"gauge column {column!r} is not a column; columns are "
+                                 f"{list(self.names)}")
+            column = self.names.index(column)
+        column = int(column)
+        if not 0 <= column < self.n_columns:
+            raise ValueError(f"gauge column {column} is outside 0..{self.n_columns - 1}")
+        if lo is None:
+            width = float(width)
+            if reference is None:
+                raise ValueError("a gauge given as (column, width) is centred on the reference's "
+                                 "value of the column, and no reference was given")
+            centre = float(np.asarray(reference, dtype=np.float64).ravel()[column])
+            lo, hi = centre - width / 2.0, centre + width / 2.0
+        lo, hi = float(lo), float(hi)
+        if not 0.0 < hi - lo <= 2.0 * np.pi + 1e-12:
+            raise ValueError(f"the gauge window [{lo}, {hi}) must be wider than 0 and at most one "
+                             f"turn")
+        return column, lo, hi
+
+    def align_to_reference(self, theta: np.ndarray, reference: np.ndarray, *,
+                           gauge: Optional[Tuple[Any, float, float]] = None) -> Dict[str, Any]:
         """Write every frame in the labelling nearest to ONE reference (the Dirichlet-domain rule).
 
         `theta` is `(n, n_columns)` closed angles and `reference` one closed row. Each frame is
@@ -846,30 +887,69 @@ class SymmetricTorsionDescriptor:
         same one-sided minimum the clustering distance uses, and the operation acts on the WHOLE
         row at once, never column by column. Moves no atom and drops no frame.
 
+        `gauge=(column, lo, hi)` or `gauge=(column, width)` is a PRESENTATION constraint, never used by the clustering: only
+        operations that write `column` inside the half-open window `[lo, hi)` are candidates, and the
+        nearest to the reference among them is taken. For a symmetry that moves several columns
+        together (a ring flip shifts the aryl and the phenol torsion by half a turn at once) this
+        fixes one of them to a half-circle and the others follow it, each keeping its full circle.
+        A frame for which NO operation lands the column in the window takes the operations that land it
+        NEAREST the window and is reported in `gauge_satisfied` (this happens on the cut, where the
+        two images of a ring torsion are half a turn apart only up to the noise in each). The window has a cut, at its edges: a frame
+        whose column is near an edge may fall either side with noise, and `gauge_edge_distance`
+        says how near.
+
         Returns `angles` (the relabelled closed angles, wrapped to (-pi, pi]), `operations`
-        (the minimising operation per frame, earlier operation on a tie), `distance` (the
-        minimum), `distance_identity` (the distance with no relabelling) and `margin` (second-best
-        operation's distance minus the best: small where a frame sits near the boundary between two
-        labellings and the choice is arbitrary).
+        (the chosen operation per frame, earlier operation on a tie), `distance` (the chosen
+        operation's distance to the reference), `distance_identity` (the distance with no
+        relabelling) and `margin` (the next candidate's distance minus the chosen one's: small where
+        a frame sits near the boundary between two labellings and the choice is arbitrary). With a
+        gauge, also `gauge_satisfied` and `gauge_edge_distance` (radians from the chosen value of the
+        column to the nearest window edge; for an unsatisfied frame, how far outside it is).
         """
         th = np.asarray(theta, dtype=np.float64)
         ref = self.embed(np.asarray(reference, dtype=np.float64).reshape(1, -1))[0]
         per_op = np.empty((len(self.operations), th.shape[0]))
         for op in self.operations:
             per_op[op.index] = np.linalg.norm(self.embed(self.transform(th, op.index)) - ref, axis=1)
-        best = per_op.min(axis=0)
+        allowed = np.ones_like(per_op, dtype=bool)
+        satisfied = None
+        if gauge is not None:
+            column, lo, hi = self._gauge_column(gauge, reference)
+            width = hi - lo
+            violation = np.empty_like(per_op)                 # how far OUTSIDE the window, 0 inside
+            for op in self.operations:
+                offset = np.mod(th[:, op.sigma[column]] - lo, 2.0 * np.pi)
+                violation[op.index] = np.where(offset < width, 0.0,
+                                               np.minimum(offset - width, 2.0 * np.pi - offset))
+            nearest = violation.min(axis=0)
+            satisfied = nearest <= 1e-12
+            # The operations nearest the window: the window itself when anything lands in it, and
+            # else the closest miss (the two images of a ring torsion are only half a turn apart
+            # up to the noise in each, so a frame ON the cut can have both just outside).
+            allowed = violation <= nearest[None] + 1e-9
+        masked = np.where(allowed, per_op, np.inf)
+        best = masked.min(axis=0)
         tie = self._tie()
-        ops = np.argmax(per_op ** 2 <= best[None] ** 2 + tie, axis=0).astype(np.int64)
-        if per_op.shape[0] > 1:
-            second = np.sort(per_op, axis=0)[1]
+        ops = np.argmax(masked ** 2 <= best[None] ** 2 + tie, axis=0).astype(np.int64)
+        if masked.shape[0] > 1:
+            second = np.sort(masked, axis=0)[1]
         else:
             second = np.full(th.shape[0], np.inf)
         aligned = np.empty_like(th)
         for k in np.unique(ops):
             sel = ops == k
             aligned[sel] = self.transform(th[sel], int(k))
-        return {"angles": np.angle(np.exp(1j * aligned)), "operations": ops, "distance": best,
-                "distance_identity": per_op[0], "margin": second - best}
+        out = {"angles": np.angle(np.exp(1j * aligned)), "operations": ops, "distance": best,
+               "distance_identity": per_op[0], "margin": second - best}
+        if gauge is not None:
+            chosen = np.mod(aligned[:, column] - lo, 2.0 * np.pi)
+            inside = np.minimum(chosen, width - chosen) if width < 2.0 * np.pi - 1e-12 \
+                else np.full_like(chosen, np.inf)
+            outside = np.minimum(chosen - width, 2.0 * np.pi - chosen)
+            out["gauge_window"] = (column, lo, hi)
+            out["gauge_satisfied"] = satisfied
+            out["gauge_edge_distance"] = np.where(satisfied, inside, outside)
+        return out
 
     def nearest_labelling(self, candidates: np.ndarray, reference: np.ndarray) -> Dict[str, Any]:
         """Of several candidate descriptions of ONE configuration, the one nearest a reference.
