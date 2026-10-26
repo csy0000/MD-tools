@@ -123,3 +123,44 @@ def test_a_genuinely_incomplete_residue_still_gets_the_old_message():
     assert "are missing heavy atoms" in message and "ALA lacks CB" in message
     assert "Set input.missing_atoms: add" in message
     assert "template does not define" not in message
+
+
+def _with_residue(name, *, atoms=("O",)):
+    """ACE-ALA-NME plus one extra single-atom residue called `name`, in its own chain."""
+    from openmm import Vec3, app, unit
+    from openmm.app import element
+
+    topology, positions = _structure()
+    modeller = app.Modeller(topology, positions)
+    chain = modeller.topology.addChain("Z")
+    residue = modeller.topology.addResidue(name, chain)
+    for atom in atoms:
+        modeller.topology.addAtom(atom, element.oxygen, residue)
+    raw = modeller.positions.value_in_unit(unit.nanometer) + [Vec3(3.0, 3.0, 3.0)] * len(atoms)
+    return modeller.topology, unit.Quantity(list(raw), unit.nanometer)
+
+
+def test_a_protein_only_structure_passes_the_peptide_check():
+    from md_tools.openmm.completion import require_protein_only
+
+    topology, _ = _structure()
+    require_protein_only(topology)
+
+
+def test_crystal_water_is_part_of_a_peptide_and_strip_waters_removes_it():
+    from md_tools.openmm.completion import require_protein_only, strip_waters
+
+    topology, positions = _with_residue("HOH")
+    require_protein_only(topology)
+    stripped, kept, n = strip_waters(topology, positions)
+    assert n == 1 and not any(r.name == "HOH" for r in stripped.residues())
+    assert len(kept) == stripped.getNumAtoms()
+
+
+@pytest.mark.parametrize("name", ["NA", "DMS", "EDO", "TYL"])
+def test_anything_but_protein_is_refused_for_a_peptide_and_named(name):
+    from md_tools.openmm.completion import require_protein_only
+
+    topology, _ = _with_residue(name)
+    with pytest.raises(CompletionError, match=rf"kind is 'peptide'.*{name} chain 'Z'.*kind: complex"):
+        require_protein_only(topology)

@@ -53,6 +53,7 @@ def cmd_build_top(args) -> int:
     #   build-top --parameterize -i MOLECULE --resname NAME writes a parameter package
     # The output paths have documented defaults, so "given" means "not the default".
     structure_flags = {"-i": args.input,
+                       "--strip-water": True if args.strip_water else None,
                        "-os": None if args.out_system == "./built.xml" else args.out_system,
                        "-op": None if args.out_pdb == "./built.pdb" else args.out_pdb,
                        "-log": None if args.out_log == "./built.log" else args.out_log}
@@ -65,6 +66,7 @@ def cmd_build_top(args) -> int:
         return 2
     if args.parameterize:
         given = [flag for flag, value in scaler_flags.items() if value is not None]
+        given += ["--strip-water"] if args.strip_water else []
         if given or args.resname is None:
             print("build-top: --parameterize writes a parameter package from ONE molecule, so it "
                   "takes -i, --resname, --config, -op, -os and --register"
@@ -140,6 +142,7 @@ def cmd_build_top(args) -> int:
             out_pdb=Path(args.out_pdb),
             out_log=Path(args.out_log),
             overwrite=bool(args.overwrite),
+            strip_water=bool(args.strip_water),
         )
     except ConfigError as exc:
         print(f"build-top: {exc}", file=sys.stderr)
@@ -387,6 +390,9 @@ def build_parser() -> argparse.ArgumentParser:
     top.add_argument("--overwrite", action="store_true",
                      help="replace existing outputs instead of refusing (with --rest2-scaler, the "
                           "previous build/<method>/ is moved aside, never deleted)")
+    top.add_argument("--strip-water", action="store_true",
+                     help="kind: peptide from a .pdb or .cif: remove the crystal waters before "
+                          "building (they are kept by default); recorded in the build log")
     top.add_argument("--rest2-scaler", action="store_true",
                      help="scale a BUILT System into build/<method>/system_state<n>.xml with "
                           "scaler.yaml, scaler.log and <RESNAME>-unscaled.png; takes -s, -p and "

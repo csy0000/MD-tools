@@ -5,7 +5,7 @@ the **physics** — force field, charges, radii, constraints, solvent — and wr
 which is the Hamiltonian every later command integrates.
 
 ```text
-md-openmm build-top -i INPUT [-os PATH] [-op PATH] [-log PATH] [--config PATH] [--overwrite]
+md-openmm build-top -i INPUT [-os PATH] [-op PATH] [-log PATH] [--config PATH] [--overwrite] [--strip-water]
 ```
 
 | flag | what it is | default |
@@ -16,6 +16,7 @@ md-openmm build-top -i INPUT [-os PATH] [-op PATH] [-log PATH] [--config PATH] [
 | `-log` | the readable log, which carries the machine record | `./built.log` |
 | `--config` | the build configuration (YAML, `.config` suffix) | built-in defaults |
 | `--overwrite` | replace existing outputs instead of refusing | off |
+| `--strip-water` | `kind: peptide` from a `.pdb` or `.cif` only: remove the crystal waters before building | off (waters kept) |
 
 `-i` names a **file**, never an inline string: the input has to be unambiguous and hashable into
 the provenance record, so a SMILES or a sequence typed on the command line is not accepted.
@@ -50,6 +51,14 @@ force field never touches it.
 md-openmm build-top -i ALA.pdb \
     -os build/built.xml -op build/built.pdb -log build/built.log
 ```
+
+**What the file may contain.** Protein chains and their **crystal waters**, and nothing else. The waters
+are kept, moved after the solute, and reported as retained. `--strip-water` removes them before the
+build and the log records how many. Anything that is neither a standard protein residue (or a cap such
+as ACE and NME) nor a water -- an ion, a crystallisation additive such as DMSO or EDO, a ligand -- is
+refused by name with exit 2, and nothing is written. Deleting those is an edit to your own file, as it
+has been since `input.remove` was retired; `--strip-water` is the one exception, because a crystal
+water belongs to the chain's environment and not to the molecule. For a ligand, use `kind: complex`.
 
 ### A peptide, from a sequence
 

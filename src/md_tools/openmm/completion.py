@@ -101,6 +101,48 @@ def _renamed_not_missing(fixer, flagged: list) -> list:
     return renamed
 
 
+def require_protein_only(topology) -> None:
+    """Refuse a structure holding anything but protein chains and crystal water. For `kind: peptide`.
+
+    The chains and their crystal waters are the peptide's own. An ion, a crystallisation additive
+    (DMSO, EDO, glycerol) or a ligand is not, and a peptide build that carried it along would be a
+    different system from the one the kind names. Nothing is deleted on the user's behalf: the
+    refusal lists each residue and says how to remove it, or which kind builds it. Waters are
+    removed only when asked, with `--strip-water`.
+    """
+    from .solvation import WATER_RESIDUE_NAMES
+    from .system import PROTEIN_RESIDUES
+
+    extra = [r for r in topology.residues()
+             if r.name.upper() not in PROTEIN_RESIDUES and r.name.upper() not in WATER_RESIDUE_NAMES]
+    if not extra:
+        return
+    shown = "; ".join(f"{r.name} chain {r.chain.id!r} resid {str(r.id).strip()!r}"
+                      for r in extra[:10])
+    raise CompletionError(
+        f"solute.kind is 'peptide', which builds protein chains and their crystal waters and "
+        f"nothing else, but the structure holds {len(extra)} other residue(s): {shown}"
+        + (" ..." if len(extra) > 10 else "") + ". Ions, crystallisation additives and "
+        "ligands are not deleted for you: strip them from your own file before building (for "
+        "example `grep -v HETATM in.pdb > prepared.pdb`), or use `kind: complex` and map each "
+        "ligand to a parameter package. Nothing was written.")
+
+
+def strip_waters(topology, positions):
+    """(topology, positions, n_removed) without the water residues. `--strip-water`."""
+    from openmm import app
+
+    from .solvation import WATER_RESIDUE_NAMES
+
+    waters = [r for r in topology.residues() if r.name.upper() in WATER_RESIDUE_NAMES]
+    if not waters:
+        return topology, positions, 0
+    modeller = app.Modeller(topology, positions)
+    modeller.delete([r for r in modeller.topology.residues()
+                     if r.name.upper() in WATER_RESIDUE_NAMES])
+    return modeller.topology, modeller.positions, len(waters)
+
+
 def inspect_structure(topology, positions, *, missing_atoms: str = "refuse"):
     """(topology, positions, record) with missing heavy atoms handled under `missing_atoms`."""
     from pdbfixer import PDBFixer
