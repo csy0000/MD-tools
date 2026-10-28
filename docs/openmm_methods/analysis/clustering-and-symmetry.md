@@ -596,6 +596,57 @@ the heavy-atom symmetry-corrected inter- and intra-cluster RMSD in the final num
 * **Not done:** frame weights (refused), a cache of the per-torsion distance terms (exact, but 0.86 s to
   build against 0.07 s to recompute at 1000 frames), and detection of sub-structure below the floor.
 
+## Cut-route clustering: free-energy cuts instead of HDBSCAN
+
+`cut_clustering` partitions the frames by recursive cuts on one-dimensional free-energy profiles.
+It runs no HDBSCAN, gives every frame a label, and reads only the angles and the symmetry
+operations of a `THDBSCAN` (fitted or not):
+
+```python
+from md_tools.analysis import t_hdbscan, cut_clustering, plot_hist
+
+fit = t_hdbscan(torsions, molecule=mol, torsion_definitions=defs,
+                coordinates=traj, atom_mapping=mapping)
+result = cut_clustering(fit, gauge=("t3 aryl-CO", np.pi))   # kT_cut=1.0, mass_floor=0.001, min_p2p=pi/3
+result["labels"], result["n_clusters"], result["tree"], result["cuts"], result["log"]
+plot_hist(result, torsion_show="all", n_cluster=10)
+```
+
+1. **Invariant coordinates.** A torsion no symmetry operation moves is its own coordinate. The
+   torsions one operation moves together (a ring flip, a carboxylate) are replaced by averages over
+   that group's own operations: `arg <exp(i m θσ(c))>` per torsion (m the number of images, so a
+   two-fold flip is cut on 2θ) and `arg <exp(i(θσ(b) − θσ(a)))>` per pair. A pair sharing a central
+   bond is left out, because its difference measures the geometry at an atom, not a rotamer. Where
+   the average's modulus is below `z_min` (0.5) the images cancel; those frames are left out of that
+   coordinate's profile and assigned by their value if it is cut.
+2. **Empty-bin cuts**, recursively, wherever both sides keep at least `mass_floor` of all frames.
+3. **Annealing.** Each cell starts at E* = the largest finite free-energy range of any coordinate in
+   it and lowers E* by `kT_step` (0.5 kT) down to `kT_cut`. At each E* the cell is cut on the
+   coordinate with the highest barrier that clears E*; both children continue at that E*.
+4. **Numbering** by cluster mass, largest first.
+
+On one coordinate of one cell, F = −ln p on 72 bins and a cut sits at a bin's midpoint, so it is a
+dividing surface. A coordinate not yet cut in the cell's ancestry is periodic and takes two cuts more
+than `min_p2p` apart. A coordinate already cut is bounded: the cell lives on one arc between two
+inherited cuts, a single cut is searched only inside that arc, and both pieces, measured along the
+arc up to the inherited boundaries, must be wider than `min_p2p`. The barrier is the cut's F above
+the lowest F of the smaller side.
+
+* **Defaults:** `kT_cut=1.0` (0.60 kcal/mol at 300 K), `mass_floor=0.001` of all frames,
+  `min_p2p=π/3` radians.
+* **Observed on two trajectories, not a test of the method.**
+  * Alanine dipeptide, 100 000 frames, φ and ψ only: 5 clusters.
+    * PPII 54.6 %, αR 29.8 %, β 12.8 %, αL 2.6 %.
+    * A 0.18 % strip at φ ≈ 60°, ψ ≈ 180°, bounded by empty bins.
+    * The β/PPII cut (1.15 kT on φ) is a bounded cut inside the arc left by the first φ cut.
+  * Folic acid dianion, REST2 state 0, 50 000 frames, 14 torsions: 302 clusters at the defaults and
+    45 at `mass_floor=0.01`.
+  * No test or notebook in this repository reruns either analysis, so these numbers are a record,
+    not something the suite checks.
+* **A cluster is a region bounded by barriers in one-dimensional projections.** Two basins that
+  overlap in every projection are not separated, and near the floor a barrier read from a histogram
+  is noisy. Frame weights are refused.
+
 ## Where this is used
 
 * [Paracetamol: torsion distributions in one labelling](../../tutorial/paracetamol/analysis/symmetry-alignment.ipynb)
