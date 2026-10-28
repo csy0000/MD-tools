@@ -666,6 +666,16 @@ class THDBSCAN:
             raise ValueError(f"cluster {cluster} has no members")
         return int(members[int(np.argmin(self.core_distance_[members]))])
 
+    def refine_by_rmsd(self, coordinates, **kwargs) -> Dict[str, Any]:
+        """Split every cluster whose internal symmetry-corrected RMSD exceeds a cutoff (2 A).
+
+        Recursive, with `allow_single_cluster=False` at every level; see
+        `md_tools.analysis._t_recursive.refine_by_rmsd` for the atoms measured, the stopping rules
+        and what the returned record holds. Leaves the fit unchanged.
+        """
+        from ._t_recursive import refine_by_rmsd
+        return refine_by_rmsd(self, coordinates, **kwargs)
+
     def align_all(self, reference: Optional[int] = None, *, per_cluster: bool = False,
                   gauge=None) -> Dict[str, Any]:
         """EVERY frame written in the labelling nearest a reference frame (Dirichlet-domain rule).

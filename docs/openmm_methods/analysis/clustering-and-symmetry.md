@@ -497,6 +497,105 @@ table = intercluster_rmsd(X[:, atoms], fit.labels_, operations)      # mean and 
   phenyl flip) enumerated. In a test on 100 frames that matched the exhaustive minimum to 0.0001 A,
   but alternating assignment and fit is exact only for a fixed alignment, so it is not what this does.
 
+## Splitting a cluster that is too wide in space
+
+A torsional cluster is a density basin in torsion space, and nothing in the fit looks at how far apart
+its members are in Cartesian space. HDBSCAN's condensed tree can keep two sub-populations together
+(a parent more stable than its children), and a small torsion difference can move many atoms. The
+symmetry-corrected RMSD within the cluster says when that has happened, and `refine_by_rmsd` acts on
+it:
+
+```python
+fit = t_hdbscan(torsions, molecule=mol, torsion_definitions=defs,
+                coordinates=traj, atom_mapping=mapping).fit()
+refined = fit.refine_by_rmsd(traj)                   # cutoff=2.0 A, an mdtraj.Trajectory is read as nm
+refined["labels"], refined["cluster_mass"], refined["tree"]
+```
+
+For each cluster the mean pairwise RMSD of its frames is compared with `cutoff` (default **2 A**). A
+wide cluster is fitted again on its own frames, with the fit's own settings and
+`allow_single_cluster=False`, and the split is kept only if the refit returns at least two clusters.
+Each child is then examined the same way. The loop ends at a node that is inside the cutoff, smaller
+than `min_frames` (default `2 k`, 40), at `max_depth` (4), or where the refit finds no second cluster;
+every accepted split shrinks the frames per node, so it is finite. `tree` records one entry per node
+examined (frames, RMSD mean and std, and which of those four ended it).
+
+* **Atoms measured.** Every heavy atom of the molecule (`moved_atoms`): a torsion turns everything
+  attached beyond its central bond, so the four atoms that define it understate what it displaces.
+  `atoms='quadruplets'` measures only the defining atoms, closed under the molecular symmetry
+  (`torsion_atoms`), and a list replaces them with a union of symmetry orbits. Hydrogens are not
+  measured, so two clusters that differ only in a hydroxyl proton (paracetamol A and B) are neither
+  merged nor split by this.
+* **The cutoff is the guard.** The refit forbids a single cluster, so a cluster wider than the cutoff
+  is divided whenever the refit finds a density structure in it, including a single broad basin: a
+  paracetamol basin of mean RMSD 0.064 A was cut into three at a cutoff of 0.05 A and left whole at
+  0.2 A. Choose the cutoff as the size of a difference you would call a different structure.
+* **A mean can hide a minority.** A cluster that is 90 % one structure and 10 % another 4 A away has a
+  mean pairwise RMSD of about 0.7 A. `statistic=0.95` (a quantile) tests the tail instead.
+* **Frames the refit drops.** A frame the refit calls noise or ambiguous takes that code and leaves the
+  cluster; a split moves mass out of a cluster and never into one it was not part of.
+* **What it does not change.** The fit, its `predict` and its vote are untouched: new frames are still
+  classified by the first-level partition. The returned labels are for the frames the fit was made from.
+* **Tested on** a synthetic paracetamol ensemble (cis and trans amide, merged into one cluster by hand
+  because the fit separates them) at cutoffs of 0.03-0.3 A, the scale of that molecule. Not run on
+  c(RGDfV) or any registered trajectory; whether 2 A is the right cutoff for a cyclic peptide is not
+  established here.
+
+## Hierarchical clustering: two rounds, a thermodynamic cut, bits, mass order
+
+One HDBSCAN fit can keep two basins together (a parent more stable than its children), and lowering
+`min_samples` to separate them mostly produces noise clusters. `hierarchical_clustering` takes a
+fitted symmetry-first `THDBSCAN` and applies, on every node (the whole ensemble first):
+
+```python
+from md_tools.analysis import t_hdbscan, hierarchical_clustering, plot_hist, show_compound
+
+fit = t_hdbscan(torsions, molecule=mol, torsion_definitions=defs,
+                coordinates=traj, atom_mapping=mapping, mass_floor=0.01).fit()
+result = hierarchical_clustering(fit, traj, gauge=("t3 aryl-CO", np.pi),
+                                 torsion_null_test=40, kT_cut=1.6)
+result["labels"], result["n_clusters"], result["rounds"], result["cuts"], result["bits"]
+plot_hist(result, torsion_show="all", n_cluster=10, kind="free_energy")
+show_compound(result["molecule"], result["quads"], torsion_enumerate=True)
+```
+
+1. **Round 1:** HDBSCAN on every torsion.
+2. **Round 2:** a torsion on which no pair of round-1 clusters differs is dropped and HDBSCAN is fitted
+   again on the rest. "Differs" is a permutation test: the two clusters' frames are pooled and
+   reshuffled to the same sizes `torsion_null_test` times (default 40), and the observed circular W2
+   distance must exceed the 95th percentile of the reshuffled ones. The percentile of 40 shuffles is
+   noisy: a torsion whose observed W2 is close to it can flip with `seed`. A torsion that a symmetry
+   operation moves together with a kept torsion is never dropped; without it the operation maps one
+   state onto the other (the ring flip carries the aryl-CO and the aryl-N torsion). `result["rounds"]`
+   keeps the observed and null W2 of every pair and torsion, what was dropped, and both cluster counts.
+3. **Thermodynamic cut.** On the circular free-energy profile of one torsion in a node (72 bins, F in kT,
+   an empty bin set to `max(F) + 1`), cut 1 is the centre of the highest plateau and cut 2 is any bin
+   whose F exceeds the lowest point of the smaller arc by at least `kT_cut` (default **1.6 kT**, 0.95
+   kcal/mol at 300 K; the rule needs no temperature). Both arcs must hold at least `mass_floor` of all
+   frames (default 1 %). Two cuts are needed on a circle: a low route through a shallow third well means
+   no split. The cut is taken directly only if that torsion is the only one with such a pair, because the
+   marginal profile has integrated every other dimension: an empty cut bin means no density on the whole
+   hyperplane, so nothing connects the arcs. Frames within one bin of a **non-empty** cut are marked
+   ambiguous.
+4. **Bits.** For each torsion, clusters are grouped by pairwise W2 (complete linkage, 20 degrees), the
+   groups are numbered from 0 by the frames they own, and clusters with identical bit vectors are merged
+   (`merge_by_bits=False` keeps the table and merges nothing). The 20 degrees is below the W2 noise floor
+   of broad or multimodal profiles, so it is a coarse grouping, not a statistical test.
+5. **Numbering** is by cluster mass, largest first. Neighbouring numbers are not similar structures.
+
+Frames in no leaf get `NOISE_LABEL`, frames beside a non-empty cut `AMBIGUOUS_LABEL`. `result["rmsd"]` is
+the heavy-atom symmetry-corrected inter- and intra-cluster RMSD in the final numbering.
+
+* **Observed on one trajectory, not a test of the method.** Folic acid dianion, REST2 state 0, 100 ns at
+  stride 10 (5000 frames), 14 torsions (nine heavy-atom, five polar-hydrogen): 12 clusters, 53 % of the
+  frames unassigned (32 of them ambiguous), three cuts, all on the CH2-C6 torsion, and no bit merge.
+  Wells under 1 % of the frames stay inside their cluster: a floor sets what is a cluster. That
+  trajectory is not registered, so the numbers cannot be reproduced from this repository.
+* **A cluster is a density basin, not a metastable state;** one trajectory gives no resampling stability,
+  and with a few dozen frames in a node the histogram rules are noisy.
+* **Not done:** frame weights (refused), a cache of the per-torsion distance terms (exact, but 0.86 s to
+  build against 0.07 s to recompute at 1000 frames), and detection of sub-structure below the floor.
+
 ## Where this is used
 
 * [Paracetamol: torsion distributions in one labelling](../../tutorial/paracetamol/analysis/symmetry-alignment.ipynb)
