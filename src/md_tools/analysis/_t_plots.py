@@ -118,7 +118,7 @@ def _select_torsions(spec, names) -> list:
 def plot_hist(result: Dict[str, Any], *, torsion_show: Union[str, Sequence] = "all",
               n_cluster: int = 10, kind: str = "free_energy", kT: float = 0.0019872 * 300.0,
               n_bins: int = 72, show_molecule: bool = True, output=None, dpi: int = 200,
-              ylim_kcal: float = 5.0):
+              ylim_kcal: float = 5.0, mark: Optional[Sequence[int]] = None):
     """Per-cluster circular profiles of the selected torsions; returns the matplotlib Figure.
 
     `result` is the output of `hierarchical_clustering`. The first row is every frame, then the
@@ -127,7 +127,9 @@ def plot_hist(result: Dict[str, Any], *, torsion_show: Union[str, Sequence] = "a
     `kind='free_energy'` plots F = -kT ln p in kcal/mol, zero at each row's own minimum, with a
     dashed line at the cut barrier (`result['settings']['kT_cut']` kT, at the temperature `kT` is
     given for: pass `kT` in kcal/mol, the default is 300 K, an assumption); `kind='density'` plots
-    the normalised probability density, each row on one scale.
+    the normalised probability density, each row on one scale. `mark` is a collection of cluster
+    indices (0-based, as in `result['labels']`) whose rows get a tinted background and a star in
+    the row label, for example the clusters a later step can split further.
     """
     import matplotlib.pyplot as plt
 
@@ -141,6 +143,7 @@ def plot_hist(result: Dict[str, Any], *, torsion_show: Union[str, Sequence] = "a
         raise ValueError("no torsion selected")
     labels = np.asarray(result["labels"])
     ang = np.asarray(result["aligned_angles"])
+    marked = set(int(m) for m in (mark or ()))
     clusters = list(range(min(int(n_cluster), int(result["n_clusters"]))))
     rows = [None] + clusters
     edges = np.linspace(-np.pi, np.pi, int(n_bins) + 1)
@@ -166,6 +169,8 @@ def plot_hist(result: Dict[str, Any], *, torsion_show: Union[str, Sequence] = "a
     for cj, j in enumerate(cols):
         for ri, sel in enumerate(rows):
             ax = fig.add_subplot(gs[ri, off + cj])
+            if sel is not None and sel in marked:
+                ax.set_facecolor("#fff1b8")
             pick = np.ones(len(labels), bool) if sel is None else labels == sel
             p = np.histogram(ang[pick, j], edges)[0] / max(1, pick.sum()) / w
             if kind == "free_energy":
@@ -175,7 +180,8 @@ def plot_hist(result: Dict[str, Any], *, torsion_show: Union[str, Sequence] = "a
                 F[~np.isfinite(F)] = np.nan
                 ax.plot(c, F, color=f"C{j % 10}", lw=1.5)
                 ax.axhline(0, color="0.85", lw=0.6)
-                ax.axhline(barrier, color="k", ls="--", lw=1.0, alpha=0.4)
+                if np.isfinite(barrier):
+                    ax.axhline(barrier, color="k", ls="--", lw=1.0, alpha=0.4)
                 ax.set_ylim(-0.3, ylim_kcal)
             else:
                 ax.fill_between(c, p, color=f"C{j % 10}", alpha=0.35, lw=0)
@@ -194,7 +200,8 @@ def plot_hist(result: Dict[str, Any], *, torsion_show: Union[str, Sequence] = "a
                 what = "F (kcal/mol)" if kind == "free_energy" else "density"
                 head = "all frames" if sel is None else (
                     f"cluster {sel + 1} ({100 * (labels == sel).sum() / total:.1f}%)")
-                ax.set_ylabel(f"{head}\n{what}", fontsize=11)
+                ax.set_ylabel(f"{head}{' ★' if sel in marked and sel is not None else ''}\n{what}",
+                              fontsize=11)
     fig.tight_layout()
     if output is not None:
         fig.savefig(output, dpi=dpi)

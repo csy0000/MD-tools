@@ -98,7 +98,8 @@ def _coupling_groups(descriptor, n_selected: int) -> List[set]:
     return groups
 
 
-def _profile_cuts(x: np.ndarray, kT_cut: float, floor_frames: float, n_bins: int):
+def _profile_cuts(x: np.ndarray, kT_cut: float, floor_frames: float, n_bins: int,
+                  min_separation_degrees: float = 0.0):
     """Two cuts on one circular histogram profile, or None.
 
     F = -ln p in kT, zero at its minimum, empty bins set to `max(F) + 1`. Cut 1 is the centre of the
@@ -113,6 +114,8 @@ def _profile_cuts(x: np.ndarray, kT_cut: float, floor_frames: float, n_bins: int
     fin = np.isfinite(F)
     F = F - F[fin].min()
     F[~fin] = F[fin].max() + 1.0
+    if np.isnan(kT_cut):
+        return _empty_cuts(cnt, p, floor_frames, n_bins, edges, min_separation_degrees)
     top = set(np.flatnonzero(F >= F.max() - 1e-9).tolist())
     i0 = min(top)
     run = [i0]
@@ -126,6 +129,8 @@ def _profile_cuts(x: np.ndarray, kT_cut: float, floor_frames: float, n_bins: int
         run.insert(0, j)
     c1 = run[len(run) // 2]
     for c2 in sorted((i for i in range(n_bins) if i != c1), key=lambda i: -F[i]):
+        if _separation(c1, c2, n_bins) <= min_separation_degrees:
+            continue
         if F[c2] < kT_cut:                 # sorted by F: no later bin clears it (also implied by the
             break                          # test below, since F[minor] >= 0; kept as the early exit)
         ia = np.array([(c1 + 1 + k) % n_bins for k in range((c2 - c1) % n_bins - 1)], int)
@@ -143,6 +148,61 @@ def _profile_cuts(x: np.ndarray, kT_cut: float, floor_frames: float, n_bins: int
                     "cut1_degrees": float(np.degrees(edges[c1] + half)),
                     "cut2_degrees": float(np.degrees(edges[c2] + half))}
     return None
+
+
+def _empty_runs(cnt: np.ndarray) -> List[List[int]]:
+    """Circular runs of consecutive bins with no count, each a list of bin indices."""
+    n = len(cnt)
+    empty = cnt == 0
+    if not empty.any():
+        return []
+    if empty.all():
+        return [list(range(n))]
+    start = int(np.flatnonzero(~empty)[0])             # begin at a filled bin so no run wraps
+    runs: List[List[int]] = []
+    cur: List[int] = []
+    for k in range(1, n + 1):
+        i = (start + k) % n
+        if empty[i]:
+            cur.append(i)
+        elif cur:
+            runs.append(cur)
+            cur = []
+    if cur:
+        runs.append(cur)
+    return runs
+
+
+def _separation(c1: int, c2: int, n_bins: int) -> float:
+    """Circular distance between two bin centres, in degrees."""
+    k = (c2 - c1) % n_bins
+    return min(k, n_bins - k) * 360.0 / n_bins
+
+
+def _empty_cuts(cnt, p, floor_frames, n_bins, edges, min_separation_degrees=0.0):
+    """Two cuts through empty runs only (`kT_cut=nan`); both arcs at least `floor_frames`."""
+    centres = [r[len(r) // 2] for r in _empty_runs(cnt)]
+    total = float(cnt.sum())
+    best = None
+    for i, c1 in enumerate(centres):
+        for c2 in centres[i + 1:]:
+            if _separation(c1, c2, n_bins) <= min_separation_degrees:
+                continue
+            ia = [(c1 + 1 + k) % n_bins for k in range((c2 - c1) % n_bins - 1)]
+            ib = [(c2 + 1 + k) % n_bins for k in range((c1 - c2) % n_bins - 1)]
+            ma, mb = cnt[ia].sum(), cnt[ib].sum()
+            if min(ma, mb) < floor_frames:
+                continue
+            frac = float(min(ma, mb) / total)
+            if best is None or frac > best[0]:
+                best = (frac, c1, c2)
+    if best is None:
+        return None
+    frac, c1, c2 = best
+    half = np.pi / n_bins
+    return {"bins": (c1, c2), "F_cut1": float("inf"), "F_cut2": float("inf"),
+            "minor_fraction": frac, "cut1_degrees": float(np.degrees(edges[c1] + half)),
+            "cut2_degrees": float(np.degrees(edges[c2] + half))}
 
 
 class _Hierarchy:
@@ -339,7 +399,7 @@ def hierarchical_clustering(fit, coordinates, *, gauge=None,
     for which `units` is needed when `rmsd`).
 
     `torsion_null_test` reshuffles per cluster pair in the round-2 drop test (0 disables the drop,
-    nothing is discarded). `kT_cut` is the barrier in kT. `mass_floor` is a fraction of ALL frames:
+    nothing is discarded). `kT_cut` is the barrier in kT; `nan` accepts a cut only where a bin has no count. `mass_floor` is a fraction of ALL frames:
     the smallest cluster HDBSCAN may form in a node and the smallest arc a cut may leave.
     `bits_threshold` is in degrees of W2; `merge_by_bits=False` keeps the bit table but merges
     nothing. Frames in no leaf get `NOISE_LABEL`, frames next to a non-empty cut `AMBIGUOUS_LABEL`.
@@ -356,8 +416,8 @@ def hierarchical_clustering(fit, coordinates, *, gauge=None,
         raise NotImplementedError("hierarchical_clustering() needs the symmetry-first route")
     if not fit.weights_uniform_:
         raise NotImplementedError("frame weights are not supported; resample the ensemble first")
-    if int(torsion_null_test) < 0 or not float(kT_cut) > 0.0:
-        raise ValueError("torsion_null_test must be >= 0 and kT_cut positive")
+    if int(torsion_null_test) < 0 or not (np.isnan(float(kT_cut)) or float(kT_cut) > 0.0):
+        raise ValueError("torsion_null_test must be >= 0 and kT_cut positive (or nan: empty bins only)")
     if not 0.0 < float(mass_floor) < 0.5:
         raise ValueError("mass_floor must be a fraction of all frames in (0, 0.5)")
     if int(fit.n_clusters_) < 1:

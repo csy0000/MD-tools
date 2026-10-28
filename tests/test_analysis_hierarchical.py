@@ -329,3 +329,35 @@ def test_plot_hist_draws_the_barrier_line_at_kT_cut(result):
     ys = [l.get_ydata()[0] for l in fig.axes[0].lines if len(set(l.get_ydata())) == 1]
     assert any(abs(y - result["settings"]["kT_cut"] * kT) < 1e-9 for y in ys)
     plt.close("all")
+
+
+def test_marked_clusters_get_a_tinted_row_and_a_star(result):
+    plt = pytest.importorskip("matplotlib.pyplot")
+    plt.switch_backend("Agg")
+    from md_tools.analysis import plot_hist
+
+    fig = plot_hist(result, torsion_show=[0], n_cluster=2, show_molecule=False, mark=[1])
+    rows = fig.axes                                        # all-frames, cluster 1, cluster 2
+    assert [a.get_facecolor()[:3] != (1.0, 1.0, 1.0) for a in rows] == [False, False, True]
+    assert "★" in rows[2].get_ylabel() and "★" not in rows[1].get_ylabel()
+    plt.close("all")
+
+
+def test_nan_accepts_a_cut_only_through_empty_bins():
+    """`kT_cut=nan`: a route with any count, however thin, is not a barrier; two empty arcs are."""
+    thin = _from_counts(_three_well_counts(route=6))           # one empty arc only
+    assert H._profile_cuts(thin, float("nan"), 10, N_BINS) is None
+    empty = _from_counts(_three_well_counts(route=0))          # wells separated by empty arcs
+    got = H._profile_cuts(empty, float("nan"), 10, N_BINS)
+    assert got is not None and got["F_cut1"] == float("inf")
+    cnt = np.histogram(empty, np.linspace(-np.pi, np.pi, N_BINS + 1))[0]
+    assert all(cnt[b] == 0 for b in got["bins"]), "both cuts must be bins with no count"
+
+
+def test_nan_is_accepted_by_the_pipeline_and_nothing_is_ambiguous(basins):
+    mol, defs, xyz, truth, fit = basins
+    r = H.hierarchical_clustering(fit, xyz, units="angstrom", mass_floor=0.05, kT_cut=float("nan"),
+                                  rmsd=False)
+    assert r["n_clusters"] == 2 and r["n_ambiguous"] == 0 and np.isnan(r["settings"]["kT_cut"])
+    with pytest.raises(ValueError, match="kT_cut"):
+        H.hierarchical_clustering(fit, xyz, kT_cut=-1.0)
