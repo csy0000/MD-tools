@@ -8,7 +8,7 @@ are used. This page covers what this package does that you will not find elsewhe
 | | | needs |
 |---|---|---|
 | [`t_hdbscan`](torsional-clustering/hdbscan.ipynb) | a density partition of a torsional ensemble, symmetry-first by default | scikit-learn, rdkit |
-| [`cut_clustering`](torsional-clustering/cell-partitioning.ipynb) | a partition by barrier cuts on one-dimensional free-energy profiles; every frame labelled | rdkit (on the symmetry-first route) |
+| [`cut_clustering`](torsional-clustering/torsion-partitioning.ipynb) | a partition by barrier cuts on one-dimensional free-energy profiles; every frame labelled | rdkit (on the symmetry-first route) |
 | [`t_mi`](#t_mi) | mutual information between torsions, with its own bias measured | numpy |
 | [`t_symmetry`](#t_symmetry) | the older post-hoc route: which clusters of an existing partition are the same conformer | rdkit |
 
@@ -24,9 +24,9 @@ tutorial data, and every parameter is shown changing a result.
 
 | page | what it covers |
 |---|---|
-| [Torsion preprocessing](torsional-clustering/torsion-preprocessing.ipynb) | the input contract; the symmetry enumeration and its canonicalisation; the closed descriptor and its weights; the symmetric distance HDBSCAN uses; the symmetry-invariant coordinates the cell partitioning cuts; one labelling for drawing, a gauge, a crystal as reference; symmetry-corrected RMSD |
+| [Torsion preprocessing](torsional-clustering/torsion-preprocessing.ipynb) | the input contract; the symmetry enumeration and its canonicalisation; the closed descriptor and its weights; the symmetric distance HDBSCAN uses; the symmetry-invariant coordinates the torsion partitioning cuts; one labelling for drawing, a gauge, a crystal as reference; symmetry-corrected RMSD |
 | [HDBSCAN](torsional-clustering/hdbscan.ipynb) | `t_hdbscan`: `mass_floor`, `min_samples`, `allow_single_cluster`, the vote, `resampling`, the torsion set; `refine_by_rmsd`, `hierarchical_clustering`; migrating an older call |
-| [Cell partitioning](torsional-clustering/cell-partitioning.ipynb) | `cut_clustering`: `kT_cut`, `mass_floor`, `min_p2p`, `kT_step`, `n_bins`, `z_min`, `gauge`; the splitting tree |
+| [Torsion partitioning](torsional-clustering/torsion-partitioning.ipynb) | `cut_clustering`: `kT_cut`, `mass_floor`, `min_p2p`, `kT_step`, `n_bins`, `z_min`, `gauge`; the splitting tree |
 
 ```python
 from md_tools.analysis import t_hdbscan, cut_clustering, TorsionDefinitions
@@ -41,7 +41,7 @@ fit = t_hdbscan(torsions,                     # (n_frames, 3) radians, in that c
                 atom_mapping=mapping)         # trajectory index of each reference atom
 
 fit.fit().labels_                  # HDBSCAN: 0, 1, ... by population; -2 density noise; -1 ambiguous
-cut_clustering(fit)["labels"]      # cell partitioning: 0, 1, ... by mass; every frame labelled
+cut_clustering(fit)["labels"]      # torsion partitioning: 0, 1, ... by mass; every frame labelled
 ```
 
 **Which one.** They answer different questions and agree where both are clear (two clusters on
@@ -50,7 +50,7 @@ paracetamol; the large clusters of alanine dipeptide and c(RGDfV)).
 * HDBSCAN finds **density basins** in the joint torsion space, so it separates two basins that overlap
   in every one-dimensional projection. It fits an exact distance matrix, at most 10 000 frames
   (`resampling=N` above that), and leaves frames it cannot place unassigned, as noise or ambiguous.
-* The cell partitioning finds **regions bounded by barriers in one-dimensional profiles**, reads every
+* The torsion partitioning finds **regions bounded by barriers in one-dimensional profiles**, reads every
   frame (300 000 on c(RGDfV)), gives every frame a label, and states its threshold as a barrier in kT. It
   does not separate basins that overlap in every projection.
 
@@ -180,8 +180,8 @@ recorded on every accepted pair.
 
 ## Where these are used
 
-* [Torsion preprocessing](torsional-clustering/torsion-preprocessing.ipynb), [HDBSCAN](torsional-clustering/hdbscan.ipynb), [Cell partitioning](torsional-clustering/cell-partitioning.ipynb)
-* [Alanine dipeptide: conformations by cell partitioning](../../tutorial/ALA/analysis/clustering.ipynb)
+* [Torsion preprocessing](torsional-clustering/torsion-preprocessing.ipynb), [HDBSCAN](torsional-clustering/hdbscan.ipynb), [Torsion partitioning](torsional-clustering/torsion-partitioning.ipynb)
+* [Alanine dipeptide: conformations by torsion partitioning](../../tutorial/ALA/analysis/clustering.ipynb)
 * [Paracetamol: torsional clustering](../../tutorial/paracetamol/analysis/clustering.ipynb)
 * [c(RGDfV): conformations of a cyclic peptide](../../tutorial/rgdfv/analysis/clustering.ipynb)
 * [Paracetamol: the old and new workflows compared](../../tutorial/paracetamol/analysis/clustering-comparison.ipynb)

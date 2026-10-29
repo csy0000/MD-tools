@@ -5,7 +5,7 @@ Four notebooks over the runs the [cMD](../cMD.md) and [REST2](../REST2.md) pages
 | notebook | what it shows |
 |---|---|
 | [`pmf-1d.ipynb`](pmf-1d.ipynb) | the free energy along each of the three torsions |
-| [`clustering.ipynb`](clustering.ipynb) | the torsional states, by HDBSCAN on the symmetric distance (the 18-of-20 assignment, populations, representative structures) and by cell partitioning on all 100 000 frames, and the two compared |
+| [`clustering.ipynb`](clustering.ipynb) | the torsional states, by HDBSCAN on the symmetric distance (the 18-of-20 assignment, populations, representative structures) and by torsion partitioning on all 100 000 frames, and the two compared |
 | [`clustering-comparison.ipynb`](clustering-comparison.ipynb) | the historical cluster-then-merge workflow, the new vote alone, and symmetry-first, on the same frames |
 | [`mutual-information.ipynb`](mutual-information.ipynb) | which torsions move together, and the estimator's own bias |
 
@@ -52,6 +52,6 @@ to a protein, not its own crystal, and a crystal has no hydrogens, so the `pheno
 ## Related
 
 * [Methods: analysis](../../../openmm_methods/analysis/README.md) — the theory behind the tools, and the migration from the old call
-* [Methods: torsional clustering](../../../openmm_methods/analysis/torsional-clustering/torsion-preprocessing.ipynb) — the preprocessing (duplicated torsions and their weights, the minimised distance, one labelling for drawing), [HDBSCAN](../../../openmm_methods/analysis/torsional-clustering/hdbscan.ipynb) and [cell partitioning](../../../openmm_methods/analysis/torsional-clustering/cell-partitioning.ipynb)
+* [Methods: torsional clustering](../../../openmm_methods/analysis/torsional-clustering/torsion-preprocessing.ipynb) — the preprocessing (duplicated torsions and their weights, the minimised distance, one labelling for drawing), [HDBSCAN](../../../openmm_methods/analysis/torsional-clustering/hdbscan.ipynb) and [torsion partitioning](../../../openmm_methods/analysis/torsional-clustering/torsion-partitioning.ipynb)
 * [REST2: paracetamol](../REST2.md) — where the protected bonds are decided
 * [ALA analysis](../../ALA/analysis/index.md) — PMFs on a smaller system

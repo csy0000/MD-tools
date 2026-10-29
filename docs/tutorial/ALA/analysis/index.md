@@ -6,7 +6,7 @@ Three notebooks over the runs the [cMD](../cMD.md) and [REST2](../REST2.md) page
 |---|---|
 | [`pmf-1d.ipynb`](pmf-1d.ipynb) | the free energy along phi, cMD against the REST2 cold rung |
 | [`pmf-2d.ipynb`](pmf-2d.ipynb) | the Ramachandran surface the 1D projection averages away |
-| [`clustering.ipynb`](clustering.ipynb) | the conformations, by cell partitioning on phi and psi, against HDBSCAN |
+| [`clustering.ipynb`](clustering.ipynb) | the conformations, by torsion partitioning on phi and psi, against HDBSCAN |
 
 **They are committed with their outputs**, and rendered here as pages: every figure and number
 below comes from the runs these tutorials describe, not from a build-time re-execution. To run
@@ -35,5 +35,5 @@ analysis, which is a different question from how to compute one.
 ## Related
 
 * [Methods: analysis](../../../openmm_methods/analysis/README.md) — the tools unique to md-tools
-* [Methods: torsional clustering](../../../openmm_methods/analysis/torsional-clustering/cell-partitioning.ipynb) — the parameters of the cell partitioning and of HDBSCAN, illustrated on this run
+* [Methods: torsional clustering](../../../openmm_methods/analysis/torsional-clustering/torsion-partitioning.ipynb) — the parameters of the torsion partitioning and of HDBSCAN, illustrated on this run
 * [Paracetamol analysis](../../paracetamol/analysis/index.md) — clustering, symmetry, MI

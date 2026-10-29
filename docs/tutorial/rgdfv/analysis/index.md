@@ -5,10 +5,10 @@ registered:
 
 | notebook | what it shows |
 |---|---|
-| [`clustering.ipynb`](clustering.ipynb) | `t_hdbscan` with the 1 % floor on 17 torsions, the backbone table, representative structures, how the choice of torsions changes the answer (with the Asp and Arg side chains folded by canonicalization), the clustering on all 24 heavy-atom torsions, the symmetry-corrected heavy-atom RMSD between clusters, and the cell partitioning of the backbone on all 300 000 frames, its splitting tree, which run each cluster comes from, and the two methods compared |
+| [`clustering.ipynb`](clustering.ipynb) | `t_hdbscan` with the 1 % floor on 17 torsions, the backbone table, representative structures, how the choice of torsions changes the answer (with the Asp and Arg side chains folded by canonicalization), the clustering on all 24 heavy-atom torsions, the symmetry-corrected heavy-atom RMSD between clusters, and the torsion partitioning of the backbone on all 300 000 frames, its splitting tree, which run each cluster comes from, and the two methods compared |
 
 The methods are in [Methods: torsional clustering](../../../openmm_methods/analysis/torsional-clustering/torsion-preprocessing.ipynb)
-([HDBSCAN](../../../openmm_methods/analysis/torsional-clustering/hdbscan.ipynb), [cell partitioning](../../../openmm_methods/analysis/torsional-clustering/cell-partitioning.ipynb)); the notebook shows results.
+([HDBSCAN](../../../openmm_methods/analysis/torsional-clustering/hdbscan.ipynb), [torsion partitioning](../../../openmm_methods/analysis/torsional-clustering/torsion-partitioning.ipynb)); the notebook shows results.
 
 ## The data
 
@@ -16,7 +16,7 @@ Registered dataset `hpREST2/RGDfV-explicit-HMR-REST2` (`$MD_DATA/2026/hpREST2/RG
 c(RGDfV), 79 solute atoms, explicit TIP3P, an 8-state ladder with tau up to 0.5, 500 ns per replica,
 three independent runs. **State 0 is the unscaled Hamiltonian**, so `solute_state0_prod1.nc` of each
 run is the physical ensemble; the other seven states are hot and are not used. HDBSCAN reads every
-75th frame of each run (375 ps, 1334 frames per run, 4002 in all); the cell partitioning reads every frame.
+75th frame of each run (375 ps, 1334 frames per run, 4002 in all); the torsion partitioning reads every frame.
 
 The dataset was run with md-tools `0.5.4` and registered afterwards; this analysis ran on md-tools `0.6.5.2` with `plot_split_tree`, which is not in a release yet.
 
