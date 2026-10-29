@@ -44,8 +44,9 @@ Run on NVIDIA RTX 3080 GPUs with CUDA and mixed precision.
 | page | version it was run against |
 |---|---|
 | [ligand parameterization](ligand-parameterization/index.md) | `0.6.5` development branch (`171a708e`), CPU only |
-| [c(RGDfV) / analysis](rgdfv/analysis/index.md) | `0.6.5.1`, on a dataset run with `0.5.4` |
-| [paracetamol / torsions in one labelling](paracetamol/analysis/symmetry-alignment.ipynb) | `0.6.5.1`, on the `0.6.1` runs |
+| [c(RGDfV) / analysis](rgdfv/analysis/index.md) | `0.6.5.2` with the unreleased `plot_split_tree`, on a dataset run with `0.5.4` |
+| [paracetamol / torsional clustering](paracetamol/analysis/clustering.ipynb) | `0.6.5.2` with the unreleased `plot_split_tree`, on the `0.6.1` runs |
+| [alanine dipeptide / conformations](ALA/analysis/clustering.ipynb) | `0.6.5.2` with the unreleased `plot_split_tree`, on the `0.6.1` runs |
 | [paracetamol / cMD](paracetamol/cMD.md) | `0.6.1` |
 | [paracetamol / REST2](paracetamol/REST2.md) | `0.6.1` |
 | [paracetamol / AIS](paracetamol/AIS.md) | `0.6.1` |

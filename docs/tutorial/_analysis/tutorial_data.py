@@ -95,3 +95,32 @@ def pmf2d(x, y, bins: int = 72, temperature_k: float = 300.0):
                                      range=[[-np.pi, np.pi], [-np.pi, np.pi]], density=True)
     free = -kT * np.log(np.where(density > 0, density, np.nan))
     return 0.5 * (xe[:-1] + xe[1:]), 0.5 * (ye[:-1] + ye[1:]), free - np.nanmin(free)
+
+
+def molecule_from_topology(traj, charge: int = 0):
+    """An RDKit molecule in the trajectory's own atom order, for a solute built without an SDF.
+
+    The bond graph is the topology's, the bond orders are perceived from it
+    (`rdDetermineBonds.DetermineBondOrders`, at total `charge`) and the stereochemistry is read
+    from the first frame, so the atom mapping onto the trajectory is the identity. For a solute
+    with an SDF (a ligand, a cyclic peptide), use the SDF: it states the bond orders instead of
+    inferring them.
+    """
+    from rdkit import Chem
+    from rdkit.Chem import rdDetermineBonds
+    from rdkit.Geometry import Point3D
+
+    top = traj.topology
+    mol = Chem.RWMol()
+    for atom in top.atoms:
+        mol.AddAtom(Chem.Atom(atom.element.symbol))
+    for a, b in top.bonds:
+        mol.AddBond(a.index, b.index, Chem.BondType.SINGLE)
+    conformer = Chem.Conformer(top.n_atoms)
+    for i, p in enumerate(traj.xyz[0] * 10.0):
+        conformer.SetAtomPosition(i, Point3D(*map(float, p)))
+    mol.AddConformer(conformer)
+    mol = mol.GetMol()
+    rdDetermineBonds.DetermineBondOrders(mol, charge=charge)
+    Chem.AssignStereochemistryFrom3D(mol)
+    return mol

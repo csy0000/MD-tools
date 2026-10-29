@@ -5,21 +5,20 @@ registered:
 
 | notebook | what it shows |
 |---|---|
-| [`clustering.ipynb`](clustering.ipynb) | the symmetry enumerated (four operations on the torsions, sixteen once the carboxylate and the guanidinium are included), the columns and their weights, `t_hdbscan` with the 1 % floor, every frame written in the labelling nearest the density peak, the backbone table, representative structures, how the choice of torsions changes the answer, the canonicalization of the Asp and Arg side chains drawn as chemical schematics, the clustering on all 24 heavy-atom torsions, and the symmetry-corrected heavy-atom RMSD between the clusters of a backbone-only and of a heavy-atom-torsion clustering |
+| [`clustering.ipynb`](clustering.ipynb) | `t_hdbscan` with the 1 % floor on 17 torsions, the backbone table, representative structures, how the choice of torsions changes the answer (with the Asp and Arg side chains folded by canonicalization), the clustering on all 24 heavy-atom torsions, the symmetry-corrected heavy-atom RMSD between clusters, and the cell partitioning of the backbone on all 300 000 frames, its splitting tree, which run each cluster comes from, and the two methods compared |
 
-The explanation is in
-[Methods: symmetry-aware clustering and the torsion representation](../../../openmm_methods/analysis/clustering-and-symmetry.md);
-the notebook shows results only.
+The methods are in [Methods: torsional clustering](../../../openmm_methods/analysis/torsional-clustering/torsion-preprocessing.ipynb)
+([HDBSCAN](../../../openmm_methods/analysis/torsional-clustering/hdbscan.ipynb), [cell partitioning](../../../openmm_methods/analysis/torsional-clustering/cell-partitioning.ipynb)); the notebook shows results.
 
 ## The data
 
 Registered dataset `hpREST2/RGDfV-explicit-HMR-REST2` (`$MD_DATA/2026/hpREST2/RGDfV-explicit-HMR-REST2`):
 c(RGDfV), 79 solute atoms, explicit TIP3P, an 8-state ladder with tau up to 0.5, 500 ns per replica,
 three independent runs. **State 0 is the unscaled Hamiltonian**, so `solute_state0_prod1.nc` of each
-run is the physical ensemble; the other seven states are hot and are not used. The notebook reads
-every 75th frame of each run (375 ps, 1334 frames per run, 4002 in all).
+run is the physical ensemble; the other seven states are hot and are not used. HDBSCAN reads every
+75th frame of each run (375 ps, 1334 frames per run, 4002 in all); the cell partitioning reads every frame.
 
-The dataset was run with md-tools `0.5.4` and registered afterwards; this analysis ran on md-tools `0.6.5.1`.
+The dataset was run with md-tools `0.5.4` and registered afterwards; this analysis ran on md-tools `0.6.5.2` with `plot_split_tree`, which is not in a release yet.
 
 To run it yourself:
 
@@ -32,7 +31,8 @@ jupyter lab docs/tutorial/rgdfv/analysis/
 ## What is not here
 
 The notebook does not run a simulation and does not compare the REST2 ladder with a plain run, and
-the two clusters it finds are **density basins, not metastable states**: nothing in it looks at time.
+the clusters it finds are **density basins, or regions bounded by barriers, not metastable states**:
+nothing in it looks at time.
 The 1 % floor, the torsion set and `allow_single_cluster` each change the answer, and the last section
 of the notebook shows by how much.
 

@@ -5,6 +5,7 @@ and its central bond labelled `t<k>`, polar hydrogens shown and carbon-bound one
 convention of the reference drawings). `plot_hist` draws, for the clusters of a
 `hierarchical_clustering` result, the circular profile of every torsion in each cluster: as a free
 energy (default; each row zero at its own minimum, a dashed line at `kT_cut`) or as a density.
+`plot_split_tree` draws the tree of a `cut_clustering` result, one panel per cell.
 
 Both import matplotlib and rdkit when called, never at import.
 """
@@ -14,7 +15,7 @@ from typing import Any, Dict, Optional, Sequence, Union
 
 import numpy as np
 
-__all__ = ["show_compound", "plot_hist"]
+__all__ = ["show_compound", "plot_hist", "plot_split_tree"]
 
 
 def _colour(k: int):
@@ -205,4 +206,167 @@ def plot_hist(result: Dict[str, Any], *, torsion_show: Union[str, Sequence] = "a
     fig.tight_layout()
     if output is not None:
         fig.savefig(output, dpi=dpi)
+    return fig
+
+
+def plot_split_tree(result: Dict[str, Any], *, pair: Optional[Sequence[str]] = None,
+                    leaf_torsions: Optional[Sequence[str]] = None, output=None, dpi: int = 150,
+                    ylim_kT: float = 9.0, title: Optional[str] = None):
+    """The splitting tree of a `cut_clustering` result, one panel per cell; returns the Figure.
+
+    Every cell sits under its parent, leaves left to right in depth-first order. Without `pair`,
+    a cell that was cut shows F = -ln p (kT, zero at its minimum) of its own frames along the
+    coordinate cut there, the cut in red and the boundaries the cell inherited on that coordinate
+    dashed grey; a leaf shows its cluster number (1-based, by mass), its mass and the circular mean
+    of each torsion named in `leaf_torsions`, in the labelling of `result["aligned_angles"]`. With
+    `pair=(a, b)`, two cut-coordinate names, every cell shows the 2D histogram of its frames over
+    them (log counts) with the 1D densities on the top and right edges, the cut and the inherited
+    boundaries drawn on whichever of the two they lie.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LogNorm
+
+    if "coordinate_values" not in result or "tree" not in result:
+        raise ValueError("plot_split_tree needs a cut_clustering result")
+    tree = result["tree"]
+    names = list(result["coordinates"])
+    Y = np.degrees(np.asarray(result["coordinate_values"], float))
+    valid = np.asarray(result["coordinate_valid"], bool)
+    labels = np.asarray(result["labels"])
+    N = len(labels)
+    if pair is not None:
+        pair = [names.index(str(v)) if str(v) in names else None for v in pair]
+        if len(pair) != 2 or None in pair:
+            raise ValueError(f"pair must name two cut coordinates of {names}")
+    tnames = [n.split()[0] for n in result["torsion_names"]]
+    show = []
+    for v in (leaf_torsions or ()):
+        if str(v) not in tnames:
+            raise ValueError(f"leaf torsion {v!r} is not one of {tnames}")
+        show.append(tnames.index(str(v)))
+    ang = np.asarray(result["aligned_angles"], float)
+
+    def leaves(i):
+        n = tree[i]
+        return [n["cluster"]] if not n["children"] else sum((leaves(c) for c in n["children"]), [])
+
+    order, depth, X = [], {}, {}
+
+    def walk(i, d):
+        depth[i] = d
+        if not tree[i]["children"]:
+            order.append(i)
+        for c in tree[i]["children"]:
+            walk(c, d + 1)
+
+    walk(0, 0)
+    for k, i in enumerate(order):
+        X[i] = float(k)
+
+    def place(i):
+        if tree[i]["children"]:
+            X[i] = float(np.mean([place(c) for c in tree[i]["children"]]))
+        return X[i]
+
+    place(0)
+    nx, ny = len(order), max(depth.values()) + 1
+    cw, ch = (3.4, 3.6) if pair is not None else (2.6, 2.6)
+    fig = plt.figure(figsize=(cw * nx, ch * ny))
+    B = np.linspace(-180.0, 180.0, int(result["settings"]["n_bins"]) + 1)
+    cen = 0.5 * (B[1:] + B[:-1])
+    anchor = {}
+    for i, n in enumerate(tree):
+        rows = np.flatnonzero(np.isin(labels, leaves(i)))
+        x0, y0 = X[i] / nx, 1.0 - (depth[i] + 1) / ny
+        cut = n["cut"]
+        head = (f"cluster {n['cluster'] + 1}: " if "cluster" in n else "") + \
+            f"{len(rows)} frames ({100.0 * len(rows) / N:.2f}%)"
+        if pair is not None:
+            w, h = 0.62 / nx, 0.56 / ny
+            left, bot = x0 + 0.13 / nx, y0 + 0.12 / ny
+            ax = fig.add_axes([left, bot, w, h])
+            top = fig.add_axes([left, bot + h, w, 0.16 / ny], sharex=ax)
+            right = fig.add_axes([left + w, bot, 0.16 / nx, h], sharey=ax)
+            a, b = pair
+            H2 = np.histogram2d(Y[rows, a], Y[rows, b], [B, B])[0]
+            ax.pcolormesh(B, B, np.where(H2 > 0, H2, np.nan).T, cmap="viridis", rasterized=True,
+                          norm=LogNorm(vmin=1, vmax=max(2.0, H2.max())))
+            for j, side, vertical in ((a, top, True), (b, right, False)):
+                p = np.histogram(Y[rows, j], B)[0] / max(1, len(rows)) / (B[1] - B[0])
+                if vertical:
+                    side.fill_between(cen, p, color="C0", alpha=0.4, lw=0)
+                else:
+                    side.fill_betweenx(cen, p, color="C1", alpha=0.4, lw=0)
+                side.axis("off")
+            for j, axis, edge in ((a, ax.axvline, top.axvline), (b, ax.axhline, right.axhline)):
+                box = n["box_degrees"].get(names[j])
+                for v in (box or ()):
+                    axis(v, color="0.6", ls="--", lw=1)
+                if cut and cut["coordinate"] == names[j]:
+                    for v in cut["positions_degrees"]:
+                        axis(v, color="r", lw=1.6)
+                        edge(v, color="r", lw=1.6)
+            ax.set_xlim(-180, 180)
+            ax.set_ylim(-180, 180)
+            ax.set_xticks([-180, -90, 0, 90, 180])
+            ax.set_yticks([-180, -90, 0, 90, 180])
+            ax.tick_params(labelsize=7)
+            ax.set_xlabel(names[a], fontsize=9, labelpad=0)
+            ax.set_ylabel(names[b], fontsize=9, labelpad=0)
+            ax.set_title(head, fontsize=9, pad=26, fontweight="bold" if "cluster" in n else None)
+            anchor[i] = (left + w / 2, bot + h + 0.18 / ny, bot - 0.10 / ny)
+        else:
+            w, h = 0.7 / nx, 0.45 / ny
+            left, bot = x0 + 0.15 / nx, y0 + 0.22 / ny
+            ax = fig.add_axes([left, bot, w, h])
+            if cut:
+                j = names.index(cut["coordinate"])
+                r = rows[valid[rows, j]]
+                cnt = np.histogram(Y[r, j], B)[0].astype(float)
+                with np.errstate(divide="ignore"):
+                    F = -np.log(cnt / max(1.0, cnt.sum()))
+                F -= F[np.isfinite(F)].min()
+                F[~np.isfinite(F)] = np.nan
+                ax.plot(cen, F, color="k", lw=1.2)
+                for v in cut["positions_degrees"]:
+                    ax.axvline(v, color="r", lw=1.5)
+                for v in (n["box_degrees"].get(cut["coordinate"]) or ()):
+                    ax.axvline(v, color="0.6", ls="--", lw=1)
+                ax.set_ylim(-0.3, ylim_kT)
+                ax.set_xlim(-180, 180)
+                ax.set_xticks([-180, 0, 180])
+                ax.tick_params(labelsize=7)
+                ax.set_ylabel("F (kT)", fontsize=7, labelpad=0)
+                ax.set_title(head, fontsize=8)
+            else:
+                ax.axis("off")
+                ax.text(0.5, 1.0, head.replace(": ", "\n"), ha="center", va="top",
+                        fontsize=10, fontweight="bold", color=_colour(n["cluster"]))
+                if show:
+                    z = np.exp(1j * ang[rows][:, show]).mean(axis=0)
+                    text = "\n".join(f"{tnames[k]} {np.degrees(np.angle(v)):6.0f}"
+                                     for k, v in zip(show, z))
+                    ax.text(0.5, 0.6, text, ha="center", va="top", fontsize=7.5,
+                            family="monospace")
+            anchor[i] = (left + w / 2, bot + h + 0.12 / ny, bot - 0.04 / ny)
+    for i, n in enumerate(tree):
+        if not n["children"]:
+            continue
+        px, _, pb = anchor[i]
+        for c in n["children"]:
+            cx, ct, _ = anchor[c]
+            fig.add_artist(plt.Line2D([px, cx], [pb, ct], transform=fig.transFigure,
+                                      color="0.3", lw=1))
+        cut = n["cut"]
+        what = ("empty bins" if cut["barrier_kT"] is None else
+                f"{cut['barrier_kT']:.2f} kT at E* = {cut['level_kT']:.1f}")
+        where = "/".join(f"{v:.0f}°" for v in cut["positions_degrees"])
+        fig.text(px, pb - 0.01 / ny,
+                 f"{cut['coordinate']} {where}\n{what}" + ("\nbounded" if cut["kind"] == "bounded"
+                                                         else ""),
+                 ha="center", va="top", fontsize=7.5, bbox=dict(fc="w", ec="0.7", lw=0.5))
+    if title:
+        fig.suptitle(title, fontsize=11, y=1.02)
+    if output is not None:
+        fig.savefig(output, dpi=dpi, bbox_inches="tight")
     return fig

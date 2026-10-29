@@ -305,7 +305,8 @@ def cut_clustering(fit, *, kT_cut: float = DEFAULT_CUT_KT,
     frame `reference`, with `gauge` as in `THDBSCAN.align_all`.
 
     Returns `labels` (every frame, clusters 0.. by mass), `n_clusters`, `cluster_mass`,
-    `coordinates` (cut coordinate names), `coupling_groups`, `tree` (one record per node: frames,
+    `coordinates` (cut coordinate names), `coordinate_values` (frames x coordinates, radians) and
+    `coordinate_valid` (where |z| >= z_min), `coupling_groups`, `tree` (one record per node: frames,
     parent, children, the cut made there, the box it lives in, and `cluster` for a leaf), `cuts`,
     `aligned_angles`, `torsion_names`, `quads`, `molecule`, `settings` and `log`. `plot_hist` takes
     the result as it takes a `hierarchical_clustering` one.
@@ -364,7 +365,8 @@ def cut_clustering(fit, *, kT_cut: float = DEFAULT_CUT_KT,
     return {
         "labels": labels, "n_clusters": len(leaves),
         "cluster_mass": {c: float((labels == c).mean()) for c in range(len(leaves))},
-        "coordinates": cname, "coupling_groups": groups, "tree": tree,
+        "coordinates": cname, "coordinate_values": Y, "coordinate_valid": valid,
+        "coupling_groups": groups, "tree": tree,
         "cuts": [dict(n["cut"], node=i) for i, n in enumerate(H.nodes) if n["cut"]],
         "aligned_angles": aligned, "torsion_names": names, "quads": quads, "molecule": molecule,
         "log": H.log,

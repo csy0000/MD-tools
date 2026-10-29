@@ -1,14 +1,13 @@
 # Analysis: paracetamol
 
-Five notebooks over the runs the [cMD](../cMD.md) and [REST2](../REST2.md) pages produced.
+Four notebooks over the runs the [cMD](../cMD.md) and [REST2](../REST2.md) pages produced.
 
 | notebook | what it shows |
 |---|---|
 | [`pmf-1d.ipynb`](pmf-1d.ipynb) | the free energy along each of the three torsions |
-| [`clustering.ipynb`](clustering.ipynb) | symmetry-first clustering: the symmetry enumerated, the distance built from it, HDBSCAN, the 18-of-20 assignment, populations and representative structures |
+| [`clustering.ipynb`](clustering.ipynb) | the torsional states, by HDBSCAN on the symmetric distance (the 18-of-20 assignment, populations, representative structures) and by cell partitioning on all 100 000 frames, and the two compared |
 | [`clustering-comparison.ipynb`](clustering-comparison.ipynb) | the historical cluster-then-merge workflow, the new vote alone, and symmetry-first, on the same frames |
 | [`mutual-information.ipynb`](mutual-information.ipynb) | which torsions move together, and the estimator's own bias |
-| [`symmetry-alignment.ipynb`](symmetry-alignment.ipynb) | the same fit, every frame written in the labelling nearest the density peak of the largest cluster: the ring pair, paracetamol from two PDB entries written in one labelling (and why they cannot be assigned to A or B), the heavy-atom RMSD between the clusters, corrected for the ring flip, and a gauge that writes `aryl` in a half-circle with `phenol` carried along |
 
 **Committed with their outputs**, and rendered here as pages: the figures and numbers come from
 the runs these tutorials describe. To run them yourself:
@@ -27,7 +26,7 @@ OUTSIDE the ring: **aryl** (the ordinary torsion about the exocyclic C(aryl)–N
 part of the ring) and **phenol** (the hydroxyl rotation).
 
 The phenyl ring also has a two-fold axis, which makes this the smallest honest example of a
-symmetry-aware distance ([methods](../../../openmm_methods/analysis/README.md#t_hdbscan)):
+symmetry-aware distance ([Torsion preprocessing](../../../openmm_methods/analysis/torsional-clustering/torsion-preprocessing.ipynb), where paracetamol is the example):
 
 * the ring flip RENAMES the two sides of the ring, so a frame measured through C5 and the same
   frame measured through C10 are one configuration; the distance is the minimum over those
@@ -45,7 +44,7 @@ the two workflows agree on 3998 of 4000 frames and why the other two differ.
 
 ## The crystal structures
 
-`symmetry-alignment.ipynb` draws paracetamol from two entries of the Protein Data Bank, **4YJI**
+[Torsion preprocessing](../../../openmm_methods/analysis/torsional-clustering/torsion-preprocessing.ipynb#8-a-crystal-structure-or-any-other-reference) draws paracetamol from two entries of the Protein Data Bank, **4YJI**
 (1.73 A) and **4A9K** (1.81 A), over the histograms. Their ligand coordinates are in `data/`
 (`4YJI_TYL.sdf`, `4A9K_TYL.sdf`, component `TYL`, from the PDB model server). They are the drug bound
 to a protein, not its own crystal, and a crystal has no hydrogens, so the `phenol` torsion has no line.
@@ -53,6 +52,6 @@ to a protein, not its own crystal, and a crystal has no hydrogens, so the `pheno
 ## Related
 
 * [Methods: analysis](../../../openmm_methods/analysis/README.md) — the theory behind the tools, and the migration from the old call
-* [Methods: symmetry-aware clustering and the torsion representation](../../../openmm_methods/analysis/clustering-and-symmetry.md) — duplicated torsions and their weights, the minimised distance, the 1 % floor, the Dirichlet-domain rule
+* [Methods: torsional clustering](../../../openmm_methods/analysis/torsional-clustering/torsion-preprocessing.ipynb) — the preprocessing (duplicated torsions and their weights, the minimised distance, one labelling for drawing), [HDBSCAN](../../../openmm_methods/analysis/torsional-clustering/hdbscan.ipynb) and [cell partitioning](../../../openmm_methods/analysis/torsional-clustering/cell-partitioning.ipynb)
 * [REST2: paracetamol](../REST2.md) — where the protected bonds are decided
 * [ALA analysis](../../ALA/analysis/index.md) — PMFs on a smaller system

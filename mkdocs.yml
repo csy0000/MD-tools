@@ -135,6 +135,7 @@ nav:
               - tutorial/ALA/analysis/index.md
               - Free energy along phi: tutorial/ALA/analysis/pmf-1d.ipynb
               - The Ramachandran surface: tutorial/ALA/analysis/pmf-2d.ipynb
+              - "Conformations: cell partitioning": tutorial/ALA/analysis/clustering.ipynb
       - Paracetamol:
           - The system: tutorial/paracetamol/index.md
           - cMD: tutorial/paracetamol/cMD.md
@@ -143,10 +144,9 @@ nav:
           - Analysis:
               - tutorial/paracetamol/analysis/index.md
               - Free energy of each torsion: tutorial/paracetamol/analysis/pmf-1d.ipynb
-              - Symmetry-first clustering: tutorial/paracetamol/analysis/clustering.ipynb
+              - Torsional clustering: tutorial/paracetamol/analysis/clustering.ipynb
               - Old and new clustering compared: tutorial/paracetamol/analysis/clustering-comparison.ipynb
               - Which torsions move together: tutorial/paracetamol/analysis/mutual-information.ipynb
-              - Torsions in one labelling: tutorial/paracetamol/analysis/symmetry-alignment.ipynb
       - Ligand parameterization:
           - tutorial/ligand-parameterization/index.md
           - Bespoke torsion fit: tutorial/ligand-parameterization/bespoke-fit.md
@@ -205,7 +205,10 @@ nav:
               - Implementation: openmm_methods/AIS/AIS_implementation.md
       - Analysis:
           - openmm_methods/analysis/README.md
-          - Symmetry and the torsion representation: openmm_methods/analysis/clustering-and-symmetry.md
+          - Torsional clustering:
+              - Torsion preprocessing: openmm_methods/analysis/torsional-clustering/torsion-preprocessing.ipynb
+              - HDBSCAN: openmm_methods/analysis/torsional-clustering/hdbscan.ipynb
+              - Cell partitioning: openmm_methods/analysis/torsional-clustering/cell-partitioning.ipynb
   - On hold:
       - on-hold/index.md
       - Alchemical transformation:

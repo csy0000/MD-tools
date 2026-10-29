@@ -273,3 +273,39 @@ def test_plot_hist_draws_a_cut_result():
     assert r["settings"]["kT_cut"] == T.DEFAULT_CUT_KT == 1.0
     assert r["settings"]["mass_floor"] == T.DEFAULT_CUT_MASS_FLOOR == 0.001
     assert r["settings"]["min_p2p"] == pytest.approx(np.pi / 3)
+
+
+def test_the_result_carries_the_cut_coordinates_per_frame():
+    rng = np.random.default_rng(5)
+    x = np.angle(np.exp(1j * rng.normal(0.0, 1.0, (500, 2))))
+    r = T.cut_clustering(_plain(x, ["a", "b"]))
+    assert r["coordinates"] == ["a", "b"]
+    assert r["coordinate_values"].shape == (500, 2)
+    np.testing.assert_allclose(r["coordinate_values"], x)
+    assert r["coordinate_valid"].all()
+
+
+def test_plot_split_tree_draws_one_panel_per_cell_and_the_cuts_in_it():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from md_tools.analysis import cut_clustering, plot_split_tree
+
+    rng = np.random.default_rng(6)
+    x = np.column_stack([np.concatenate([rng.normal(-1.5, 0.2, 600), rng.normal(1.5, 0.2, 400)]),
+                         rng.normal(0.0, 0.2, 1000)])
+    r = cut_clustering(_plain(np.angle(np.exp(1j * x)), ["a", "b"]))
+    nodes = len(r["tree"])
+    assert nodes >= 3
+    fig = plot_split_tree(r, leaf_torsions=["a"])
+    assert len(fig.axes) == nodes
+    root = r["tree"][0]["cut"]
+    drawn = sorted(float(line.get_xdata()[0]) for line in fig.axes[0].lines[1:])
+    assert drawn == pytest.approx(sorted(root["positions_degrees"]))
+    fig = plot_split_tree(r, pair=("a", "b"))
+    assert len(fig.axes) == 3 * nodes                    # the 2D panel and its two marginals
+    for kw, word in (({"pair": ("a", "c")}, "pair"), ({"leaf_torsions": ["c"]}, "leaf torsion")):
+        with pytest.raises(ValueError, match=word):
+            plot_split_tree(r, **kw)
+    with pytest.raises(ValueError, match="cut_clustering"):
+        plot_split_tree({"labels": r["labels"]})
