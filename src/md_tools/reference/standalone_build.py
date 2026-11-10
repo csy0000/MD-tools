@@ -427,6 +427,24 @@ def protonate(source: Path, work: Path, builder: dict, ligand_sdf: Path | None,
                                     (r.insertionCode or "").strip()))
                         for r in modeller.topology.residues()]
             ph = float(recorded["addhydrogens_ph"])
+            # Reduce's flipped side chains: their heavy atoms are moved to the recorded
+            # coordinates, as build-top moved them before adding hydrogens. Reduce is not rerun.
+            flipped = {(f["chain"], f["resid"], f["insertion_code"]): f["coordinates_angstrom"]
+                       for f in recorded.get("flipped") or ()}
+            if flipped:
+                from openmm import Vec3, unit
+
+                xyz = list(modeller.positions.value_in_unit(unit.nanometer))
+                for residue in modeller.topology.residues():
+                    placed = flipped.get((residue.chain.id, str(residue.id).strip(),
+                                          (residue.insertionCode or "").strip()))
+                    for atom in residue.atoms() if placed else ():
+                        if atom.name in placed:
+                            x, y, z = placed[atom.name]
+                            xyz[atom.index] = Vec3(x / 10.0, y / 10.0, z / 10.0)
+                modeller = app.Modeller(modeller.topology, unit.Quantity(xyz, unit.nanometer))
+                say("flips", f"{len(flipped)} Asn/Gln/His side chain(s) moved to the recorded "
+                             f"Reduce coordinates")
         with seeded_global_random(seed):
             modeller.addHydrogens(forcefield_, pH=ph, variants=variants,
                                   platform=Platform.getPlatformByName("Reference"))

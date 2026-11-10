@@ -46,6 +46,11 @@ def _resolve(tmp_path, document):
     ({"solute": {"kind": "ligand"}, "protonation": {"ph": 14.5}}, "maximum"),
     ({"solute": {"kind": "peptide"}, "solvent": {"model": "GBn2"},
       "protonation": {"method": "propka"}}, "implicit"),
+    ({"solute": {"kind": "peptide"}, "solvent": {"model": "GBn2"},
+      "protonation": {"flips": "reduce"}}, "implicit"),
+    ({"solute": {"kind": "ligand"}, "protonation": {"flips": "none"}},
+     "only protonation.ph and protonation.ligand_method"),
+    ({"solute": {"kind": "peptide"}, "protonation": {"flips": "molprobity"}}, "flips"),
     ({"solute": {"kind": "peptide"},
       "protonation": {"overrides": [{"select": {"chain": "A", "resid": "1"}, "variant": "HIZ"}]}},
      "not one addHydrogens can build"),
@@ -59,6 +64,9 @@ def test_a_setting_that_cannot_apply_is_refused(tmp_path, document, words):
 def test_the_defaults_mean_what_every_earlier_build_meant(tmp_path):
     resolved = _resolve(tmp_path, {"solute": {"kind": "peptide"}})
     assert resolved["protonation"]["method"] == "openmm"
+    # NOT what every earlier build meant: Reduce's flips and histidines are the default since
+    # they were added, and a build that wants the old behaviour says `flips: none`.
+    assert resolved["protonation"]["flips"] == "reduce"
     assert resolved["protonation"]["ph"] == 7.0
     assert resolved["input"]["assembly"] is None
 

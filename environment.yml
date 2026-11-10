@@ -65,7 +65,8 @@ name: openmm-env
 
 channels:
   - conda-forge
-  - nodefaults                # conda-forge only, no channel mixing
+  - bioconda                  # for `reduce` only: it is not on conda-forge
+  - nodefaults
 
 dependencies:
   - python=3.12
@@ -106,6 +107,7 @@ dependencies:
   - networkx                  # ligand-instance graph matching (md_tools.ligands.mapping); also required by openff-toolkit
   - mdtraj                    # reads the AIS source DCD and its box vectors
   - propka=3.5.1              # PROPKA3 pKa prediction for build-top protonation (`protonation.method: propka`)
+  - bioconda::reduce=4.15     # Asn/Gln/His flips and histidine tautomers (`protonation.flips: reduce`, the default)
   - openbabel                 # a small molecule's pH model before parameterisation (`protonation.ligand_method: openbabel`, the default)
   - gemmi=0.7.5               # mmCIF reading and biological-assembly expansion (1TYL assembly 3)
 

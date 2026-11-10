@@ -1,6 +1,12 @@
 """Protein protonation: PROPKA3 predictions, their translation into residue variants, and warnings.
 
-THREE SEPARATE THINGS, kept separate on purpose (plan section 4):
+FOUR SEPARATE THINGS, kept separate on purpose (plan section 4):
+
+  flips        Reduce (`protonation.flips: reduce`, the default) decides, on the structure with its
+               ligands already placed and hydrogenated, which way round every Asn/Gln amide and
+               His ring goes, and which ring nitrogen of a histidine carries a proton
+               (`md_tools.openmm.reduce_flips`). Flipped side chains take Reduce's heavy-atom
+               coordinates; Reduce's hydrogens are discarded and `addHydrogens` places them all.
 
   prediction   PROPKA3 predicts pKa values. It does not choose force-field residues, and it does
                NOT decide between the two neutral histidine tautomers HID and HIE.
@@ -11,8 +17,10 @@ THREE SEPARATE THINGS, kept separate on purpose (plan section 4):
                and printed with the measured distances. Proximity is not proof of coordination,
                so a warning never imposes a tautomer; an explicit per-residue override does.
 
-`method: openmm` keeps the behaviour md-tools always had -- `addHydrogens(pH)` chooses -- and is
-recorded as a choice, not as an absence. `method: propka` with PROPKA missing, or a prediction that
+`method: openmm` leaves every titratable choice but the histidines to `addHydrogens(pH)`, as
+md-tools always did, and is recorded as a choice, not as an absence; the histidines are Reduce's
+unless `flips: none`. Under `method: propka` the CHARGE of a histidine is PROPKA's (HIP when pKa >
+pH) and only a neutral one takes Reduce's HID or HIE. Who decided is recorded per residue. `method: propka` with PROPKA missing, or a prediction that
 fails, is an ERROR: a silent fall back to OpenMM's defaults would build a different protein and
 record that PROPKA had been asked for.
 
@@ -203,6 +211,7 @@ class Assignment:
     model_pka: float | None = None
     near_ph: bool = False
     coupled: bool = False
+    reduce_tautomer: str | None = None
     notes: list[str] = field(default_factory=list)
 
     def record(self) -> dict[str, Any]:
@@ -210,7 +219,7 @@ class Assignment:
         return {"chain": chain, "resid": resid, "insertion_code": icode, "residue": self.residue,
                 "variant": self.variant, "source": self.source, "pka": self.pka,
                 "model_pka": self.model_pka, "near_ph": self.near_ph, "coupled": self.coupled,
-                "notes": list(self.notes)}
+                "reduce_tautomer": self.reduce_tautomer, "notes": list(self.notes)}
 
 
 def parse_overrides(overrides: Iterable[Mapping[str, Any]] | None) -> dict[Key, str]:
@@ -256,7 +265,8 @@ def assign_variants(topology, *, method: str, ph: float,
                     predictions: Sequence[Prediction] = (),
                     overrides: Mapping[Key, str] | None = None,
                     frozen_residues: Iterable[Key] = (),
-                    near_ph_window: float = DEFAULT_NEAR_PH_WINDOW
+                    near_ph_window: float = DEFAULT_NEAR_PH_WINDOW,
+                    tautomers: Mapping[Key, str] | None = None,
                     ) -> tuple[list[Assignment], list[dict[str, Any]]]:
     """Per-residue variants by one deterministic rule. Returns (assignments, unsupported).
 
@@ -265,12 +275,13 @@ def assign_variants(topology, *, method: str, ph: float,
       CYS in a disulfide   -> CYX
       ASP/GLU  pKa >  pH   -> ASH/GLH,  else ASP/GLU
       LYS      pKa <  pH   -> LYN,      else LYS
-      HIS      pKa >  pH   -> HIP,      else NEUTRAL: None, and OpenMM's hydrogen-bond heuristic
-                              chooses HID or HIE (PROPKA does not resolve the tautomer)
+      HIS      pKa >  pH   -> HIP,      else NEUTRAL: Reduce's HID or HIE (`tautomers`); with no
+                              Reduce decision, or Reduce asking for HIP against PROPKA's
+                              neutral, None, and OpenMM's hydrogen-bond heuristic chooses
       CYS      pKa <  pH   -> UNSUPPORTED (CYM is not an addHydrogens variant): CYS kept, reported
       no prediction        -> the same rule on PROPKA's MODEL pKa, flagged
-    `method: openmm` assigns only overrides and disulfides and leaves every other choice to
-    `addHydrogens(pH)`, as md-tools always did.
+    `method: openmm` assigns overrides, disulfides and Reduce's histidines (HID, HIE or HIP, from
+    the hydrogen-bond network) and leaves every other choice to `addHydrogens(pH)`.
 
     An override naming a residue that does not exist, or a variant from another family, is an
     error. Frozen residues (mapped ligand instances) are never assigned.
@@ -278,6 +289,7 @@ def assign_variants(topology, *, method: str, ph: float,
     if method not in METHODS:
         raise ProtonationError(f"protonation.method must be one of {METHODS}, got {method!r}")
     overrides = dict(overrides or {})
+    tautomers = dict(tautomers or {})
     frozen = set(frozen_residues)
     residues = {residue_key(r): r for r in topology.residues()}
     for key, variant in overrides.items():
@@ -322,9 +334,15 @@ def assign_variants(topology, *, method: str, ph: float,
             assignment.model_pka = prediction.model_pka
             assignment.coupled = prediction.coupled
             assignment.near_ph = abs(prediction.pka - ph) < near_ph_window
+        reduce_state = tautomers.get(key) if family == "HIS" else None
+        if reduce_state is not None:
+            assignment.reduce_tautomer = reduce_state
         if key in overrides:
             assignment.variant = overrides[key]
             assignment.source = "override"
+            if reduce_state is not None and reduce_state != overrides[key]:
+                assignment.notes.append(f"override {overrides[key]} supersedes Reduce's "
+                                        f"{reduce_state}")
             if method == "propka" and prediction is not None:
                 rule = _rule(family, prediction.pka, ph, key in disulfides)
                 if rule != overrides[key]:
@@ -334,6 +352,8 @@ def assign_variants(topology, *, method: str, ph: float,
                         f"{rule or 'neutral HID/HIE'})")
         elif family == "CYS" and key in disulfides:
             assignment.variant, assignment.source = "CYX", "disulfide"
+        elif method == "openmm" and reduce_state is not None:
+            assignment.variant, assignment.source = reduce_state, "reduce"
         elif method == "openmm":
             assignment.source = f"openmm addHydrogens(pH {ph})"
         else:
@@ -344,7 +364,19 @@ def assign_variants(topology, *, method: str, ph: float,
             assignment.variant = _rule(family, pka, ph, False)
             assignment.source = "propka" if prediction is not None else "model-pka"
             if family == "HIS" and assignment.variant is None:
-                assignment.source += " (neutral) + openmm hydrogen-bond heuristic for HID/HIE"
+                if reduce_state in ("HID", "HIE"):
+                    assignment.variant = reduce_state
+                    assignment.source += " (neutral) + reduce tautomer"
+                else:
+                    if reduce_state == "HIP":
+                        assignment.notes.append(
+                            f"Reduce placed both ring hydrogens (HIP), but PROPKA predicts "
+                            f"neutral (pKa {pka:.2f} < pH {ph}); the charge is PROPKA's, so "
+                            f"OpenMM's heuristic chooses HID or HIE")
+                    assignment.source += " (neutral) + openmm hydrogen-bond heuristic for HID/HIE"
+            elif family == "HIS" and reduce_state is not None and reduce_state != "HIP":
+                assignment.notes.append(f"PROPKA's HIP (pKa {pka:.2f} > pH {ph}) supersedes "
+                                        f"Reduce's {reduce_state}")
             if family == "CYS" and pka < ph:
                 assignment.notes.append(
                     f"predicted deprotonated (pKa {pka:.2f} < pH {ph}); CYM is not an "
@@ -476,8 +508,12 @@ def protonate_structure(topology, positions, forcefield, protonation_cfg: Mappin
                         echo: Callable[[str], None] | None = print) -> ProtonationResult:
     """Delete non-frozen hydrogens, predict (if asked), assign, add hydrogens, and screen.
 
-    `protonation_cfg` keys: method (openmm|propka), ph, overrides, histidine_proximity_angstrom,
-    near_ph_window, delete_existing_hydrogens. `residue_templates_for` is called on the topology
+    `protonation_cfg` keys: method (openmm|propka), flips (reduce|none), ph, overrides,
+    histidine_proximity_angstrom, near_ph_window, delete_existing_hydrogens.
+
+    ORDER: delete hydrogens (frozen residues keep theirs) -> Reduce flips and histidine tautomers
+    on the complex as it stands -> PROPKA on the FLIPPED structure, since an amide's O and N are
+    what its pKa determinants see -> assign -> add hydrogens. `residue_templates_for` is called on the topology
     `addHydrogens` actually receives -- a dict computed earlier would key residues of a topology
     `Modeller.delete` has already replaced.
 
@@ -489,7 +525,15 @@ def protonate_structure(topology, positions, forcefield, protonation_cfg: Mappin
 
     from .solvation import ION_RESIDUE_NAMES
 
+    from .reduce_flips import DEFAULT_FLIPS, FLIP_METHODS, apply_flips, candidates, his_states, \
+        run_reduce, summary
+
     method = str(protonation_cfg.get("method") or "openmm")
+    flips = str(protonation_cfg.get("flips") or DEFAULT_FLIPS)
+    if flips not in FLIP_METHODS:
+        raise ProtonationError(f"protonation.flips must be one of {FLIP_METHODS}, got {flips!r}")
+    if method == "propka":
+        propka_version()             # a missing tool is refused before any work, not after Reduce
     ph = float(protonation_cfg.get("ph", 7.0))
     cutoff = float(protonation_cfg.get("histidine_proximity_angstrom",
                                        DEFAULT_PROXIMITY_ANGSTROM))
@@ -505,6 +549,20 @@ def protonate_structure(topology, positions, forcefield, protonation_cfg: Mappin
         modeller.delete([a for a in modeller.topology.atoms()
                          if a.element == elem.hydrogen and residue_key(a.residue) not in frozen])
 
+    reduce_record: dict[str, Any] | None = None
+    tautomers: dict[Key, str] = {}
+    flippable = candidates(modeller.topology, frozen) if flips == "reduce" else []
+    if flippable:
+        reduced = run_reduce(modeller.topology, modeller.positions, frozen_residues=frozen,
+                             workdir=workdir)
+        if reduced["coordinates"]:
+            modeller = app.Modeller(modeller.topology, apply_flips(
+                modeller.topology, modeller.positions, reduced["coordinates"]))
+        tautomers = his_states(reduced["decisions"])
+        reduce_record = {k: v for k, v in reduced.items() if k not in ("decisions", "coordinates")}
+        reduce_record["summary"] = summary(reduced["decisions"])
+        reduce_record["decisions"] = list(reduced["decisions"].values())    # topology order
+
     propka = None
     predictions: Sequence[Prediction] = ()
     if method == "propka":
@@ -512,7 +570,7 @@ def protonate_structure(topology, positions, forcefield, protonation_cfg: Mappin
         predictions = propka["predictions"]
     assignments, unsupported = assign_variants(
         modeller.topology, method=method, ph=ph, predictions=predictions, overrides=overrides,
-        frozen_residues=frozen, near_ph_window=window)
+        frozen_residues=frozen, near_ph_window=window, tautomers=tautomers)
     by_key = {a.key: a for a in assignments}
 
     variants = []
@@ -559,8 +617,21 @@ def protonate_structure(topology, positions, forcefield, protonation_cfg: Mappin
             f"supported ({entry['why']}); the {entry['kept']} is kept.")
     for assignment in assignments:
         for note in assignment.notes:
-            if note.startswith("override"):
+            if note.startswith(("override", "Reduce", "PROPKA's")):
                 warnings.append(f"NOTE {format_key(assignment.key)}: {note}")
+    for decision in (reduce_record or {}).get("decisions", ()):
+        where = f"{decision['chain']}:{decision['resid']}{decision['insertion_code']}"
+        if decision["decision"] == "X":
+            warnings.append(
+                f"NOTE {where} {decision['residue']}: Reduce could not decide the {decision['group']} "
+                f"orientation (scores {decision['scores']}); the "
+                f"{'flipped' if decision['flipped'] else 'deposited'} one is kept")
+        elif decision["decision"] == "NoAdj":
+            warnings.append(
+                f"NOTE {where} {decision['residue']}: Reduce declined to adjust it "
+                f"({decision['scores']}); the deposited orientation is kept and "
+                + ("its tautomer is left to the rule without Reduce"
+                   if decision["group"] == "imidazole" else "nothing is changed"))
     if echo is not None:
         for line in warnings:
             echo(line)
@@ -568,6 +639,10 @@ def protonate_structure(topology, positions, forcefield, protonation_cfg: Mappin
     n_after = sum(1 for a in modeller.topology.atoms() if a.element == elem.hydrogen)
     record = {
         "method": method,
+        "flips": flips,
+        "reduce": reduce_record if flips == "reduce" else None,
+        "reduce_note": (None if flips != "reduce" or flippable
+                        else "no Asn, Gln or His outside the frozen residues: Reduce not run"),
         "ph": ph,
         "addhydrogens_ph": add_ph,
         "hydrogen_seed": int(seed),

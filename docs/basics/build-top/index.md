@@ -184,6 +184,48 @@ A single-molecule build (`ligand`, `peptide-like`) now also works through a pack
 reuses the one `solute.parameters` names, or creates one from the prepared molecule and writes it to
 `ligands/` beside `built.xml`. Either way the charges are computed at most once per build.
 
+### Protein hydrogens: Asn/Gln/His flips and histidine tautomers
+
+A protein's hydrogens are deleted and placed again, in this order, for `kind: peptide` and
+`kind: complex` in explicit solvent:
+
+1. **The ligands are already in place, with their package hydrogens** (a complex only). Nothing
+   below changes them.
+2. **Reduce** (`protonation.flips: reduce`, the default) decides which way round every Asn and Gln
+   amide and every His ring goes, and which ring nitrogen of each histidine carries a proton. It
+   runs `reduce -FLIP -NUClear` on the whole structure, so a flip beside a ligand sees the ligand's
+   donors and acceptors. A flipped side chain takes Reduce's heavy-atom coordinates. Reduce's
+   hydrogens are discarded. A structure with no Asn, Gln or His does not run it.
+3. **PROPKA** (`protonation.method: propka`) predicts pKa values on the flipped structure.
+4. **The variants** are assigned, and `addHydrogens` places every hydrogen from the force field.
+
+Who decides a histidine:
+
+| setting | the charge (HIP or neutral) | HID or HIE |
+|---|---|---|
+| `method: openmm` (default), `flips: reduce` (default) | Reduce | Reduce |
+| `method: propka`, `flips: reduce` | PROPKA | Reduce |
+| `flips: none` | `addHydrogens(pH)` or PROPKA | OpenMM's hydrogen-bond heuristic |
+| an entry in `protonation.overrides` | the override | the override |
+
+Each disagreement (an override over Reduce, PROPKA's charge over Reduce's) is written as a NOTE.
+`built.log` lists every flip, every group Reduce could not decide, and every group it declined to
+adjust (a histidine on a metal, whose tautomer then falls back to the rule without Reduce). Both of
+the last two keep their deposited orientation:
+
+```text
+  flips        : Reduce 4.15.250408 -FLIP -NUClear -Quiet: 30 Asn/Gln/His considered, 4 flipped, 6 undecided, 0 not adjusted, 11 with a clash marked
+    A:920 ASN amide flipped (score 1.05, o=-0.026,f=1)
+    A:1146 HIS imidazole flipped (score 2.57, o=2.1,f=2.6) -> HIE
+    NOTE A:1006 GLN: Reduce could not decide the amide orientation (scores o=2.7,f=2.7); the deposited one is kept
+```
+
+That is the TYK2 complex in `tests/data/alchemy/tyk2-v1`. The machine record keeps every decision
+with Reduce's score and code, and the flipped coordinates, so `export-reference` rebuilds the same
+structure without running Reduce. Reduce missing is an error that names the install. `flips: none`
+is the deliberate choice to keep the deposited orientations. The implicit (GBn2) route builds the
+protein with tleap and refuses `flips`.
+
 ### Parameters without a System: `--parameterize`
 
 ```text

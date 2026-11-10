@@ -17,6 +17,7 @@ blocks: nothing read them after the stage chain replaced the old workflow manage
 of second declaration this module is not allowed to keep.
 """
 from .ligand_protonation import DEFAULT_LIGAND_PROTONATION, DEFAULT_PH
+from .reduce_flips import DEFAULT_FLIPS
 from .system_defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT, EXPLICIT_COMBINATIONS
 
 #: Which combination the base carries is `defaults.DEFAULT_SOLVENT`, not a second spelling of it.
@@ -38,6 +39,7 @@ DEFAULTS = {'run': {'name': None, 'root': None, 'seed': 20260814},
                         'force_tolerance': 0.0001}},
  'protonation': {'ph': DEFAULT_PH,
                  'method': 'openmm',
+                 'flips': DEFAULT_FLIPS,
                  'ligand_method': DEFAULT_LIGAND_PROTONATION,
                  'overrides': [],
                  'histidine_proximity_angstrom': 5.0,

@@ -91,8 +91,8 @@ def _legacy_cfg(resolved: dict[str, Any]) -> dict[str, Any]:
     # PROTONATION, carried across for the same reason: a key not copied here does not reach the
     # builders, so `protonation.method: propka` would be resolved, recorded as asked, and built
     # with OpenMM's defaults.
-    for key in ("method", "ph", "overrides", "histidine_proximity_angstrom", "near_ph_window",
-                "ligand_method"):
+    for key in ("method", "flips", "ph", "overrides", "histidine_proximity_angstrom",
+                "near_ph_window", "ligand_method"):
         if key in (resolved.get("protonation") or {}):
             cfg["protonation"][key] = resolved["protonation"][key]
 
@@ -383,6 +383,21 @@ def _log_protonation(record, log) -> None:
         return
     log(f"protonation  : method {record['method']}"
         + (f", PROPKA {record['propka']['version']}" if record.get("propka") else ""))
+    reduce = record.get("reduce")
+    if reduce:
+        counts = reduce["summary"]
+        log(f"flips        : Reduce {reduce['version']} {' '.join(reduce['flags'])}: "
+            f"{counts['considered']} Asn/Gln/His considered, {counts['flipped']} flipped, "
+            f"{counts['uncertain']} undecided, {counts.get('not_adjusted', 0)} not adjusted, "
+            f"{counts['clash']} with a clash marked")
+        for d in reduce["decisions"]:
+            if d["flipped"]:
+                log(f"  {d['chain']}:{d['resid']}{d['insertion_code']} {d['residue']} "
+                    f"{d['group']} flipped (score {d['score']}, {d['scores']})"
+                    + (f" -> {d['tautomer']}" if d.get("tautomer") else ""))
+    elif record.get("flips"):
+        log(f"flips        : {record['flips']}"
+            + (f" ({record['reduce_note']})" if record.get("reduce_note") else ""))
     for entry in record["assignments"]:
         if entry["source"] == "override" or entry["near_ph"] or entry["coupled"]:
             flags = [name for name in ("near_ph", "coupled") if entry[name]]

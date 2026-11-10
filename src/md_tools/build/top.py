@@ -32,6 +32,7 @@ import yaml
 
 from ..openmm.ligand_protonation import (DEFAULT_LIGAND_PROTONATION, DEFAULT_PH,
                                           LIGAND_PROTONATION_METHODS)
+from ..openmm.reduce_flips import DEFAULT_FLIPS, FLIP_METHODS
 from ..openmm.system_defaults import (DEFAULT_PADDING_NM, SOLVENTS, canonical_solvent, is_implicit,
                                       is_vacuum)
 from .record import LogWriter, file_facts, openmm_platform_facts
@@ -239,19 +240,40 @@ BUILD_SCHEMA = Schema(
         Section("protonation", [
             Field("method", str, default="openmm", enum=("openmm", "propka"),
                   doc="How titratable protein residues get their protonation states.\n"
-                      "  openmm -- Modeller.addHydrogens(pH) chooses, as md-tools always did.\n"
+                      "  openmm -- Modeller.addHydrogens(pH) chooses, as md-tools always did, "
+                      "except for the histidines, which are Reduce's under `flips: reduce`.\n"
                       "  propka -- PROPKA3 predicts pKa values on the prepared structure (ligands "
                       "and ions kept), and md-tools assigns variants by one stated rule: ASP/GLU "
                       "protonated (ASH/GLH) when pKa > pH, LYS neutral (LYN) when pKa < pH, HIS "
-                      "doubly protonated (HIP) when pKa > pH and otherwise NEUTRAL, with OpenMM's "
-                      "hydrogen-bond heuristic choosing HID or HIE -- PROPKA does not resolve that "
-                      "tautomer -- and CYX for disulfides. A predicted state no supported variant "
+                      "doubly protonated (HIP) when pKa > pH and otherwise NEUTRAL, with Reduce "
+                      "(`flips`) choosing HID or HIE -- PROPKA does not resolve that tautomer -- "
+                      "and CYX for disulfides. A predicted state no supported variant "
                       "builds (deprotonated CYS, tyrosinate, neutral ARG, a changed terminus) is "
                       "REPORTED and the standard state kept. PROPKA missing or failing is an "
                       "error, never a fall back. Predictions within `near_ph_window` of the pH "
                       "are flagged. Everything is recorded in build/protonation.json.\n"
                       "  Either way the states are held fixed for the run: this is not "
                       "constant-pH MD."),
+            Field("flips", str, default=DEFAULT_FLIPS, enum=FLIP_METHODS,
+                  doc="Asn/Gln amide flips, His ring flips and histidine tautomers.\n"
+                      "  reduce -- Reduce (`reduce -FLIP -NUClear`, the MolProbity tool) decides, "
+                      "on the structure with its ligands already placed with their package "
+                      "hydrogens, which way round every Asn/Gln amide and His ring goes and which "
+                      "ring nitrogen of each histidine carries a proton, by optimising the whole "
+                      "hydrogen-bond and contact network. A flipped side chain takes Reduce's "
+                      "heavy-atom coordinates; Reduce's hydrogens are discarded and every hydrogen "
+                      "is placed by addHydrogens from the force field. With method: openmm the "
+                      "histidines are Reduce's (HID, HIE or HIP); with method: propka the CHARGE "
+                      "is PROPKA's and only a neutral histidine takes Reduce's HID or HIE. An "
+                      "override wins over both. Every decision -- kept or flipped, Reduce's score "
+                      "and code, a clash, the tautomer -- is recorded in build/protonation.json, "
+                      "and the flips and undecided groups are listed in built.log. Reduce missing "
+                      "or failing is an error, never a fall back; a structure with no Asn, Gln or "
+                      "His does not need it.\n"
+                      "  none -- the deposited orientations are kept and OpenMM's hydrogen-bond "
+                      "heuristic chooses HID or HIE, as md-tools did before Reduce became the default.\n"
+                      "Explicit-solvent route only: the implicit (GBn2) route builds the protein "
+                      "with tleap."),
             Field("ph", float, default=DEFAULT_PH, minimum=0.0, maximum=14.0,
                   doc="Target pH, for the protein's titratable residues AND for a small molecule's "
                       "Open Babel protonation (`ligand_method`)."),
@@ -690,6 +712,7 @@ def _sys_document(resolved: dict[str, Any]) -> dict[str, Any]:
     }
     document.setdefault("protonation", {}).update({
         "method": resolved["protonation"]["method"],
+        "flips": resolved["protonation"]["flips"],
         "ph": float(resolved["protonation"]["ph"]),
         "ligand_method": resolved["protonation"]["ligand_method"],
         "overrides": list(resolved["protonation"]["overrides"]),
@@ -953,11 +976,12 @@ def _check_input_and_protonation(resolved: dict[str, Any]) -> None:
         raise ConfigError(
             f"protonation.ligand_method is set, but solute.kind is {kind!r}: {why}. It applies to "
             f"kind: ligand and peptide-like only.")
-    if implicit and (protonation["method"] == "propka" or protonation["overrides"]):
+    if implicit and (protonation["method"] == "propka" or protonation["overrides"]
+                     or "flips" in stated):
         raise ConfigError(
-            "protonation.method: propka and protonation.overrides apply to the explicit-solvent "
-            "route, where hydrogens are added by OpenMM. The implicit (GBn2) route builds the "
-            "protein with tleap, which assigns its own residue states.")
+            "protonation.method: propka, protonation.overrides and protonation.flips apply to the "
+            "explicit-solvent route, where hydrogens are added by OpenMM. The implicit (GBn2) "
+            "route builds the protein with tleap, which assigns its own residue states.")
     try:
         parse_overrides(protonation["overrides"])
     except ProtonationError as exc:

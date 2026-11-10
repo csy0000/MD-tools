@@ -514,6 +514,28 @@ def user_inputs_plan(run_dir: Path, system_path: Path,
             "prepared_structure": prepared}
 
 
+def recorded_protonation(recorded: dict[str, Any]) -> dict[str, Any]:
+    """What a rebuild applies from build-top's protonation record, so it needs neither tool.
+
+    The variants build-top ASSIGNED, bound to residue identity, the pH addHydrogens was called
+    with, and Reduce's flipped side chains as heavy-atom coordinates. PROPKA and Reduce are
+    preparation dependencies: the rebuild moves exactly these atoms and assigns exactly these
+    variants before addHydrogens, as build-top did.
+    """
+    return {
+        "method": recorded["method"],
+        "addhydrogens_ph": recorded["addhydrogens_ph"],
+        "variants": [{"chain": a["chain"], "resid": a["resid"],
+                      "insertion_code": a["insertion_code"], "variant": a["variant"]}
+                     for a in recorded["assignments"]],
+        "flipped": [{"chain": d["chain"], "resid": d["resid"],
+                     "insertion_code": d["insertion_code"],
+                     "coordinates_angstrom": d["coordinates_angstrom"]}
+                    for d in ((recorded.get("reduce") or {}).get("decisions") or ())
+                    if d.get("flipped")],
+    }
+
+
 def _recorded_ligand_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
     """The build's own ligand entries, in the shape `build.top.ligand_entries` produces.
 
@@ -738,13 +760,7 @@ def standalone_settings(record: dict[str, Any], structure: Path, system: Path,
     if recorded:
         # The variants build-top ASSIGNED, bound to residue identity, and the pH addHydrogens was
         # called with. A rebuild applies them: PROPKA is a preparation dependency and is not rerun.
-        settings["builder"]["protonation"]["recorded"] = {
-            "method": recorded["method"],
-            "addhydrogens_ph": recorded["addhydrogens_ph"],
-            "variants": [{"chain": a["chain"], "resid": a["resid"],
-                          "insertion_code": a["insertion_code"], "variant": a["variant"]}
-                         for a in recorded["assignments"]],
-        }
+        settings["builder"]["protonation"]["recorded"] = recorded_protonation(recorded)
     packaged = ((record.get("ligand_packages") or {}).get("attached") or {})
     if packaged.get("reference"):
         # The package build-top attached, bundled under input/ligands/. The rebuild loads its
