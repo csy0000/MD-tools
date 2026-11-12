@@ -50,11 +50,20 @@ def test_the_decision_lines_are_read_with_chain_resid_icode_and_flags():
         "USER  MOD Single : A 101 LYS NZ  :NH3+    180:sc=       0   (180deg=0)",
         "USER  MOD Single : A  77 GLN     :      amide:sc=   -9.98! C(o=-9.98!,f=-12!)",
         "USER  MOD NoAdj-H:     2 HIS HE2 :     2 HIS NE2 : Z   1  ZNZN   :(H bumps)",
+        # 1ELD: an Asn on a calcium. `NoAdj  :` without the -H, and HD21 abutting ASN.
+        "USER  MOD NoAdj  : E  81 ASNHD21 : E  81 ASN OD1 : E 280  CACA   :(metal ligand)",
+        "USER  MOD NoAdj  : E  81 ASNHD22 : E  81 ASN OD1 : E 280  CACA   :(metal ligand)",
+        "USER  MOD NoAdj-H: E 256 0Z0 H   : E 256 0Z0 N   : E 256 0Z0 C1  :(H bumps)",
         "ATOM      1  N   ASN B  12A     11.104   6.134  -6.504  1.00  0.00           N",
     ])
     decisions, atoms = _parse_output(text)
     assert set(decisions) == {("A", "1177", ""), ("A", "893", ""), ("B", "12", "A"),
-                              ("A", "77", ""), ("", "2", "")}
+                              ("A", "77", ""), ("", "2", ""), ("E", "81", "")}
+    assert decisions[("E", "81", "")]["code"] == "NoAdj"
+    assert not decisions[("E", "81", "")]["flipped"]
+    assert decisions[("E", "81", "")]["scores"] == "metal ligand"
+    assert decisions[("E", "81", "")]["line"].endswith("ASNHD21 : E  81 ASN OD1 : E 280  CACA   :(metal ligand)")
+    assert decisions[("", "2", "")]["scores"] == "H bumps"
     # A clashing score carries its `!`, and is still a number.
     assert decisions[("A", "77", "")]["score"] == -9.98 and decisions[("A", "77", "")]["clash"]
     # A histidine on a metal is one Reduce declines to adjust: no decision is read into it.

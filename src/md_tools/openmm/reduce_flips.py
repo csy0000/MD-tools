@@ -71,12 +71,16 @@ _MOD = re.compile(
     r"(?P<resname>\S{3})\s*:(?P<flip>FLIP)?\s*(?P<state>[^:]*?)\s*:sc=\s*"
     r"(?P<score>-?[\d.]+(?:[eE][-+]?\d+)?)(?P<bang>!?)\s+(?P<code>[A-Z])\((?P<detail>[^)]*)\)")
 
-#: A group Reduce declined to adjust, almost always a histidine nitrogen next to a metal, e.g.
+#: A group Reduce declined to adjust, a histidine or an amide next to a metal, in either form:
 #:   USER  MOD NoAdj-H:     2 HIS HE2 :     2 HIS NE2 : Z   1  ZNZN   :(H bumps)
+#:   USER  MOD NoAdj  : E  81 ASNHD21 : E  81 ASN OD1 : E 280  CACA   :(metal ligand)
+#: The atom field is four columns, so a four-character name (HD21) abuts the residue name.
 #: Its orientation and tautomer are NOT Reduce's decision, and are not taken as one.
 _NOADJ = re.compile(
-    r"^USER  MOD NoAdj-H:\s?(?P<chain>.)(?P<resid>.{4})(?P<icode>.)(?P<resname>\S{3})\s+"
-    r"(?P<atom>\S+)\s*:(?P<rest>.*)$")
+    r"^USER  MOD NoAdj(?:-H)?\s*:\s?(?P<chain>.)(?P<resid>.{4})(?P<icode>.)(?P<resname>\S{3})"
+    r"\s?(?P<atom>\S+)\s*:(?P<rest>.*)$")
+#: The reason Reduce gives at the end of a NoAdj line: `(metal ligand)`, `(H bumps)`, ...
+_NOADJ_REASON = re.compile(r"\(([^)]*)\)\s*$")
 
 
 class ReduceError(ProtonationError):
@@ -163,10 +167,13 @@ def _parse_output(text: str) -> tuple[dict[Key, dict[str, Any]], dict[Key, dict[
                 continue
             key = (match.group("chain").strip(), match.group("resid").strip(),
                    match.group("icode").strip())
-            decisions[key] = {"flipped": False, "code": "NoAdj", "state": "not adjusted",
-                              "score": None, "clash": "bump" in match.group("rest"),
-                              "scores": match.group("rest").strip(" :"),
-                              "line": line.rstrip()}
+            # An Asn on a calcium gets one line per amide hydrogen; they say the same thing.
+            reason = _NOADJ_REASON.search(match.group("rest"))
+            decisions.setdefault(key, {
+                "flipped": False, "code": "NoAdj", "state": "not adjusted", "score": None,
+                "clash": "bump" in match.group("rest"),
+                "scores": reason.group(1) if reason else match.group("rest").strip(" :"),
+                "line": line.rstrip()})
         elif line.startswith("USER  MOD"):
             match = _MOD.match(line)
             if match is None or match.group("resname") not in FLIPPABLE:
@@ -226,10 +233,16 @@ def run_reduce(topology, positions, *, frozen_residues: Iterable[Key] = (),
         decision = decisions.get(_pdb_key(key))
         placed = atoms.get(_pdb_key(key), {})
         if decision is None:
+            pdb = _pdb_key(key)
+            tag = f"{pdb[0] or ' '}{pdb[1]:>4}{pdb[2] or ' '}{name}"
+            unread = [line.rstrip() for line in done.stdout.splitlines()
+                      if line.startswith("USER  MOD") and tag in line]
+            said = (f" Reduce did write {len(unread)} line(s) about it that md-tools could not "
+                    f"read: {' | '.join(unread[:3])}" if unread else "")
             raise ReduceError(
                 f"Reduce {version} reported no decision for {format_key(key)} ({residue.name}); "
-                f"its log is {log}. A residue Reduce did not consider would silently keep its "
-                f"deposited orientation. Nothing was built.")
+                f"its log is {log}.{said} A residue Reduce did not consider would silently keep "
+                f"its deposited orientation. Nothing was built.")
         record = {"chain": key[0], "resid": key[1], "insertion_code": key[2],
                   "residue": residue.name, "group": "imidazole" if name == "HIS" else "amide",
                   "flipped": decision["flipped"], "decision": decision["code"],
